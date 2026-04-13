@@ -237,13 +237,17 @@ app.post("/api/scrape", async (req, res) => {
       }
     }
     res.json(info);
-  } catch (error: any) {
-    safeLog("Scraping failed: " + error);
-    res.status(500).json({
-      error: error.message || "Scraping failed",
-      details: error.stack
-    });
-  }
+} catch (error: any) {
+		console.error("[SCRAPE ERROR] Full error:", error);
+		console.error("[SCRAPE ERROR] Message:", error.message);
+		console.error("[SCRAPE ERROR] Stack:", error.stack);
+		safeLog("Scraping failed: " + error);
+		res.status(500).json({
+			error: error.message || "Scraping failed",
+			details: error.stack || "No stack trace",
+			fullError: String(error)
+		});
+	}
 });
 
 let isComparing = false;
