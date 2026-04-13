@@ -170,31 +170,44 @@ if (options.lmStudioUrl) {
 		);
 	}
 
-  strategies.push(
-    { name: "PLAYWRIGHT_STEALTH_BASIC", fn: () => scrapeWithPlaywrightStealth(url, options, false) },
-    { name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) },
-    { name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) },
-    { name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, options.geminiApiKey, "") }
-  );
+strategies.push(
+	{ name: "PLAYWRIGHT_STEALTH_BASIC", fn: () => scrapeWithPlaywrightStealth(url, options, false) },
+	{ name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) },
+	{ name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) },
+);
 
-  for (const strategy of strategies) {
-    try {
-      console.log(`[Scraper] Trying strategy: ${strategy.name}`);
-      const result = await strategy.fn();
+// Adicionar estratégias NVIDIA se API key configurada
+if (options.nvidiaApiKey) {
+	strategies.push(
+		{ name: "NVIDIA_NIM_LLAMA", fn: () => scrapeWithNvidiaNim(url, options.nvidiaApiKey!) }
+	);
+}
 
-      if (result && result.name && isValidPrice(result.price)) {
-        result.price = sanitizePrice(result.price);
-        result.method = strategy.name;
-        console.log(`[Scraper] SUCCESS with ${strategy.name}: price=${result.price}, name="${result.name.substring(0, 50)}"`);
-        fs.writeFileSync(cacheFile, JSON.stringify(result));
-        return result;
-      } else {
-        console.log(`[Scraper] Strategy ${strategy.name} returned invalid data:`, result);
-      }
-    } catch (error: any) {
-      console.error(`[Scraper] Strategy ${strategy.name} failed:`, error.message || error);
-    }
-  }
+// Gemini como último recurso
+strategies.push(
+	{ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, options.geminiApiKey, "") }
+);
+
+for (const strategy of strategies) {
+	try {
+		console.log(`[Scraper] Trying strategy: ${strategy.name}`);
+		const result = await strategy.fn();
+
+		// Aceitar resultado com preço válido (nome pode estar vazio)
+		if (result && isValidPrice(result.price)) {
+			result.price = sanitizePrice(result.price);
+			result.method = strategy.name;
+			result.name = result.name || "";
+			console.log(`[Scraper] SUCCESS with ${strategy.name}: price=${result.price}, name="${result.name?.substring(0, 50) || "N/A"}"`);
+			fs.writeFileSync(cacheFile, JSON.stringify(result));
+			return result;
+		} else {
+			console.log(`[Scraper] Strategy ${strategy.name} returned invalid data:`, result);
+		}
+	} catch (error: any) {
+		console.error(`[Scraper] Strategy ${strategy.name} failed:`, error.message || error);
+	}
+}
 
   console.error("[Scraper] All strategies failed");
   const finalResult = await scrapeWithGemini(url, options.geminiApiKey, "");
@@ -834,6 +847,110 @@ async function scrapeWithFetch(url: string): Promise<ScrapeResult | null> {
     console.error("[Fetch] Error:", error);
     return null;
   }
+}
+
+async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeResult | null> {
+	console.log("[NVIDIA NIM] Starting scrape...");
+
+	let browser;
+	try {
+		browser = await chromium.launch({
+			headless: true,
+			args: ["--no-sandbox", "--disable-setuid-sandbox"],
+		});
+
+		const context = await browser.newContext({
+			userAgent: getRandomUserAgent(),
+			viewport: { width: 1920, height: 1080 },
+		});
+
+		const page = await context.newPage();
+
+		console.log("[NVIDIA NIM] Navigating...");
+		await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
+		await page.waitForTimeout(2000);
+
+		await page.evaluate(`window.scrollTo(0, document.body.scrollHeight / 2)`);
+		await page.waitForTimeout(1000);
+
+		const bodyText = await page.evaluate(`document.body.innerText.slice(0, 1500)`);
+
+		await browser.close();
+		browser = null;
+
+		// Usar API NVIDIA NIM (OpenAI-compatible)
+		const client = new OpenAI({
+			baseURL: "https://integrate.api.nvidia.com/v1",
+			apiKey: apiKey,
+		});
+
+		console.log("[NVIDIA NIM] Sending request to Llama 3.1 8B...");
+		const response = await client.chat.completions.create({
+			model: "meta/llama-3.1-8b-instruct",
+			messages: [
+				{
+					role: "system",
+					content: "Extraia dados do produto. Retorne APENAS JSON válido. Sem markdown. Formato: {\"name\":\"Produto\",\"price\":1234.56}",
+				},
+				{
+					role: "user",
+					content: `Extraia nome e menor preço (Pix/Boleto/à vista) deste texto:\n\n${bodyText}\n\nJSON:`,
+				},
+			],
+			max_tokens: 300,
+			temperature: 0,
+		});
+
+		const resultText = response.choices[0].message?.content || "";
+		console.log(`[NVIDIA NIM] Raw response: ${resultText.substring(0, 200)}`);
+
+		// Tentar extrair JSON
+		const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+		if (jsonMatch) {
+			let jsonStr = jsonMatch[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, "");
+			jsonStr = jsonStr.replace(/,(\s*[}\]])/g, "$1");
+
+			try {
+				const result = JSON.parse(jsonStr);
+				if (isValidPrice(result.price)) {
+					result.price = sanitizePrice(result.price);
+					result.currency = result.currency || "BRL";
+					result.name = result.name || "";
+					console.log(`[NVIDIA NIM] SUCCESS: "${result.name?.substring(0, 30)}" - R$ ${result.price}`);
+					return result as ScrapeResult;
+				}
+			} catch (e) {
+				console.log("[NVIDIA NIM] Failed to parse JSON");
+			}
+		}
+
+		// Tentar extrair preço diretamente
+		const priceMatch = resultText.match(/R?\$?\s*[\d.,]+/);
+		if (priceMatch) {
+			const priceStr = priceMatch[0].replace(/R\$\s?/g, "").replace(/\./g, "").replace(",", ".");
+			const price = parseFloat(priceStr);
+			if (!isNaN(price) && price > 10 && price < 100000) {
+				console.log(`[NVIDIA NIM] Extracted price from text: R$ ${price}`);
+				return {
+					name: "",
+					price: price,
+					currency: "BRL",
+					available: true,
+				};
+			}
+		}
+
+		console.log("[NVIDIA NIM] No valid result");
+		return null;
+	} catch (error: any) {
+		console.error("[NVIDIA NIM] Error:", error.message || error);
+		if (browser) {
+			try {
+				await browser.close();
+			} catch (e) {}
+		}
+		return null;
+	}
 }
 
 async function scrapeWithGemini(url: string, apiKey?: string, contextText: string): Promise<ScrapeResult> {
