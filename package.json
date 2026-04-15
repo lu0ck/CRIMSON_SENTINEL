@@ -15,10 +15,11 @@
     "start": "tsx server.ts",
     "build": "vite build",
     "preview": "vite preview",
-    "clean": "rm -rf dist release",
+    "clean": "rm -rf dist release .cache .cookies",
     "lint": "tsc --noEmit",
     "electron:dev": "electron .",
-    "electron:build": "npm run clean && npm run build && electron-builder"
+    "electron:build": "npm run clean && npm run build && electron-builder",
+    "clear-cache": "rm -rf .cache .cookies"
   },
   "build": {
     "appId": "com.crimsonsentinel.app",

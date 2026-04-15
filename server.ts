@@ -86,6 +86,12 @@ if (!fs.existsSync(DATA_FILE)) {
 }
 
 async function startServer() {
+  console.log("=".repeat(80));
+  console.log("CRIMSON SENTINEL SERVER STARTING...");
+  console.log("Time:", new Date().toISOString());
+  console.log("Node Env:", process.env.NODE_ENV);
+  console.log("=".repeat(80));
+  
   const app = express();
   const PORT = 3000;
 
@@ -148,26 +154,83 @@ if (!data.products) data.products = [];
       return (urlMatch || idMatch) && p.listId === product.listId;
     });
 
+    // Se existe, verificar se o nome está correto
+    if (exists) {
+      const existingProduct = data.products.find((p: any) => 
+        (normalizeProductUrl(p.url) === normalizedUrl || p.id === normalizedId) && p.listId === product.listId
+      );
+      
+      // Se o produto existente tem nome muito diferente do novo, pode ser dado corrompido
+      if (existingProduct && product.name && existingProduct.name) {
+        const existingNameLower = existingProduct.name.toLowerCase();
+        const newNameLower = product.name.toLowerCase();
+        
+        // Verificar se os nomes têm palavras em comum
+        const existingWords = existingNameLower.split(/\s+/);
+        const newWords = newNameLower.split(/\s+/);
+        const commonWords = existingWords.filter(w => w.length > 3 && newWords.includes(w));
+        
+        if (commonWords.length === 0) {
+          // Nomes completamente diferentes - dados corrompidos
+          safeLog("[Product] WARNING: Existing product has completely different name!");
+          safeLog("[Product] Existing: " + existingProduct.name);
+          safeLog("[Product] New: " + product.name);
+          safeLog("[Product] Deleting corrupted product and adding new one...");
+          
+          // Deletar produto corrompido
+          data.products = data.products.filter((p: any) => p.id !== existingProduct.id);
+          
+          // Adicionar novo produto
+          if (!product.id || product.id.length < 8) {
+            product.id = normalizedId;
+          }
+          data.products.push(product);
+          fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+          safeLog("Product added (replaced corrupted): " + product.name + " to list " + product.listId + " (ID: " + product.id + ")");
+          res.json({ status: "ok", action: "replaced", product: product });
+          return;
+        }
+      }
+    }
+
     if (!exists) {
-      // Use normalized ID if not provided
+      // Use normalized ID if not given
       if (!product.id || product.id.length < 8) {
         product.id = normalizedId;
       }
       data.products.push(product);
       fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
       safeLog("Product added: " + product.name + " to list " + product.listId + " (ID: " + product.id + ")");
+      res.json({ status: "ok", action: "added", product: product });
     } else {
       safeLog("Product already exists: " + normalizedUrl + " in list " + product.listId);
+      // Atualizar preço se encontrou versão mais recente
+      const existingProduct = data.products.find((p: any) => 
+        (normalizeProductUrl(p.url) === normalizedUrl || p.id === normalizedId) && p.listId === product.listId
+      );
+      if (existingProduct && product.currentPrice && product.currentPrice !== existingProduct.currentPrice) {
+        existingProduct.previousPrice = existingProduct.currentPrice;
+        existingProduct.currentPrice = product.currentPrice;
+        existingProduct.lastUpdated = new Date().toISOString();
+        existingProduct.priceHistory = existingProduct.priceHistory || [];
+        existingProduct.priceHistory.push({
+          date: new Date().toISOString(),
+          price: product.currentPrice
+        });
+        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+        safeLog("Product price updated: " + existingProduct.name + " from R$ " + existingProduct.previousPrice + " to R$ " + existingProduct.currentPrice);
+        res.json({ status: "ok", action: "updated", product: existingProduct });
+      } else {
+      res.json({ status: "ok", action: "exists", product: existingProduct });
+      }
     }
-      
-      res.json({ status: "ok" });
-    } catch (error) {
-      safeLog("Error adding product: " + error);
-      res.status(500).json({ error: "Failed to add product" });
-    } finally {
-      release();
-    }
-  });
+  } catch (error) {
+    safeLog("Error adding product: " + error);
+    res.status(500).json({ error: "Failed to add product" });
+  } finally {
+    release();
+  }
+});
 
   app.post("/api/test-discord", async (req, res) => {
     const { webhookUrl } = req.body;
@@ -205,49 +268,32 @@ app.post("/api/scrape", async (req, res) => {
     const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
     const profile = data.profiles.find((p: any) => p.id === profileId);
 
-    // Debug: Log profile configuration
-    safeLog("[Scrape] Profile config: lmStudioUrl=" + (profile?.lmStudioUrl || "NOT SET") + 
-            ", useAdvancedScraping=" + (profile?.useAdvancedScraping || false) +
-            ", nvidiaApiKey=" + (profile?.nvidiaApiKey ? "SET" : "NOT SET"));
+    safeLog("[Scrape] Profile config:");
+    safeLog("  - lmStudioUrl: " + (profile?.lmStudioUrl || "NOT SET"));
+    safeLog("  - nvidiaApiKey: " + (profile?.nvidiaApiKey ? "SET (len=" + profile.nvidiaApiKey.length + ")" : "NOT SET"));
+    safeLog("  - geminiApiKey: " + (profile?.geminiApiKey ? "SET" : "NOT SET"));
+    safeLog("  - useAdvancedScraping: " + (profile?.useAdvancedScraping || false));
 
-    let info;
+    const { advancedScrape } = await import("./src/lib/scraper.ts");
 
-    // Usar advanced scrape se LM Studio ou Advanced Pipeline estiver configurado
-    if (profile?.lmStudioUrl || profile?.useAdvancedScraping) {
-      safeLog("[Scrape] Using advanced pipeline with LM Studio: " + (profile?.lmStudioUrl || "not configured"));
-      const { advancedScrape } = await import("./src/lib/scraper.ts");
-      info = await advancedScrape(url, {
-        lmStudioUrl: profile?.lmStudioUrl,
-        nvidiaApiKey: profile?.nvidiaApiKey,
-        geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY
-      });
-    } else {
-      // Fallback para Gemini simples
-      try {
-        safeLog("[Scrape] Using simple Gemini scrape");
-        info = await scrapeProductInfo(url, profile?.geminiApiKey, profileId);
-      } catch (geminiError) {
-        safeLog("Simple Gemini scrape failed, trying advanced fallback: " + geminiError);
-        const { advancedScrape } = await import("./src/lib/scraper.ts");
-        info = await advancedScrape(url, {
-          lmStudioUrl: profile?.lmStudioUrl,
-          nvidiaApiKey: profile?.nvidiaApiKey,
-          geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY
-        });
-      }
-    }
+    const info = await advancedScrape(url, {
+      lmStudioUrl: profile?.lmStudioUrl,
+      nvidiaApiKey: profile?.nvidiaApiKey,
+      geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY
+    });
+
     res.json(info);
-} catch (error: any) {
-		console.error("[SCRAPE ERROR] Full error:", error);
-		console.error("[SCRAPE ERROR] Message:", error.message);
-		console.error("[SCRAPE ERROR] Stack:", error.stack);
-		safeLog("Scraping failed: " + error);
-		res.status(500).json({
-			error: error.message || "Scraping failed",
-			details: error.stack || "No stack trace",
-			fullError: String(error)
-		});
-	}
+  } catch (error: any) {
+    console.error("[SCRAPE ERROR] Full error:", error);
+    console.error("[SCRAPE ERROR] Message:", error.message);
+    console.error("[SCRAPE ERROR] Stack:", error.stack);
+    safeLog("Scraping failed: " + error);
+    res.status(500).json({
+      error: error.message || "Scraping failed",
+      details: error.stack || "No stack trace",
+      fullError: String(error)
+    });
+  }
 });
 
 let isComparing = false;
@@ -699,6 +745,12 @@ Sem enrolação. Apenas os fatos.`;
   }
 
   app.listen(PORT, "0.0.0.0", () => {
+    console.log("=".repeat(80));
+    console.log("CRIMSON SENTINEL SERVER RUNNING!");
+    console.log("Port:", PORT);
+    console.log("Time:", new Date().toISOString());
+    console.log("Access: http://localhost:" + PORT);
+    console.log("=".repeat(80));
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
     
     // Background automation: Scan all products every 12 hours

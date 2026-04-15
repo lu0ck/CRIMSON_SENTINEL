@@ -221,16 +221,23 @@ export default function App() {
   const [systemMessage, setSystemMessage] = useState("SYSTEM ONLINE: READY TO TRACK");
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [toasts, setToasts] = useState<{id: string, message: string, type: 'success' | 'error' | 'info'}[]>([]);
+const [toasts, setToasts] = useState<{id: string, message: string, type: 'success' | 'error' | 'info', details?: string}[]>([]);
 
-  const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info') => {
-    const id = Math.random().toString(36).substr(2, 9);
-    setToasts(prev => [...prev, { id, message, type }]);
-    playSound(type === 'success' ? 'success' : type === 'error' ? 'error' : 'notify');
-    setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id));
-    }, 5000);
-  };
+	const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info', details?: string) => {
+		const id = Math.random().toString(36).substr(2, 9);
+		setToasts(prev => [...prev, { id, message, type, details }]);
+		playSound(type === 'success' ? 'success' : type === 'error' ? 'error' : 'notify');
+	};
+
+	const removeToast = (id: string) => {
+		setToasts(prev => prev.filter(t => t.id !== id));
+	};
+
+	const copyToastError = (toast: typeof toasts[0]) => {
+		const errorText = `Error: ${toast.message}\n\nDetails: ${toast.details || 'No details available'}`;
+		navigator.clipboard.writeText(errorText);
+		addToast('Error copied to clipboard!', 'success');
+	};
 
   const isElectron = navigator.userAgent.toLowerCase().includes('electron');
 
@@ -609,30 +616,35 @@ const info = await response.json();
       const trackingParams = [
         'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
         'ref', 'affiliate', 'src', 'source', 'fbclid', 'gclid', 'msclkid',
-        'cmp', 'abtest', 'promo', 'category', 'gad_source', 'gad_campaignid'
+        'cmp', 'abtest', 'promo', 'category', 'gad_source', 'gad_campaignid',
+        'gclid', 'msclkid', 'fbclid'
       ];
       trackingParams.forEach(param => parsed.searchParams.delete(param));
       parsed.hash = '';
 
-      // Extract product ID for known patterns
+      // Extract product ID for known patterns - return standardized format
       const patterns = [
-        /\/produto\/(\d+)/,
-        /\/dp\/([A-Z0-9]+)/,
-        /\/MLB-(\d+)/,
-        /\/p\/([a-z0-9]+)/i,
-        /\/product\/(\d+)/,
-        /\/(\d+)\/p/,
-        /\/sku\/([A-Z0-9]+)/i,
+        { regex: /\/produto\/(\d+)/, format: (m: RegExpMatchArray) => `/produto/${m[1]}` }, // Terabyte, Pichau
+        { regex: /\/dp\/([A-Z0-9]+)/, format: (m: RegExpMatchArray) => `/dp/${m[1]}` }, // Amazon
+        { regex: /\/MLB-(\d+)/, format: (m: RegExpMatchArray) => `/MLB-${m[1]}` }, // Mercado Livre
+        { regex: /\/p\/([a-z0-9]+)/i, format: (m: RegExpMatchArray) => `/p/${m[1]}` }, // Magalu
+        { regex: /\/product\/(\d+)/, format: (m: RegExpMatchArray) => `/product/${m[1]}` }, // Generic
+        { regex: /\/(\d+)\/p/, format: (m: RegExpMatchArray) => `/${m[1]}/p` }, // Alternative
+        { regex: /\/sku\/([A-Z0-9]+)/i, format: (m: RegExpMatchArray) => `/sku/${m[1]}` }, // Kabum
       ];
 
-      for (const pattern of patterns) {
-        const match = parsed.pathname.match(pattern);
+      for (const { regex, format } of patterns) {
+        const match = parsed.pathname.match(regex);
         if (match) {
-          return `${parsed.origin}/produto/${match[1]}`;
+          const normalizedPath = format(match);
+          console.log(`[URL Normalization] ${parsed.pathname} -> ${normalizedPath}`);
+          return `${parsed.origin}${normalizedPath}`;
         }
       }
 
-      return parsed.toString();
+      // Se não match, usar pathname completo sem trailing slash
+      const cleanPath = parsed.pathname.replace(/\/$/, '') || '/';
+      return `${parsed.origin}${cleanPath}`;
     } catch {
       return url;
     }
@@ -665,26 +677,36 @@ const info = await response.json();
       profileId: activeProfileId
     };
 
-            // Save to server immediately
-            await fetch("/api/products", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify(product)
-            });
-
-            return product;
-          } catch (error: any) {
-            clearTimeout(timeoutId);
-            if (error.name === 'AbortError') {
-              console.error(`Scrape timed out for ${url}`);
-              addToast(`TIMEOUT: ${url.substring(0, 30)}...`, "error");
-            } else {
-              console.error(`Failed to scrape ${url}:`, error);
-              addToast(`ERRO: ${error.message || "Falha no scraping"}`, "error");
-            }
-            failCount++;
-            return null;
-          }
+    // Save to server immediately
+    const saveResponse = await fetch("/api/products", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(product)
+    });
+    
+    const saveResult = await saveResponse.json();
+    
+    if (saveResult.action === "exists") {
+      console.log(`Product already exists: ${product.name}`);
+    } else if (saveResult.action === "updated") {
+      console.log(`Product price updated: ${product.name}`);
+    }
+    
+    return product;
+    } catch (error: any) {
+      clearTimeout(timeoutId);
+      if (error.name === 'AbortError') {
+        console.error(`Scrape timed out for ${url}`);
+        addToast(`TIMEOUT: ${url.substring(0, 30)}...`, "error");
+      } else {
+        console.error(`Failed to scrape ${url}:`, error);
+        const errorMsg = error.message || "Falha no scraping";
+        const errorDetails = error.details || error.fullError || error.stack || "Sem detalhes";
+        addToast(`ERRO: ${errorMsg}`, "error", errorDetails);
+      }
+      failCount++;
+      return null;
+    }
         }));
 
         results.forEach(p => {
@@ -1735,32 +1757,19 @@ const info = await response.json();
         )}
       </AnimatePresence>
 
-      {/* Toast Notifications */}
-      <div className="fixed bottom-12 right-8 z-[200] flex flex-col gap-2 pointer-events-none">
-        <AnimatePresence>
-          {toasts.map(toast => (
-            <motion.div
-              key={toast.id}
-              initial={{ opacity: 0, x: 100, filter: 'blur(10px)' }}
-              animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
-              exit={{ opacity: 0, x: 100, filter: 'blur(10px)' }}
-              className={cn(
-                "hud-border px-6 py-3 bg-black/80 backdrop-blur-md min-w-[250px] flex items-center gap-4",
-                toast.type === 'success' ? 'border-green-500/50' : toast.type === 'error' ? 'border-red-500/50' : 'border-crimson/50'
-              )}
-            >
-              <div className={cn(
-                "w-1 h-8 shrink-0",
-                toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-crimson'
-              )} />
-              <div className="flex flex-col">
-                <span className="text-[8px] font-mono text-crimson/50 uppercase tracking-widest">{toast.type}</span>
-                <span className="text-xs font-mono font-bold tracking-tight">{toast.message}</span>
-              </div>
-            </motion.div>
-          ))}
-        </AnimatePresence>
-      </div>
+{/* Toast Notifications */}
+		<div className="fixed bottom-12 right-8 z-[200] flex flex-col gap-2 pointer-events-auto">
+			<AnimatePresence>
+				{toasts.map(toast => (
+					<ToastWithTimer
+						key={toast.id}
+						toast={toast}
+						onClose={() => removeToast(toast.id)}
+						onCopy={() => copyToastError(toast)}
+					/>
+				))}
+			</AnimatePresence>
+		</div>
 
       {/* Footer HUD */}
       <footer className="h-8 border-t border-crimson/30 flex items-center justify-between px-8 bg-black/60 text-[10px] font-mono text-crimson/50 z-10">
@@ -2421,8 +2430,110 @@ function InputGroup({ label, placeholder, value, onChange, type = "text", onTest
         placeholder={placeholder} 
         value={value}
         onChange={(e) => onChange(e.target.value)}
-      />
-    </div>
+/>
+	</div>
+	);
+}
+
+function ToastWithTimer({ toast, onClose, onCopy }: { toast: { id: string, message: string, type: 'success' | 'error' | 'info', details?: string }, onClose: () => void, onCopy: () => void }) {
+  const [timeLeft, setTimeLeft] = useState(5);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTimeLeft(prev => {
+        if (prev <= 1) {
+          clearInterval(timer);
+          onClose();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(timer);
+  }, [onClose]);
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, x: 100, filter: 'blur(10px)' }}
+      animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
+      exit={{ opacity: 0, x: 100, filter: 'blur(10px)' }}
+      className={cn(
+        "hud-border bg-black/95 backdrop-blur-md min-w-[300px] max-w-[500px] pointer-events-auto",
+        toast.type === 'success' ? 'border-green-500/50' : toast.type === 'error' ? 'border-red-500/50' : 'border-crimson/50'
+      )}
+    >
+      {/* Timer bar */}
+      <div className="h-1 w-full bg-crimson/10 overflow-hidden">
+        <motion.div
+          initial={{ width: "100%" }}
+          animate={{ width: "0%" }}
+          transition={{ duration: 5, ease: "linear" }}
+          className={cn(
+            "h-full",
+            toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-crimson'
+          )}
+        />
+      </div>
+
+      <div className="px-4 py-3 flex items-start gap-3">
+        <div className={cn(
+          "w-2 h-full min-h-[40px] shrink-0",
+          toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-crimson'
+        )} />
+
+        <div className="flex-1 flex flex-col gap-2">
+          <div className="flex items-center justify-between">
+            <div className="flex flex-col">
+              <span className="text-[8px] font-mono text-crimson/50 uppercase tracking-widest">{toast.type}</span>
+              <span className="text-xs font-mono font-bold tracking-tight text-white">{toast.message}</span>
+            </div>
+            <div className={cn(
+              "flex items-center justify-center w-8 h-8 rounded-full border-2",
+              timeLeft <= 2 ? "bg-red-500/20 border-red-500 animate-pulse" : "bg-crimson/20 border-crimson/50"
+            )}>
+              <span className={cn(
+                "text-sm font-mono font-bold",
+                timeLeft <= 2 ? "text-red-500" : "text-crimson"
+              )}>{timeLeft}</span>
+            </div>
+          </div>
+
+          {toast.type === 'error' && toast.details && (
+            <button
+              onClick={() => setIsExpanded(!isExpanded)}
+              className="text-[10px] font-mono text-crimson/70 hover:text-crimson transition-colors text-left"
+            >
+              {isExpanded ? '▲ ESCONDER DETALHES' : '▼ MOSTRAR DETALHES'}
+            </button>
+          )}
+
+          {isExpanded && toast.details && (
+            <div className="bg-black/50 p-2 border border-crimson/20 max-h-[100px] overflow-auto">
+              <pre className="text-[9px] font-mono text-red-400 whitespace-pre-wrap break-words">{toast.details}</pre>
+            </div>
+          )}
+
+          {toast.type === 'error' && (
+            <div className="flex gap-2 mt-1">
+              <button
+                onClick={onCopy}
+                className="flex-1 text-[10px] font-mono bg-crimson hover:bg-crimson/80 text-white px-3 py-2 transition-all font-bold"
+              >
+                📋 COPIAR ERRO
+              </button>
+              <button
+                onClick={onClose}
+                className="text-[10px] font-mono bg-red-500/20 border border-red-500/40 px-3 py-2 hover:bg-red-500 hover:text-black transition-all"
+              >
+                FECHAR
+              </button>
+            </div>
+          )}
+        </div>
+      </div>
+    </motion.div>
   );
 }
 
