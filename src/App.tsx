@@ -153,18 +153,20 @@ export default function App() {
   const [isAddingList, setIsAddingList] = useState(false);
   const [newUrls, setNewUrls] = useState<string[]>([""]);
   const [newListName, setNewListName] = useState("");
-  const [isLoading, setIsLoading] = useState(false);
-  const [isComparing, setIsComparing] = useState(false);
-  const [abortController, setAbortController] = useState<AbortController | null>(null);
-  const [comparisonResults, setComparisonResults] = useState<any[]>([]);
-  const [comparingProduct, setComparingProduct] = useState<string | null>(null);
-  const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
-  const [aiInsight, setAiInsight] = useState<string | null>(null);
-  const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
-  const [lastSearchTime, setLastSearchTime] = useState<number>(0);
-  const SEARCH_COOLDOWN = 5000;
-  const [autoSaveTimeout, setAutoSaveTimeout] = useState<NodeJS.Timeout | null>(null);
-  const [showConfirmPurge, setShowConfirmPurge] = useState(false);
+const [isLoading, setIsLoading] = useState(false);
+const [isComparing, setIsComparing] = useState(false);
+const [abortController, setAbortController] = useState<AbortController | null>(null);
+const [comparisonResults, setComparisonResults] = useState<any[]>([]);
+const [comparingProduct, setComparingProduct] = useState<string | null>(null);
+const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+const [aiInsight, setAiInsight] = useState<string | null>(null);
+const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
+const [lastSearchTime, setLastSearchTime] = useState<number>(0);
+const SEARCH_COOLDOWN = 5000;
+const [autoSaveTimeout, setAutoSaveTimeout] = useState<NodeJS.Timeout | null>(null);
+const [showConfirmPurge, setShowConfirmPurge] = useState(false);
+const [scanTimeout, setScanTimeout] = useState<number>(180);
+const [scanController, setScanController] = useState<AbortController | null>(null);
 
   const testDiscord = async () => {
     if (!activeProfile?.discordWebhook) return;
@@ -790,32 +792,44 @@ const info = await response.json();
     setComparingProduct(product.id);
     setIsComparing(true);
     setLastSearchTime(now);
-    setSystemMessage(`INITIATING MARKET SCAN VIA GEMINI SEARCH: ${product.name.toUpperCase()}`);
-    
+    setScanTimeout(180);
+    setSystemMessage(`INITIATING MARKET SCAN: ${product.name.toUpperCase()}`);
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout for search
-    
+    setScanController(controller);
+
+    // Countdown timer
+    const countdownInterval = setInterval(() => {
+      setScanTimeout(prev => {
+        if (prev <= 1) {
+          clearInterval(countdownInterval);
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
     try {
       const response = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           productName: product.name,
           profileId: activeProfileId
         }),
         signal: controller.signal
       });
-      
-      clearTimeout(timeoutId);
-      
+
+      clearInterval(countdownInterval);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || "Comparison failed");
       }
-      
+
       const results = await response.json();
       console.log("MARKET SCAN RESULTS ACQUIRED:", results);
-      
+
       // Only update if we are still looking at the same product
       setSelectedProductId(currentId => {
         if (currentId === product.id) {
@@ -832,7 +846,7 @@ const info = await response.json();
           const now = new Date().toISOString();
           const bestPrice = results.length > 0 ? Math.min(...results.map((r: any) => r.price)) : p.currentPrice;
           const priceChanged = bestPrice !== p.currentPrice;
-          
+
           return {
             ...p,
             previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
@@ -844,11 +858,11 @@ const info = await response.json();
         }
         return p;
       });
-      
+
       const newData = { ...data, products: newProducts };
       setData(newData);
       saveData(newData);
-      
+
       if (results.length > 0) {
         const bestPrice = Math.min(...results.map((r: any) => r.price));
         if (bestPrice < product.currentPrice) {
@@ -858,17 +872,34 @@ const info = await response.json();
         }
       }
     } catch (error: any) {
-      clearTimeout(timeoutId);
+      clearInterval(countdownInterval);
+      
       if (error.name === 'AbortError') {
-        setSystemMessage("ERROR: COMPARISON TIMEOUT");
-        addToast("SEARCH SEQUENCE TIMED OUT", "error");
+        setSystemMessage("MARKET SCAN CANCELLED BY USER");
+        addToast("Market scan cancelled", "info");
       } else {
         const msg = error.message || "COMPARISON SEQUENCE FAILED";
         setSystemMessage(`ERROR: ${msg.toUpperCase()}`);
-        addToast(msg, "error");
+        addToast(msg, "error", error.stack);
       }
     } finally {
+      clearInterval(countdownInterval);
+      setIsComparing(false);
       setComparingProduct(null);
+      setScanController(null);
+      setScanTimeout(0);
+    }
+  };
+
+  const cancelCompare = () => {
+    if (scanController) {
+      scanController.abort();
+      setIsComparing(false);
+      setComparingProduct(null);
+      setScanController(null);
+      setScanTimeout(0);
+      setSystemMessage("MARKET SCAN CANCELLED BY USER");
+      addToast("Market scan cancelled", "info");
     }
   };
 
@@ -1384,12 +1415,60 @@ const info = await response.json();
                           </button>
                         </div>
                       </div>
-                      <button onClick={() => { playSound('click'); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
-                        <Plus size={16} /> ADD LINK
-                      </button>
-                    </div>
+          <button onClick={() => { playSound('click'); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
+            <Plus size={16} /> ADD LINK
+          </button>
+        </div>
 
-                    <div className="grid grid-cols-1 gap-4">
+        {/* Market Scan Progress UI */}
+        {isComparing && (
+          <motion.div
+            initial={{ opacity: 0, y: -10 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="mb-6 p-4 hud-border bg-black/80"
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <RefreshCw className="animate-spin text-crimson" size={20} />
+                <div className="flex flex-col">
+                  <span className="text-xs font-mono text-crimson/70 uppercase">Escaneando Mercado</span>
+                  <span className="text-sm font-mono text-white truncate max-w-[300px]">
+                    {comparingProduct ? profileProducts.find(p => p.id === comparingProduct)?.name : "Produto"}
+                  </span>
+                </div>
+              </div>
+              <div className="flex items-center gap-4">
+                {/* Countdown */}
+                <div className="flex items-center gap-2">
+                  <span className={cn(
+                    "text-sm font-mono font-bold",
+                    scanTimeout <= 30 ? "text-red-500 animate-pulse" : "text-crimson"
+                  )}>
+                    {Math.floor(scanTimeout / 60)}:{(scanTimeout % 60).toString().padStart(2, '0')}
+                  </span>
+                </div>
+                {/* Botão Cancelar */}
+                <button
+                  onClick={() => { playSound('click'); cancelCompare(); }}
+                  className="px-3 py-1 text-xs font-mono bg-red-500/20 border border-red-500/50 hover:bg-red-500 hover:text-black transition-all"
+                >
+                  CANCELAR
+                </button>
+              </div>
+            </div>
+            {/* Barra de Progresso */}
+            <div className="w-full h-1 bg-crimson/20 overflow-hidden mt-3">
+              <motion.div
+                initial={{ width: "100%" }}
+                animate={{ width: "0%" }}
+                transition={{ duration: 180, ease: "linear" }}
+                className="h-full bg-crimson"
+              />
+            </div>
+          </motion.div>
+        )}
+
+        <div className="grid grid-cols-1 gap-4">
                       {profileProducts.filter(p => p.listId === selectedListId).map((product, idx) => (
                         <motion.div
                           key={product.id}

@@ -297,7 +297,7 @@ app.post("/api/scrape", async (req, res) => {
 });
 
 let isComparing = false;
-const MIN_SEARCH_INTERVAL = 5000; // Reduced to 5 seconds
+const MIN_SEARCH_INTERVAL = 180000; // 180 segundos (3 minutos)
 let lastSearchTime = 0;
 
 const TRUSTED_DOMAINS = [
@@ -320,40 +320,66 @@ async function searchWithSerper(query: string, apiKey: string) {
   // Use a more efficient store filter instead of long site: list
   const storeFilter = "Mercado Livre OR Amazon OR Kabum OR Pichau OR Terabyte OR Magalu OR Casas Bahia OR Fast Shop";
   const optimizedQuery = `${query} (${storeFilter})`;
-  
-  const response = await fetch("https://google.serper.dev/search", {
-    method: "POST",
-    headers: {
-      "X-API-KEY": apiKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ q: optimizedQuery, gl: "br", hl: "pt-br", num: 8 })
-  });
-  const data = await response.json();
-  return data.organic?.map((item: any) => ({
-    title: item.title,
-    link: item.link,
-    snippet: item.snippet
-  })) || [];
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 170000); // 170s timeout
+
+  try {
+    const response = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ q: optimizedQuery, gl: "br", hl: "pt-br", num: 8 }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    const data = await response.json();
+    return data.organic?.map((item: any) => ({
+      title: item.title,
+      link: item.link,
+      snippet: item.snippet
+    })) || [];
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Serper API request timeout');
+    }
+    throw error;
+  }
 }
 
 async function searchWithTavily(query: string, apiKey: string) {
-  const response = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
-      api_key: apiKey,
-      query: query,
-      search_depth: "basic",
-      include_domains: TRUSTED_DOMAINS
-    })
-  });
-  const data = await response.json();
-  return data.results?.map((item: any) => ({
-    title: item.title,
-    link: item.url,
-    snippet: item.content
-  })) || [];
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 170000); // 170s timeout
+
+  try {
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query: query,
+        search_depth: "basic",
+        include_domains: TRUSTED_DOMAINS
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    const data = await response.json();
+    return data.results?.map((item: any) => ({
+      title: item.title,
+      link: item.url,
+      snippet: item.content
+    })) || [];
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Tavily API request timeout');
+    }
+    throw error;
+  }
 }
 
 app.post("/api/compare", async (req, res) => {
@@ -611,14 +637,24 @@ let urlsToScrape: string[] = [];
       safeLog(`No search results found for ${productName} on any provider.`);
       return res.json([]);
 
-    } catch (error: any) {
-      const errorMessage = error?.message || String(error);
-      safeLog(`Market analysis failed for ${productName}: ${errorMessage}`);
+  } catch (error: any) {
+    const errorMessage = error?.message || String(error);
+    safeLog(`Market analysis failed for ${productName}: ${errorMessage}`);
+    
+    // Verificar se foi timeout
+    if (error.name === 'AbortError' || errorMessage.includes('timeout') || errorMessage.includes('Timeout')) {
+      res.status(408).json({ 
+        error: "REQUEST TIMEOUT: Market scan took too long. Please try again.",
+        details: "The search exceeded the time limit. This can happen if APIs are slow."
+      });
+    } else {
       res.status(500).json({ error: errorMessage });
-    } finally {
-      isComparing = false;
     }
-  });
+  } finally {
+    isComparing = false;
+    safeLog("[Compare] State released, ready for new scan");
+  }
+});
 
   app.post("/api/analyze", async (req, res) => {
     const { productName, currentPrice, currency, history, profileId } = req.body;
