@@ -112,27 +112,33 @@ function isPriceRealistic(price: number, productName?: string): boolean {
   if (productName) {
     const nameLower = productName.toLowerCase();
 
+    // Placas-mãe devem ter preço mínimo de R$ 200
+    if (nameLower.includes('placa mae') || nameLower.includes('placa-mãe') || 
+        nameLower.includes('motherboard') || nameLower.includes('placa mãe')) {
+      return price >= 200;
+    }
+
     // Placas de vídeo e processadores premium devem ter preço mínimo maior
-    if (nameLower.includes('rtx') || nameLower.includes('radeon') || 
+    if (nameLower.includes('rtx') || nameLower.includes('radeon') ||
         nameLower.includes('ryzen') || nameLower.includes('intel') ||
         nameLower.includes('placa de video') || nameLower.includes('processador')) {
       return price >= 100;
     }
 
     // Storage (SSD, HD, Memória) deve ter preço mínimo razoável
-    if (nameLower.includes('ssd') || nameLower.includes('hd') || 
+    if (nameLower.includes('ssd') || nameLower.includes('hd') ||
         nameLower.includes('memória') || nameLower.includes('pendrive')) {
       return price >= 30;
     }
 
     // Monitores e TVs devem ter preço mínimo
-    if (nameLower.includes('monitor') || nameLower.includes('tv ') || 
+    if (nameLower.includes('monitor') || nameLower.includes('tv ') ||
         nameLower.includes('televisão')) {
       return price >= 150;
     }
 
     // Periféricos (teclado, mouse, headset) devem ter preço mínimo
-    if (nameLower.includes('teclado') || nameLower.includes('mouse') || 
+    if (nameLower.includes('teclado') || nameLower.includes('mouse') ||
         nameLower.includes('headset') || nameLower.includes('fone')) {
       return price >= 20;
     }
@@ -228,20 +234,13 @@ export async function advancedScrape(url: string, options: {
   console.log(`  - NVIDIA: ${options.nvidiaApiKey ? "YES (len=" + options.nvidiaApiKey.length + ")" : "NO"}`);
   console.log(`  - Gemini: ${options.geminiApiKey ? "YES" : "NO"}`);
 
-  const strategies: { name: string; fn: () => Promise<ScrapeResult | null> }[] = [];
+const strategies: { name: string; fn: () => Promise<ScrapeResult | null> }[] = [];
 
   // 1. Handler específico da loja (mais rápido)
   strategies.push({ name: "PLAYWRIGHT_HANDLER", fn: () => scrapeWithPlaywrightStealth(url, options, true) });
 
-  // 2. NVIDIA NIM (se configurado) - ANTES de LM Studio e Gemini
-  if (options.nvidiaApiKey) {
-    console.log("[Scraper] Adding NVIDIA_NIM_LLAMA strategy");
-    strategies.push({ name: "NVIDIA_NIM_LLAMA", fn: () => scrapeWithNvidiaNim(url, options.nvidiaApiKey!) });
-  }
-
-  // 3. LM Studio (se configurado) - Vision e Text
+  // 2. LM Studio (se configurado) - Vision e Text (LOCAL = RÁPIDO)
   if (options.lmStudioUrl) {
-    // Verificar se LM Studio está rodando
     let lmStudioAvailable = false;
     try {
       const lmStudioCheck = await fetch(`${options.lmStudioUrl}/models`, {
@@ -257,7 +256,7 @@ export async function advancedScrape(url: string, options: {
     } catch (e) {
       console.log("[Scraper] LM Studio not responding, skipping LM Studio strategies");
     }
-    
+
     if (lmStudioAvailable) {
       strategies.push(
         { name: "PLAYWRIGHT_LM_STUDIO_VISION", fn: () => scrapeWithPlaywrightLLMLocal(url, options, true) },
@@ -266,7 +265,7 @@ export async function advancedScrape(url: string, options: {
     }
   }
 
-  // 4. Fallbacks básicos (sem IA)
+  // 3. Fallbacks básicos (sem IA)
   console.log("[Scraper] Adding basic fallback strategies");
   strategies.push(
     { name: "PLAYWRIGHT_STEALTH_BASIC", fn: () => scrapeWithPlaywrightStealth(url, options, false) },
@@ -274,7 +273,7 @@ export async function advancedScrape(url: string, options: {
     { name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) }
   );
 
-  // 5. Gemini como ÚLTIMO recurso (apenas se configurado)
+  // 4. Gemini como ÚLTIMO recurso (apenas se configurado)
   if (options.geminiApiKey) {
     console.log("[Scraper] Adding GEMINI_FALLBACK as last resort");
     strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, options.geminiApiKey, "") });
@@ -284,20 +283,35 @@ export async function advancedScrape(url: string, options: {
   console.log(`[Scraper] Strategy order: ${strategies.map(s => s.name).join(" -> ")}`);
 
 for (const strategy of strategies) {
-  try {
-    console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
-    const result = await strategy.fn();
+    try {
+      console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
+      
+      // Timeout de 30 segundos por estratégia
+      const timeoutPromise = new Promise<null>((_, reject) => {
+        setTimeout(() => reject(new Error('Strategy timeout (30s)')), 30000);
+      });
+      
+      const result = await Promise.race([
+        strategy.fn(),
+        timeoutPromise
+      ]) as ScrapeResult | null;
 
     if (result && isValidPrice(result.price)) {
       result.price = sanitizePrice(result.price);
       result.method = strategy.name;
       result.name = result.name || "";
 
+      // Rejeitar produtos indisponíveis
+      if (result.available === false) {
+        console.log(`[Scraper] ✗ Product not available (available: false), trying next strategy...`);
+        continue;
+      }
+
       // Validar se o preço é realista
       if (!isPriceRealistic(result.price, result.name)) {
         console.log(`[Scraper] ⚠️ WARNING: Price R$ ${result.price} seems unrealistic for "${result.name?.substring(0, 40)}"`);
         console.log(`[Scraper] Trying next strategy for confirmation...`);
-        continue; // Tentar próxima estratégia
+        continue;
       }
 
       // Validar se o nome faz sentido antes de salvar

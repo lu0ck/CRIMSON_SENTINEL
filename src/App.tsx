@@ -165,6 +165,8 @@ export default function App() {
   const SEARCH_COOLDOWN = 5000;
   const [autoSaveTimeout, setAutoSaveTimeout] = useState<NodeJS.Timeout | null>(null);
   const [showConfirmPurge, setShowConfirmPurge] = useState(false);
+  const [scanTimeout, setScanTimeout] = useState<number>(600);
+  const [scanController, setScanController] = useState<AbortController | null>(null);
 
   const testDiscord = async () => {
     if (!activeProfile?.discordWebhook) return;
@@ -388,19 +390,20 @@ const [toasts, setToasts] = useState<{id: string, message: string, type: 'succes
     setSystemMessage("ARCHIVE BUDGET UPDATED");
   };
 
-  const deleteComparisonResult = (productId: string, index: number) => {
+const deleteComparisonResult = (productId: string, index: number) => {
     const newProducts = data.products.map(p => {
       if (p.id === productId) {
         const newResults = (p.comparisonResults || []).filter((_, i) => i !== index);
-        
+
         const bestPrice = newResults.length > 0 ? Math.min(...newResults.map((r: any) => r.price)) : p.currentPrice;
         const now = new Date().toISOString();
+        const priceChanged = bestPrice !== p.currentPrice;
 
-        return { 
-          ...p, 
+        return {
+          ...p,
           comparisonResults: newResults,
           currentPrice: bestPrice,
-          priceHistory: [...p.priceHistory, { date: now, price: bestPrice }],
+          priceHistory: priceChanged ? [...p.priceHistory, { date: now, price: bestPrice }] : p.priceHistory,
           lastUpdated: now
         };
       }
@@ -409,7 +412,7 @@ const [toasts, setToasts] = useState<{id: string, message: string, type: 'succes
     const newData = { ...data, products: newProducts };
     setData(newData);
     saveData(newData);
-    
+
     if (selectedProductId === productId) {
       setComparisonResults(prev => {
         const base = prev.length > 0 ? prev : (data.products.find(p => p.id === productId)?.comparisonResults || []);
@@ -779,7 +782,7 @@ const info = await response.json();
     );
   }
 
-  const compareProduct = async (product: Product) => {
+const compareProduct = async (product: Product) => {
     const now = Date.now();
     if (now - lastSearchTime < SEARCH_COOLDOWN) {
       const remaining = Math.ceil((SEARCH_COOLDOWN - (now - lastSearchTime)) / 1000);
@@ -790,33 +793,44 @@ const info = await response.json();
     setComparingProduct(product.id);
     setIsComparing(true);
     setLastSearchTime(now);
-    setSystemMessage(`INITIATING MARKET SCAN VIA GEMINI SEARCH: ${product.name.toUpperCase()}`);
-    
+    setScanTimeout(600);
+    setSystemMessage(`INITIATING MARKET SCAN: ${product.name.toUpperCase()}`);
+
     const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 60000); // 60s timeout for search
-    
+    setScanController(controller);
+
+    const countdownInterval = setInterval(() => {
+      setScanTimeout(prev => {
+        if (prev <= 1) {
+          clearInterval(countdownInterval);
+          controller.abort();
+          return 0;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
     try {
       const response = await fetch("/api/compare", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ 
+        body: JSON.stringify({
           productName: product.name,
           profileId: activeProfileId
         }),
         signal: controller.signal
       });
-      
-      clearTimeout(timeoutId);
-      
+
+      clearInterval(countdownInterval);
+
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || "Comparison failed");
       }
-      
+
       const results = await response.json();
       console.log("MARKET SCAN RESULTS ACQUIRED:", results);
-      
-      // Only update if we are still looking at the same product
+
       setSelectedProductId(currentId => {
         if (currentId === product.id) {
           setComparisonResults(results);
@@ -826,13 +840,12 @@ const info = await response.json();
         return currentId;
       });
 
-      // Update product with comparison results and best price
       const newProducts = data.products.map(p => {
         if (p.id === product.id) {
           const now = new Date().toISOString();
           const bestPrice = results.length > 0 ? Math.min(...results.map((r: any) => r.price)) : p.currentPrice;
           const priceChanged = bestPrice !== p.currentPrice;
-          
+
           return {
             ...p,
             previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
@@ -844,11 +857,11 @@ const info = await response.json();
         }
         return p;
       });
-      
+
       const newData = { ...data, products: newProducts };
       setData(newData);
       saveData(newData);
-      
+
       if (results.length > 0) {
         const bestPrice = Math.min(...results.map((r: any) => r.price));
         if (bestPrice < product.currentPrice) {
@@ -858,17 +871,34 @@ const info = await response.json();
         }
       }
     } catch (error: any) {
-      clearTimeout(timeoutId);
+      clearInterval(countdownInterval);
+
       if (error.name === 'AbortError') {
-        setSystemMessage("ERROR: COMPARISON TIMEOUT");
-        addToast("SEARCH SEQUENCE TIMED OUT", "error");
+        setSystemMessage("MARKET SCAN CANCELLED");
+        addToast("Market scan cancelled", "info");
       } else {
         const msg = error.message || "COMPARISON SEQUENCE FAILED";
         setSystemMessage(`ERROR: ${msg.toUpperCase()}`);
         addToast(msg, "error");
       }
     } finally {
+      clearInterval(countdownInterval);
+      setIsComparing(false);
       setComparingProduct(null);
+      setScanController(null);
+      setScanTimeout(0);
+    }
+  };
+
+  const cancelCompare = () => {
+    if (scanController) {
+      scanController.abort();
+      setIsComparing(false);
+      setComparingProduct(null);
+      setScanController(null);
+      setScanTimeout(0);
+      setSystemMessage("MARKET SCAN CANCELLED BY USER");
+      addToast("Market scan cancelled", "info");
     }
   };
 
@@ -1708,53 +1738,76 @@ const info = await response.json();
           </Modal>
         )}
 
-        {isComparing && (
-          <Modal title="MARKET COMPARISON" onClose={() => { setIsComparing(false); setComparisonResults([]); }}>
-            <div className="flex flex-col gap-4 relative min-h-[200px] justify-center">
-              {comparingProduct ? (
-                <div className="flex flex-col items-center py-12 gap-4">
-                  <div className="hud-scanner" />
-                  <RefreshCw className="animate-spin text-crimson" size={32} />
-                  <span className="font-mono text-xs animate-pulse tracking-[0.2em]">SCANNING GLOBAL NODES...</span>
+{isComparing && (
+        <Modal title="MARKET COMPARISON" onClose={() => { setIsComparing(false); setComparisonResults([]); }}>
+          <div className="flex flex-col gap-4 relative min-h-[200px] justify-center">
+            {comparingProduct ? (
+              <div className="flex flex-col items-center py-12 gap-4">
+                <div className="hud-scanner" />
+                <RefreshCw className="animate-spin text-crimson" size={32} />
+                <span className="font-mono text-xs animate-pulse tracking-[0.2em]">SCANNING GLOBAL NODES...</span>
+                
+                <div className="flex items-center gap-4 mt-2">
+                  <span className={cn(
+                    "text-2xl font-mono font-bold",
+                    scanTimeout <= 30 ? "text-red-500 animate-pulse" : "text-crimson"
+                  )}>
+                    {Math.floor(scanTimeout / 60)}:{(scanTimeout % 60).toString().padStart(2, '0')}
+                  </span>
+                  <button
+                    onClick={() => cancelCompare()}
+                    className="px-4 py-2 text-xs font-mono bg-red-500/20 border border-red-500/50 hover:bg-red-500 hover:text-black transition-all"
+                  >
+                    CANCELAR
+                  </button>
                 </div>
-              ) : comparisonResults.length > 0 ? (
-                <div className="flex flex-col gap-3">
-                  {comparisonResults.sort((a, b) => a.price - b.price).map((res, i) => (
-                    <motion.div 
-                      key={i} 
-                      initial={{ opacity: 0, x: -20 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      transition={{ delay: i * 0.1 }}
-                      className={cn(
-                        "hud-border p-3 bg-black/40 flex items-center justify-between group hover:bg-crimson/5 transition-all",
-                        i === 0 && "border-green-500/50 bg-green-500/5 shadow-[0_0_15px_rgba(34,197,94,0.1)]"
-                      )}
-                    >
-                      <div className="flex flex-col">
-                        <span className="text-[10px] font-mono text-crimson/50 uppercase tracking-tight">{res.site}</span>
-                        <span className={cn("text-sm font-mono font-bold", i === 0 ? "text-green-500" : "text-white")}>
-                          BRL {res.price.toFixed(2)}
-                        </span>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        {i === 0 && <span className="text-[8px] font-bold text-green-500 border border-green-500 px-1 animate-pulse">BEST DEAL</span>}
-                        <a href={res.url} target="_blank" rel="noopener noreferrer" className="hud-button text-[10px] py-1 px-4">VIEW</a>
-                      </div>
-                    </motion.div>
-                  ))}
+                
+                <div className="w-48 h-2 bg-crimson/20 overflow-hidden mt-2">
+                  <motion.div
+                    initial={{ width: "100%" }}
+                    animate={{ width: `${(scanTimeout / 600) * 100}%` }}
+                    className="h-full bg-crimson"
+                  />
                 </div>
-              ) : (
-                <div className="flex flex-col items-center py-12 gap-4 text-center">
-                  <ShieldAlert className="text-crimson/30" size={48} />
-                  <div className="flex flex-col gap-1">
-                    <span className="font-mono text-sm text-crimson/50">NO COMPETITIVE DATA FOUND</span>
-                    <span className="font-mono text-[8px] text-crimson/30 uppercase tracking-widest">TARGET MAY BE UNIQUE OR OUT OF STOCK</span>
-                  </div>
+              </div>
+            ) : comparisonResults.length > 0 ? (
+              <div className="flex flex-col gap-3">
+                {comparisonResults.sort((a, b) => a.price - b.price).map((res, i) => (
+                  <motion.div
+                    key={i}
+                    initial={{ opacity: 0, x: -20 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ delay: i * 0.1 }}
+                    className={cn(
+                      "hud-border p-3 bg-black/40 flex items-center justify-between group hover:bg-crimson/5 transition-all",
+                      i === 0 && "border-green-500/50 bg-green-500/5 shadow-[0_0_15px_rgba(34,197,94,0.1)]"
+                    )}
+                  >
+                    <div className="flex flex-col">
+                      <span className="text-[10px] font-mono text-crimson/50 uppercase tracking-tight">{res.site}</span>
+                      <span className={cn("text-sm font-mono font-bold", i === 0 ? "text-green-500" : "text-white")}>
+                        BRL {res.price.toFixed(2)}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      {i === 0 && <span className="text-[8px] font-bold text-green-500 border border-green-500 px-1 animate-pulse">BEST DEAL</span>}
+                      <a href={res.url} target="_blank" rel="noopener noreferrer" className="hud-button text-[10px] py-1 px-4">VIEW</a>
+                    </div>
+                  </motion.div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex flex-col items-center py-12 gap-4 text-center">
+                <ShieldAlert className="text-crimson/30" size={48} />
+                <div className="flex flex-col gap-1">
+                  <span className="font-mono text-sm text-crimson/50">NO COMPETITIVE DATA FOUND</span>
+                  <span className="font-mono text-[8px] text-crimson/30 uppercase tracking-widest">TARGET MAY BE UNIQUE OR OUT OF STOCK</span>
                 </div>
-              )}
-            </div>
-          </Modal>
-        )}
+              </div>
+            )}
+          </div>
+        </Modal>
+      )}
       </AnimatePresence>
 
 {/* Toast Notifications */}
@@ -2369,7 +2422,7 @@ function ProductDetailModal({
 
 function Modal({ title, children, onClose }: { title: string, children: React.ReactNode, onClose: () => void }) {
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
+    <div className="fixed inset-0 z-[200] flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
       <motion.div 
         initial={{ scale: 0.9, opacity: 0 }}
         animate={{ scale: 1, opacity: 1 }}

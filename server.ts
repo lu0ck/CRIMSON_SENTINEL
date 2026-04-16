@@ -297,8 +297,9 @@ app.post("/api/scrape", async (req, res) => {
 });
 
 let isComparing = false;
-const MIN_SEARCH_INTERVAL = 5000; // Reduced to 5 seconds
+const MIN_SEARCH_INTERVAL = 5000;
 let lastSearchTime = 0;
+const SCAN_TIMEOUT_MS = 590000;
 
 const TRUSTED_DOMAINS = [
   "mercadolivre.com.br", 
@@ -317,43 +318,68 @@ const TRUSTED_DOMAINS = [
 ];
 
 async function searchWithSerper(query: string, apiKey: string) {
-  // Use a more efficient store filter instead of long site: list
   const storeFilter = "Mercado Livre OR Amazon OR Kabum OR Pichau OR Terabyte OR Magalu OR Casas Bahia OR Fast Shop";
   const optimizedQuery = `${query} (${storeFilter})`;
-  
-  const response = await fetch("https://google.serper.dev/search", {
-    method: "POST",
-    headers: {
-      "X-API-KEY": apiKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ q: optimizedQuery, gl: "br", hl: "pt-br", num: 8 })
-  });
-  const data = await response.json();
-  return data.organic?.map((item: any) => ({
-    title: item.title,
-    link: item.link,
-    snippet: item.snippet
-  })) || [];
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
+
+  try {
+    const response = await fetch("https://google.serper.dev/search", {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ q: optimizedQuery, gl: "br", hl: "pt-br", num: 8 }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    const data = await response.json();
+    return data.organic?.map((item: any) => ({
+      title: item.title,
+      link: item.link,
+      snippet: item.snippet
+    })) || [];
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Serper API request timeout');
+    }
+    throw error;
+  }
 }
 
 async function searchWithTavily(query: string, apiKey: string) {
-  const response = await fetch("https://api.tavily.com/search", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ 
-      api_key: apiKey,
-      query: query,
-      search_depth: "basic",
-      include_domains: TRUSTED_DOMAINS
-    })
-  });
-  const data = await response.json();
-  return data.results?.map((item: any) => ({
-    title: item.title,
-    link: item.url,
-    snippet: item.content
-  })) || [];
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
+
+  try {
+    const response = await fetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        api_key: apiKey,
+        query: query,
+        search_depth: "basic",
+        include_domains: TRUSTED_DOMAINS
+      }),
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    const data = await response.json();
+    return data.results?.map((item: any) => ({
+      title: item.title,
+      link: item.url,
+      snippet: item.content
+    })) || [];
+  } catch (error: any) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      throw new Error('Tavily API request timeout');
+    }
+    throw error;
+  }
 }
 
 app.post("/api/compare", async (req, res) => {
@@ -445,180 +471,83 @@ app.post("/api/compare", async (req, res) => {
         searchResults = await searchWithTavily(`${productName} preço brasil`, profile.tavilyApiKey);
       }
 
-      if (searchResults.length > 0) {
-        safeLog(`Found ${searchResults.length} search results, extracting prices...`);
-        // Use LLM (Gemini or NVIDIA) to extract prices from snippets
-        const extractionPrompt = `Extraia os preços dos produtos destes resultados de pesquisa para "${productName}". 
-        Resultados: ${JSON.stringify(searchResults)}
-        
-        REGRAS DE EXTRAÇÃO:
-        1. "site": Nome da loja (ex: "Amazon", "Mercado Livre").
-        2. "price": Número representando o MENOR PREÇO À VISTA ATUAL (Pix/Boleto).
-        3. "url": Link direto do produto.
-        
-        CRÍTICO: 
-        - Verifique se o produto está EM ESTOQUE.
-        - IGNORE preços parcelados (ex: 12x de...) se o preço à vista for diferente.
-        - NÃO confunda o valor de uma única parcela com o preço total.
-        - Se o preço parecer suspeito (ex: R$ 10 para uma placa de vídeo), ignore.
-        
-        Retorne APENAS um array JSON de objetos {site, price, url}.`;
+if (searchResults.length > 0) {
+  safeLog(`Found ${searchResults.length} search results, extracting prices...`);
 
-    let extractedData = "[]";
+  let urlsToScrape: string[] = [];
+
+  // Usar diretamente URLs dos resultados de busca (mais rápido)
+  safeLog("[URL Selection] Using URLs directly from search results...");
+
+  // Pegar URLs das lojas brasileiras conhecidas
+  for (const result of searchResults) {
+    if (urlsToScrape.length >= 3) break;
+    const url = result.link;
+    if (!url) continue;
 
     try {
-      const urlSelectionPrompt = `Analise estes resultados de pesquisa para "${productName}".
-Selecione as 3 URLs mais promissoras que parecem ser links diretos de produtos em grandes varejistas (Amazon, Mercado Livre, Kabum, Pichau, Terabyte, Magalu).
-
-Resultados: ${JSON.stringify(searchResults)}
-
-Retorne APENAS um array JSON de strings (as URLs).`;
-
-let urlsToScrape: string[] = [];
-      if (profile?.nvidiaApiKey) {
-        const OpenAI = (await import("openai")).default;
-        const client = new OpenAI({ baseURL: "https://integrate.api.nvidia.com/v1", apiKey: profile.nvidiaApiKey });
-        const response = await client.chat.completions.create({
-          model: "meta/llama-3.1-405b-instruct",
-          messages: [{ role: "user", content: urlSelectionPrompt }],
-          response_format: { type: "json_object" }
-        });
-        const parsed = JSON.parse(response.choices[0].message.content || "{}");
-        urlsToScrape = Array.isArray(parsed) ? parsed : (parsed.urls || []);
-      } else if (finalApiKey) {
-        const ai = new GoogleGenAI({ apiKey: finalApiKey });
-        const response = await ai.models.generateContent({
-          model: "gemini-3-flash-preview",
-          contents: urlSelectionPrompt,
-          config: { responseMimeType: "application/json" }
-        });
-        const parsed = JSON.parse(response.text || "{}");
-        urlsToScrape = Array.isArray(parsed) ? parsed : (parsed.urls || []);
+      const hostname = new URL(url).hostname.replace('www.', '');
+      const isValid = TRUSTED_DOMAINS.some(domain => hostname.includes(domain));
+      if (isValid) {
+        urlsToScrape.push(url);
+        safeLog(`[URL Selection] Added URL: ${hostname}`);
       }
-
-          // Limit to top 3 to avoid long waits
-          urlsToScrape = urlsToScrape.slice(0, 3);
-          safeLog(`Scraping top ${urlsToScrape.length} URLs for ${productName}...`);
-
-          const results = [];
-          const { advancedScrape } = await import("./src/lib/scraper.ts");
-          
-          for (const url of urlsToScrape) {
-            try {
-              const info = await advancedScrape(url, {
-                geminiApiKey: finalApiKey,
-                nvidiaApiKey: profile?.nvidiaApiKey,
-                lmStudioUrl: profile?.lmStudioUrl
-              });
-              if (info && info.price > 0) {
-                results.push({
-                  site: new URL(url).hostname.replace("www.", "").split(".")[0].toUpperCase(),
-                  price: info.price,
-                  url: url,
-                  imageUrl: info.imageUrl
-                });
-              }
-            } catch (scrapeErr) {
-              safeLog(`Failed to scrape ${url}: ${scrapeErr}`);
-            }
-          }
-
-          if (results.length > 0) {
-            return res.json(results);
-          }
-
-          // Fallback to snippet extraction if advanced scrape failed or returned nothing
-          safeLog("Advanced scrape returned no results, falling back to snippet extraction...");
-          
-          const snippetPrompt = `Extraia os preços dos produtos destes resultados de pesquisa para "${productName}". 
-          Resultados: ${JSON.stringify(searchResults)}
-          
-          REGRAS DE EXTRAÇÃO:
-          1. "site": Nome da loja (ex: "Amazon", "Mercado Livre").
-          2. "price": Número representando o MENOR PREÇO À VISTA ATUAL (Pix/Boleto).
-          3. "url": Link direto do produto.
-          
-          Retorne APENAS um array JSON de objetos {site, price, url}.`;
-
-          if (profile?.nvidiaApiKey) {
-            const OpenAI = (await import("openai")).default;
-            const client = new OpenAI({ baseURL: "https://integrate.api.nvidia.com/v1", apiKey: profile.nvidiaApiKey });
-            const response = await client.chat.completions.create({
-              model: "meta/llama-3.1-405b-instruct",
-              messages: [{ role: "user", content: snippetPrompt }],
-              response_format: { type: "json_object" }
-            });
-            extractedData = response.choices[0].message.content || "[]";
-          } else if (finalApiKey) {
-            const ai = new GoogleGenAI({ apiKey: finalApiKey });
-            const response = await ai.models.generateContent({
-              model: "gemini-3-flash-preview",
-              contents: snippetPrompt,
-              config: { responseMimeType: "application/json" }
-            });
-            extractedData = response.text || "[]";
-          }
-        } catch (extractError: any) {
-          safeLog(`Extraction failed: ${extractError.message}`);
-          extractedData = "[]";
-        }
-
-        safeLog(`Raw extraction data: ${extractedData.slice(0, 200)}...`);
-
-        // Robust parsing
-        let finalArray = [];
-        try {
-          let parsed = JSON.parse(extractedData);
-          
-          if (Array.isArray(parsed)) {
-            finalArray = parsed;
-          } else if (parsed.results && Array.isArray(parsed.results)) {
-            finalArray = parsed.results;
-          } else if (parsed.prices && Array.isArray(parsed.prices)) {
-            finalArray = parsed.prices;
-          } else if (parsed.products && Array.isArray(parsed.products)) {
-            finalArray = parsed.products;
-          } else {
-            // Try to find any array in the object
-            const firstArrayKey = Object.keys(parsed).find(key => Array.isArray(parsed[key]));
-            if (firstArrayKey) finalArray = parsed[firstArrayKey];
-          }
-        } catch (parseError: any) {
-          safeLog(`JSON Parse failed for extraction data: ${parseError.message}`);
-        }
-
-        // Sanitize and validate
-        finalArray = finalArray.filter((item: any) => 
-          item && typeof item === 'object' && 
-          (typeof item.site === 'string' || typeof item.site === 'number') && 
-          !isNaN(parseFloat(item.price)) &&
-          typeof item.url === 'string'
-        ).map((item: any) => ({
-          site: String(item.site),
-          price: parseFloat(item.price),
-          url: item.url
-        }));
-
-        safeLog(`Extracted ${finalArray.length} valid price points for ${productName}`);
-        
-        // Final filter for zero prices and suspicious sources
-        finalArray = finalArray.filter(item => item.price > 0);
-        
-        return res.json(finalArray);
-      }
-
-      // If we got here and still no results
-      safeLog(`No search results found for ${productName} on any provider.`);
-      return res.json([]);
-
-    } catch (error: any) {
-      const errorMessage = error?.message || String(error);
-      safeLog(`Market analysis failed for ${productName}: ${errorMessage}`);
-      res.status(500).json({ error: errorMessage });
-    } finally {
-      isComparing = false;
+    } catch {
+      // URL inválida, ignorar
     }
-  });
+  }
+
+  safeLog(`[URL Selection] Selected ${urlsToScrape.length} valid URLs`);
+
+  const results = [];
+  const { advancedScrape } = await import("./src/lib/scraper.ts");
+
+  for (const url of urlsToScrape) {
+    try {
+      const info = await advancedScrape(url, {
+        geminiApiKey: finalApiKey,
+        nvidiaApiKey: profile?.nvidiaApiKey,
+        lmStudioUrl: profile?.lmStudioUrl
+      });
+      if (info && info.price > 0) {
+        results.push({
+          site: new URL(url).hostname.replace("www.", "").split(".")[0].toUpperCase(),
+          price: info.price,
+          url: url,
+          imageUrl: info.imageUrl
+        });
+      }
+    } catch (scrapeErr) {
+      safeLog(`Failed to scrape ${url}: ${scrapeErr}`);
+    }
+  }
+
+  if (results.length > 0) {
+    return res.json(results);
+  }
+
+  // Se não encontrou resultados, retornar vazio
+  safeLog("No valid prices found after scraping all URLs");
+  return res.json([]);
+}
+
+} catch (error: any) {
+    const errorMessage = error?.message || String(error);
+    safeLog(`Market analysis failed for ${productName}: ${errorMessage}`);
+
+    if (error.name === 'AbortError' || errorMessage.includes('timeout') || errorMessage.includes('Timeout')) {
+      res.status(408).json({
+        error: "REQUEST TIMEOUT: Market scan took too long. Please try again.",
+        details: "The search exceeded the 3 minute limit."
+      });
+    } else {
+      res.status(500).json({ error: errorMessage });
+    }
+  } finally {
+    isComparing = false;
+    safeLog("[Compare] State released, ready for new scan");
+  }
+});
 
   app.post("/api/analyze", async (req, res) => {
     const { productName, currentPrice, currency, history, profileId } = req.body;
