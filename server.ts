@@ -549,25 +549,92 @@ if (searchResults.length > 0) {
   }
 });
 
-  app.post("/api/analyze", async (req, res) => {
-    const { productName, currentPrice, currency, history, profileId } = req.body;
-    
+  // System Status Endpoint
+const SCHEDULE_HOUR = 15; // 15:00 = 3 PM São Paulo
+
+app.get("/api/status", async (req, res) => {
+  const profileId = req.query.profileId as string;
+  const rawData = fs.readFileSync(DATA_FILE, "utf-8");
+  const fileData = JSON.parse(rawData);
+  const profile = fileData.profiles.find((p: any) => p.id === profileId);
+
+  const status = {
+    lmStudio: { connected: false, model: null as string | null },
+    gemini: { available: false },
+    serper: { available: false },
+    nvidia: { available: false },
+    nextScanMinutes: 0
+  };
+
+  // Test LM Studio connection
+  if (profile?.lmStudioUrl) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000);
+      const response = await fetch(`${profile.lmStudioUrl.replace(/\/v1$/, '')}/v1/models`, {
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      if (response.ok) {
+        const models = await response.json();
+        status.lmStudio.connected = true;
+        status.lmStudio.model = models.data?.[0]?.id || "unknown";
+      }
+    } catch (e) {
+      safeLog(`LM Studio status check failed: ${e}`);
+    }
+  }
+
+  // Check API keys
+  status.gemini.available = !!(profile?.geminiApiKey || process.env.GEMINI_API_KEY);
+  status.serper.available = !!(profile?.serperApiKey || process.env.SERPER_API_KEY);
+  status.nvidia.available = !!profile?.nvidiaApiKey;
+
+  // Calculate next scan time
+  const now = new Date();
+  const today15 = new Date(now);
+  today15.setHours(SCHEDULE_HOUR, 0, 0, 0);
+  let nextScan = new Date(today15);
+  if (now >= today15) {
+    nextScan.setDate(nextScan.getDate() + 1);
+  }
+  status.nextScanMinutes = Math.round((nextScan.getTime() - now.getTime()) / 60000);
+
+  res.json(status);
+});
+
+// Global schedule hour for status endpoint
+// (moved to top of status endpoint)
+
+app.post("/api/analyze", async (req, res) => {
+    const { productName, currentPrice, currency, history, profileId, lowestPrice, lowestPriceDate } = req.body;
+
     try {
       const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
       const profile = data.profiles.find((p: any) => p.id === profileId);
       const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
-      const prompt = `Analise o histórico de preços para "${productName}".
-Preço Atual: ${currency} ${currentPrice}
-Histórico: ${history}
+      const prompt = `Você é um assistente ajudando um amigo a decidir se vale a pena comprar um produto de tecnologia.
 
-Forneça uma análise de mercado DIRETA e CONCISA (máximo 150 palavras) em Português.
-Tom: Iron Man / SENTINEL / HUD.
-Estrutura:
-- TENDÊNCIA: [Alta/Baixa/Estável] + motivo breve.
-- RECOMENDAÇÃO: [Comprar/Aguardar/Sugestão de Preço Alvo].
-- RISCO: [Baixo/Médio/Alto].
-Sem enrolação. Apenas os fatos.`;
+Produto: "${productName}"
+Preço Atual: R$ ${currentPrice}
+${lowestPrice ? `Menor Preço Registrado: R$ ${lowestPrice} (em ${lowestPriceDate})` : 'Sem histórico de preços anteriores.'}
+
+Responda de forma SIMPLES e DIRETA, como amigo conversando. NÃO use termos técnicos de bolsa de valores.
+
+**Formato de resposta:**
+
+VALE A PENA? [Sim/Não/Talvez] - uma frase explicando por quê
+
+PREÇO JUSTO: R$ X.XXX - quanto você pagaria nesse produto
+
+QUANDO COMPRAR: [Agora/Esperar] - se deve comprar agora ou esperar promoção
+
+DICA: Uma frase com conselho prático
+
+${lowestPrice && currentPrice > lowestPrice * 1.1 ? `ATENÇÃO: O preço já foi R$ ${lowestPrice}. Se esperar, pode baixar de novo.` : ''}
+
+Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
       let analysis = "";
 
@@ -682,52 +749,85 @@ Sem enrolação. Apenas os fatos.`;
     console.log("=".repeat(80));
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
     
-    // Background automation: Scan all products every 12 hours
-    const SCAN_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
-    
-    setInterval(async () => {
-      safeLog("Starting scheduled background market scan...");
-      try {
-        const content = fs.readFileSync(DATA_FILE, "utf-8");
-        const data = JSON.parse(content);
-        
-        for (const product of data.products) {
-          safeLog(`Background scanning: ${product.name}`);
-          // We could implement a full scan here, but to avoid duplication 
-          // and respect rate limits, we'll just do a basic scrape for now.
-          // In a real app, we'd refactor the compare logic into a shared function.
-          try {
-            const profile = data.profiles.find((p: any) => p.id === product.profileId);
-            const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
-            if (apiKey) {
-              const info = await scrapeProductInfo(product.url, apiKey, product.profileId);
-              if (info && info.price) {
-                const now = new Date().toISOString();
-                const priceChanged = info.price !== product.currentPrice;
-                
-                product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
-                product.currentPrice = info.price;
-                product.lastUpdated = now;
-                if (priceChanged) {
-                  product.priceHistory.push({ date: now, price: info.price });
-                }
-                safeLog(`Updated ${product.name}: ${info.price}`);
+  // Background automation: Scan all products every 12 hours
+  const SCAN_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
+  // SCHEDULE_HOUR is defined at the top of the file
+
+  // Daily scan function
+  async function scanAllProducts() {
+    safeLog("Starting scheduled background market scan...");
+    try {
+      const content = fs.readFileSync(DATA_FILE, "utf-8");
+      const data = JSON.parse(content);
+
+      let updatedCount = 0;
+      let errorCount = 0;
+
+      for (const product of data.products) {
+        safeLog(`Background scanning: ${product.name}`);
+        try {
+          const profile = data.profiles.find((p: any) => p.id === product.profileId);
+          const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
+          if (apiKey) {
+            const info = await scrapeProductInfo(product.url, apiKey, product.profileId);
+            if (info && info.price) {
+              const now = new Date().toISOString();
+              const priceChanged = info.price !== product.currentPrice;
+
+              product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
+              product.currentPrice = info.price;
+              product.lastUpdated = now;
+              if (priceChanged) {
+                product.priceHistory.push({ date: now, price: info.price });
               }
+              safeLog(`Updated ${product.name}: R$ ${info.price}`);
+              updatedCount++;
             }
-            // Small delay between products to avoid rate limits
-            await new Promise(resolve => setTimeout(resolve, 5000));
-          } catch (err) {
-            safeLog(`Failed background scan for ${product.name}: ${err}`);
           }
+          await new Promise(resolve => setTimeout(resolve, 5000));
+        } catch (err) {
+          safeLog(`Failed background scan for ${product.name}: ${err}`);
+          errorCount++;
         }
-        
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-        safeLog("Scheduled background scan complete.");
-      } catch (err) {
-        safeLog("Background scan error: " + err);
       }
-    }, SCAN_INTERVAL);
-  });
+
+      fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+      safeLog(`Scheduled background scan complete. Updated: ${updatedCount}, Errors: ${errorCount}`);
+    } catch (err) {
+      safeLog("Background scan error: " + err);
+    }
+  }
+
+  // Schedule daily scan at 15:00
+  function scheduleDailyScan() {
+    const now = new Date();
+    const today15 = new Date(now);
+    today15.setHours(SCHEDULE_HOUR, 0, 0, 0);
+
+    let nextScan = new Date(today15);
+    if (now >= today15) {
+      nextScan.setDate(nextScan.getDate() + 1);
+    }
+
+    const delay = nextScan.getTime() - now.getTime();
+    safeLog(`Next daily scan scheduled for: ${nextScan.toISOString()} (in ${Math.round(delay / 60000)} minutes)`);
+
+    setTimeout(async () => {
+      safeLog("=".repeat(60));
+      safeLog("DAILY SCHEDULED SCAN AT 15:00 STARTING...");
+      await scanAllProducts();
+      scheduleDailyScan(); // Schedule next
+    }, delay);
+  }
+
+  scheduleDailyScan();
+
+  // Keep 12-hour interval as backup
+  setInterval(async () => {
+    safeLog("Starting 12-hour interval background market scan...");
+    await scanAllProducts();
+  }, SCAN_INTERVAL);
+});
 }
 
 startServer();

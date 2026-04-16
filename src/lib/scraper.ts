@@ -121,14 +121,25 @@ function isPriceRealistic(price: number, productName?: string): boolean {
     // Placas de vídeo e processadores premium devem ter preço mínimo maior
     if (nameLower.includes('rtx') || nameLower.includes('radeon') ||
         nameLower.includes('ryzen') || nameLower.includes('intel') ||
-        nameLower.includes('placa de video') || nameLower.includes('processador')) {
-      return price >= 100;
+        nameLower.includes('placa de video') || nameLower.includes('placa de vídeo') ||
+        nameLower.includes('processador') || nameLower.includes('gpu')) {
+      // Placas de vídeo de alta gama (RX 9070, RTX 4080, etc) devem ter preço mínimo maior
+      if (nameLower.includes('9070') || nameLower.includes('4080') ||
+          nameLower.includes('4090') || nameLower.includes('7900') ||
+          nameLower.includes('4070') || nameLower.includes('4070 ti') ||
+          nameLower.includes('7800') || nameLower.includes('6950') ||
+          nameLower.includes('3090') || nameLower.includes('3080')) {
+        return price >= 3000;
+      }
+      return price >= 500;
     }
 
     // Storage (SSD, HD, Memória) deve ter preço mínimo razoável
     if (nameLower.includes('ssd') || nameLower.includes('hd') ||
-        nameLower.includes('memória') || nameLower.includes('pendrive')) {
-      return price >= 30;
+        nameLower.includes('memória') || nameLower.includes('memoria') ||
+        nameLower.includes('pendrive') || nameLower.includes('ddr') ||
+        nameLower.includes('ram')) {
+      return price >= 50;
     }
 
     // Monitores e TVs devem ter preço mínimo

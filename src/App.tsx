@@ -223,9 +223,42 @@ export default function App() {
   const [systemMessage, setSystemMessage] = useState("SYSTEM ONLINE: READY TO TRACK");
   const [isDataLoaded, setIsDataLoaded] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-const [toasts, setToasts] = useState<{id: string, message: string, type: 'success' | 'error' | 'info', details?: string}[]>([]);
+  const [toasts, setToasts] = useState<{id: string, message: string, type: 'success' | 'error' | 'info', details?: string}[]>([]);
 
-	const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info', details?: string) => {
+  // System Status States
+  const [lmStudioStatus, setLmStudioStatus] = useState<{ connected: boolean; model: string | null }>({ connected: false, model: null });
+  const [apiStatus, setApiStatus] = useState<{ gemini: boolean; serper: boolean; nvidia: boolean }>({ gemini: false, serper: false, nvidia: false });
+  const [nextScanMinutes, setNextScanMinutes] = useState<number>(0);
+  const [alertSent, setAlertSent] = useState(false);
+
+  // Check system status
+  const checkSystemStatus = async () => {
+    if (!activeProfileId) return;
+    try {
+      const response = await fetch(`/api/status?profileId=${activeProfileId}`);
+      if (response.ok) {
+        const status = await response.json();
+        setLmStudioStatus({ connected: status.lmStudio.connected, model: status.lmStudio.model });
+        setApiStatus({ gemini: status.gemini.available, serper: status.serper.available, nvidia: status.nvidia.available });
+        setNextScanMinutes(status.nextScanMinutes);
+
+        // Alert 10 minutes before daily scan if LM Studio is offline
+        if (status.nextScanMinutes <= 10 && status.nextScanMinutes > 0 && !status.lmStudio.connected && !alertSent) {
+          addToast("ATENÇÃO: LM Studio está offline! Busca diária em " + status.nextScanMinutes + " minutos. Ligue o LM Studio.", "error");
+          setAlertSent(true);
+        }
+
+        // Reset alert flag when we're past the scan time
+        if (status.nextScanMinutes > 600) {
+          setAlertSent(false);
+        }
+      }
+    } catch (e) {
+      console.error("Failed to check system status:", e);
+    }
+  };
+
+  const addToast = (message: string, type: 'success' | 'error' | 'info' = 'info', details?: string) => {
 		const id = Math.random().toString(36).substr(2, 9);
 		setToasts(prev => [...prev, { id, message, type, details }]);
 		playSound(type === 'success' ? 'success' : type === 'error' ? 'error' : 'notify');
@@ -310,6 +343,23 @@ const [toasts, setToasts] = useState<{id: string, message: string, type: 'succes
 
   useEffect(() => {
     fetchData();
+  }, []);
+
+  // Check system status on load and every hour
+  useEffect(() => {
+    if (activeProfileId) {
+      checkSystemStatus();
+      const interval = setInterval(checkSystemStatus, 60 * 60 * 1000); // Every hour
+      return () => clearInterval(interval);
+    }
+  }, [activeProfileId]);
+
+  // Update next scan minutes every minute
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setNextScanMinutes(prev => Math.max(0, prev - 1));
+    }, 60000);
+    return () => clearInterval(interval);
   }, []);
 
   const profileProducts = data.products.filter(p => p.profileId === activeProfileId);
@@ -499,6 +549,15 @@ const deleteComparisonResult = (productId: string, index: number) => {
         .map(h => `${h.date}: ${product.currency} ${h.price}`)
         .join("\n");
 
+      // Calculate lowest price from history
+      let lowestPrice: number | null = null;
+      let lowestPriceDate: string | null = null;
+      if (product.priceHistory.length > 0) {
+        const lowest = product.priceHistory.reduce((min, h) => h.price < min.price ? h : min, product.priceHistory[0]);
+        lowestPrice = lowest.price;
+        lowestPriceDate = new Date(lowest.date).toLocaleDateString('pt-BR');
+      }
+
       const response = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -507,6 +566,8 @@ const deleteComparisonResult = (productId: string, index: number) => {
           currentPrice: product.currentPrice,
           currency: product.currency,
           history: historyStr,
+          lowestPrice,
+          lowestPriceDate,
           profileId: activeProfile?.id
         })
       });
@@ -782,7 +843,7 @@ const info = await response.json();
     );
   }
 
-const compareProduct = async (product: Product) => {
+  const compareProduct = async (product: Product) => {
     const now = Date.now();
     if (now - lastSearchTime < SEARCH_COOLDOWN) {
       const remaining = Math.ceil((SEARCH_COOLDOWN - (now - lastSearchTime)) / 1000);
@@ -840,18 +901,18 @@ const compareProduct = async (product: Product) => {
         return currentId;
       });
 
+      const bestPrice = results.length > 0 ? Math.min(...results.map((r: any) => r.price)) : product.currentPrice;
+      const priceChanged = bestPrice !== product.currentPrice;
+      const nowIso = new Date().toISOString();
+
       const newProducts = data.products.map(p => {
         if (p.id === product.id) {
-          const now = new Date().toISOString();
-          const bestPrice = results.length > 0 ? Math.min(...results.map((r: any) => r.price)) : p.currentPrice;
-          const priceChanged = bestPrice !== p.currentPrice;
-
           return {
             ...p,
             previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
             currentPrice: bestPrice,
-            lastUpdated: now,
-            priceHistory: priceChanged ? [...p.priceHistory, { date: now, price: bestPrice }] : p.priceHistory,
+            lastUpdated: nowIso,
+            priceHistory: priceChanged ? [...p.priceHistory, { date: nowIso, price: bestPrice }] : p.priceHistory,
             comparisonResults: results
           };
         }
@@ -863,7 +924,6 @@ const compareProduct = async (product: Product) => {
       saveData(newData);
 
       if (results.length > 0) {
-        const bestPrice = Math.min(...results.map((r: any) => r.price));
         if (bestPrice < product.currentPrice) {
           addToast("BEST MARKET PRICE APPLIED TO TRACKER", "success");
         } else if (bestPrice > product.currentPrice) {
@@ -1151,17 +1211,34 @@ const compareProduct = async (product: Product) => {
           </div>
           <div className="h-8 w-[1px] bg-crimson/30" />
           <div className="flex flex-col items-end">
-            <span className="text-crimson/50">STATUS DO SISTEMA</span>
-            <span className="text-crimson animate-pulse-red">{systemMessage}</span>
+            <span className="text-crimson/50">PRÓXIMO SCAN</span>
+            <span className="text-white">{nextScanMinutes} MIN</span>
           </div>
           <div className="h-8 w-[1px] bg-crimson/30" />
           <div className="flex flex-col items-end">
-            <span className="text-crimson/50">NODOS RASTREADOS</span>
-            <span className="text-white">{profileProducts.length} ATIVOS</span>
+            <span className="text-crimson/50">LM STUDIO</span>
+            <span className={cn("flex items-center gap-1", lmStudioStatus.connected ? "text-green-500" : "text-red-500")}>
+              <div className={cn("w-1.5 h-1.5 rounded-full", lmStudioStatus.connected ? "bg-green-500 animate-pulse" : "bg-red-500")} />
+              {lmStudioStatus.connected ? "CONECTADO" : "OFFLINE"}
+            </span>
           </div>
           <div className="h-8 w-[1px] bg-crimson/30" />
-          <button 
-            onClick={() => window.location.reload()} 
+          <div className="flex flex-col items-end">
+            <span className="text-crimson/50">APIS</span>
+            <div className="flex items-center gap-2 text-[10px]">
+              <span className={cn(apiStatus.gemini ? "text-green-500" : "text-crimson/30")}>GEMINI</span>
+              <span className="text-crimson/30">|</span>
+              <span className={cn(apiStatus.serper ? "text-green-500" : "text-crimson/30")}>SERPER</span>
+            </div>
+          </div>
+          <div className="h-8 w-[1px] bg-crimson/30" />
+          <div className="flex flex-col items-end">
+            <span className="text-crimson/50">NODOS</span>
+            <span className="text-white">{profileProducts.length}</span>
+          </div>
+          <div className="h-8 w-[1px] bg-crimson/30" />
+          <button
+            onClick={() => window.location.reload()}
             className="text-crimson/30 hover:text-crimson transition-colors"
             title="RELOAD SYSTEM"
           >
@@ -2173,16 +2250,25 @@ function ProductDetailModal({
                 ) : (
                   <Cpu size={64} className="text-crimson/20 absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2" />
                 )}
-                <div className="absolute -bottom-2 -right-2 bg-crimson text-black font-mono text-[10px] px-2 font-bold">UNIT_ID: {product.id.slice(0,8)}</div>
-              </div>
+        <div className="absolute -bottom-2 -right-2 bg-crimson text-black font-mono text-[10px] px-2 font-bold">UNIT_ID: {product.id.slice(0,8)}</div>
+      </div>
 
-                <div className="flex flex-col gap-4">
-                  <div className="flex flex-col">
-                    <span className="text-[10px] font-mono text-crimson/50 tracking-[0.5em] uppercase">ALVO_IDENTIFICADO</span>
-                    <h2 className="text-3xl font-mono font-bold text-white tracking-tight glow-text">{product.name}</h2>
-                  </div>
-                  
-                  <div className="flex items-center gap-6">
+      <div className="flex flex-col gap-4">
+        <div className="flex flex-col">
+          <span className="text-[10px] font-mono text-crimson/50 tracking-[0.5em] uppercase">ALVO_IDENTIFICADO</span>
+          <h2 className="text-3xl font-mono font-bold text-white tracking-tight glow-text">{product.name}</h2>
+          <a
+            href={product.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-1 text-[10px] font-mono text-crimson/50 hover:text-crimson mt-1 transition-colors"
+          >
+            <ExternalLink size={10} />
+            VER PRODUTO ORIGINAL
+          </a>
+        </div>
+
+        <div className="flex items-center gap-6">
                     <div className="flex flex-col">
                       <span className="text-[10px] font-mono text-crimson/30 uppercase">VALOR_ATUAL</span>
                       <span className="text-2xl font-mono font-bold text-white">{product.currency} {product.currentPrice.toFixed(2)}</span>
