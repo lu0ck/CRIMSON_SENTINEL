@@ -5,14 +5,14 @@ import { GoogleGenAI, Type } from "@google/genai";
 import fs from "fs";
 import path from "path";
 import { getStoreHandler, storeHandlers } from "./store-handlers";
+import { CACHE_DIR, COOKIE_DIR } from "../database/db";
+import { scraperBreaker } from "./circuitBreaker.ts";
 
 // @ts-ignore
 chromium.use(stealth());
 
-const CACHE_DIR = path.join(process.cwd(), ".cache");
-const COOKIE_DIR = path.join(process.cwd(), ".cookies");
-if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
-if (!fs.existsSync(COOKIE_DIR)) fs.mkdirSync(COOKIE_DIR, { recursive: true });
+// CACHE_DIR/COOKIE_DIR agora vêm de db.ts (sob DATA_DIR, FASE 3) — não dependem
+// mais de process.cwd(), que divergia entre api, workers e produção.
 
 export interface ScrapeResult {
   name: string;
@@ -245,44 +245,56 @@ export async function advancedScrape(url: string, options: {
   console.log(`  - NVIDIA: ${options.nvidiaApiKey ? "YES (len=" + options.nvidiaApiKey.length + ")" : "NO"}`);
   console.log(`  - Gemini: ${options.geminiApiKey ? "YES" : "NO"}`);
 
-const strategies: { name: string; fn: () => Promise<ScrapeResult | null> }[] = [];
+  const strategies: { name: string; fn: () => Promise<ScrapeResult | null> }[] = [];
 
-  // 1. Handler específico da loja (mais rápido)
-  strategies.push({ name: "PLAYWRIGHT_HANDLER", fn: () => scrapeWithPlaywrightStealth(url, options, true) });
-
-  // 2. LM Studio (se configurado) - Vision e Text (LOCAL = RÁPIDO)
-  if (options.lmStudioUrl) {
-    let lmStudioAvailable = false;
-    try {
-      const lmStudioCheck = await fetch(`${options.lmStudioUrl}/models`, {
-        method: 'GET',
-        signal: AbortSignal.timeout(2000)
-      });
-      if (lmStudioCheck.ok) {
-        lmStudioAvailable = true;
-        console.log("[Scraper] LM Studio is available, adding strategies");
-      } else {
-        console.log("[Scraper] LM Studio responded but not OK, skipping");
-      }
-    } catch (e) {
-      console.log("[Scraper] LM Studio not responding, skipping LM Studio strategies");
-    }
-
-    if (lmStudioAvailable) {
-      strategies.push(
-        { name: "PLAYWRIGHT_LM_STUDIO_VISION", fn: () => scrapeWithPlaywrightLLMLocal(url, options, true) },
-        { name: "PLAYWRIGHT_LM_STUDIO_TEXT", fn: () => scrapeWithPlaywrightLLMLocal(url, options, false) }
-      );
-    }
+  // Circuit breaker por domínio (FASE 3): se a loja está caindo/bloqueando,
+  // pula as estratégias Playwright (caras) e só tenta as baratas.
+  const domain = getDomain(url);
+  const circuitOpen = scraperBreaker.isOpen(domain);
+  if (circuitOpen) {
+    console.log(`[Scraper] ⏸ Circuit OPEN for ${domain} — pulando estratégias Playwright`);
   }
 
-  // 3. Fallbacks básicos (sem IA)
-  console.log("[Scraper] Adding basic fallback strategies");
-  strategies.push(
-    { name: "PLAYWRIGHT_STEALTH_BASIC", fn: () => scrapeWithPlaywrightStealth(url, options, false) },
-    { name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) },
-    { name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) }
-  );
+  if (!circuitOpen) {
+    // 1. Handler específico da loja (mais rápido)
+    strategies.push({ name: "PLAYWRIGHT_HANDLER", fn: () => scrapeWithPlaywrightStealth(url, options, true) });
+
+    // 2. LM Studio (se configurado) - Vision e Text (LOCAL = RÁPIDO)
+    if (options.lmStudioUrl) {
+      let lmStudioAvailable = false;
+      try {
+        const lmStudioCheck = await fetch(`${options.lmStudioUrl}/models`, {
+          method: 'GET',
+          signal: AbortSignal.timeout(2000)
+        });
+        if (lmStudioCheck.ok) {
+          lmStudioAvailable = true;
+          console.log("[Scraper] LM Studio is available, adding strategies");
+        } else {
+          console.log("[Scraper] LM Studio responded but not OK, skipping");
+        }
+      } catch (e) {
+        console.log("[Scraper] LM Studio not responding, skipping LM Studio strategies");
+      }
+
+      if (lmStudioAvailable) {
+        strategies.push(
+          { name: "PLAYWRIGHT_LM_STUDIO_VISION", fn: () => scrapeWithPlaywrightLLMLocal(url, options, true) },
+          { name: "PLAYWRIGHT_LM_STUDIO_TEXT", fn: () => scrapeWithPlaywrightLLMLocal(url, options, false) }
+        );
+      }
+    }
+
+    // 3a. Fallbacks Playwright (sem IA)
+    console.log("[Scraper] Adding basic Playwright fallback strategies");
+    strategies.push(
+      { name: "PLAYWRIGHT_STEALTH_BASIC", fn: () => scrapeWithPlaywrightStealth(url, options, false) },
+      { name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) }
+    );
+  }
+
+  // 3b. FETCH_FALLBACK é barato (sem browser) — sempre tentado
+  strategies.push({ name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) });
 
   // 4. Gemini como ÚLTIMO recurso (apenas se configurado)
   if (options.geminiApiKey) {
@@ -331,6 +343,10 @@ for (const strategy of strategies) {
 
         // Salvar no cache apenas se tiver dados válidos
         fs.writeFileSync(cacheFile, JSON.stringify(result));
+        scraperBreaker.recordSuccess(domain);
+        if (circuitOpen) {
+          console.log(`[Scraper] ✅ Circuit CLOSED for ${domain} (probe ok)`);
+        }
         return result;
       } else {
         console.log(`[Scraper] ✗ Strategy ${strategy.name} returned invalid name:`, result.name);
@@ -347,6 +363,7 @@ for (const strategy of strategies) {
   console.error("[Scraper] ✗✗✗ All strategies failed ✗✗✗");
   console.error("[Scraper] Strategies attempted:", strategies.map(s => s.name).join(", "));
   console.error("[Scraper] URL:", url);
+  scraperBreaker.recordFailure(domain);
   throw new Error(`Failed to scrape product data from all strategies (tried: ${strategies.map(s => s.name).join(", ")})`);
 }
 

@@ -250,3 +250,30 @@ Infraestrutura de filas BullMQ + Redis + pm2 implementada e testada E2E. O backe
 - ⚠️ Bug corrigido: `/api/jobs/:queue/:id` estava registrado **depois** do SPA fallback (`app.get('*')`), retornando index.html — movido para antes do bloco Vite
 - ⚠️ Bug corrigido: `ecosystem.config.cjs` usava `script: "tsx"`, que o pm2 não resolve (path relativo do CLI) — trocado para `./node_modules/.bin/tsx`
 
+---
+
+## 6.3 Status da FASE 3 (concluída)
+
+Hardening do scraper dentro do worker. Três frentes resolvidas:
+
+| Frente | Arquivo(s) | O que mudou |
+|---|---|---|
+| Normalização/ID centralizada | `src/lib/url.ts` (novo) | `normalizeProductUrl`/`generateProductId` — FONTE ÚNICA. Elimina duplicação entre `server.ts` e `App.tsx` que gerava **IDs divergentes** para a mesma URL. Lista de tracking params unificada: agora inclui `tag` (Amazon), `th`, `psc`, `smid`, `smile`, `linkCode`, `gad_source`, `gad_campaignid` (bug pré-existente documentado no §6.1). Forma canônica = `origin + caminho canônico`, **query e hash sempre descartados**. |
+| Circuit breaker por domínio | `src/lib/circuitBreaker.ts` (novo) | Abre após 3 falhas consecutivas por domínio, cooldown 5min, half-open com probe. Quando aberto, `advancedScrape` pula as estratégias Playwright (caras, 10-30s) e só tenta `FETCH_FALLBACK`/`GEMINI_FALLBACK`. |
+| Cache/cookies sob DATA_DIR | `src/database/db.ts`, `src/lib/scraper.ts` | `.cache`/`.cookies` passam a derivar de `DATA_DIR` (exportado por `db.ts`) em vez de `process.cwd()` — consistente entre api, workers pm2 e produção (`USER_DATA_PATH`/`/tmp`). `.gitignore` ganhou `.cache/` e `.cookies/`. |
+
+**Integração do breaker em `advancedScrape`** (`src/lib/scraper.ts`):
+- `domain = getDomain(url)`; `circuitOpen = scraperBreaker.isOpen(domain)`.
+- Se aberto: pula `PLAYWRIGHT_HANDLER`, `PLAYWRIGHT_LM_STUDIO_*`, `PLAYWRIGHT_STEALTH_BASIC`, `PLAYWRIGHT_BASIC`; mantém `FETCH_FALLBACK` (barato) e `GEMINI_FALLBACK` (se key).
+- Sucesso → `recordSuccess(domain)` (fecha o circuito); falha total → `recordFailure(domain)`.
+
+**Testes realizados (2026-08-08):**
+- ✅ Normalização: `tag`/`th`/`psc` da Amazon removidos → mesma URL normalizada e **mesmo ID** variando params de tracking (ex: `/dp/B0BDK3PDYQ` id `8f8tev` estável); suffixo `/ref=` removido; Magalu `/produto/p/x` → `/p/x`; trailing slash removido.
+- ✅ Breaker unit: fecha após 3 falhas, reabre após cooldown (probe), probe ok fecha, re-trip funciona.
+- ✅ Breaker E2E no worker: 3 falhas consecutivas de `kabum.com.br` → job seguinte logou `⏸ Circuit OPEN — pulando estratégias Playwright` e falhou com `tried: FETCH_FALLBACK` (só estratégia barata).
+- ✅ Sucesso real: scrape de `/produto/88888` (produto real Kabum) via `FETCH_FALLBACK` → `{name:"Crepioca 3 em 1 Britânia", price:11}` — pipeline completo até salvar preço.
+- ✅ Typecheck: 41 erros pré-existentes (store-handlers.ts + 1 em scraper.ts pré-existente), **zero novos**.
+- ✅ `vite build` OK (App.tsx com import do módulo compartilhado).
+- ⚠️ Nota técnica: imports de módulos TS com e sem extensão `.ts` no mesmo processo criam **duas instâncias** de módulo em tsx (visto com `scraperBreaker`). No worker não há impacto (só `scraper.ts` importa o breaker), mas padronizou-se `./circuitBreaker.ts` com extensão para evitar a armadilha futuramente.
+- ⚠️ Atenção: ao unificar a normalização, o ID canônico passou a descartar TODA query string (antes o backend mantinha params não-tracking via `parsed.toString()`). Para produtos adicionados pelo frontend não muda nada (o frontend já descartava query); só afeta produtos salvos diretamente via API com query params não-tracking (migração dev).
+

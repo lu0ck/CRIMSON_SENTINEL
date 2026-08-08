@@ -13,59 +13,12 @@ import { ProductRepository } from "./src/repositories/productRepository.ts";
 import { ProfileRepository } from "./src/repositories/profileRepository.ts";
 import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
+import { normalizeProductUrl, generateProductId } from "./src/lib/url.ts";
 import { getScanQueue } from "./src/queue/queues.ts";
 import { registerSchedulers } from "./src/queue/schedulers.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-function normalizeProductUrl(url: string): string {
-  try {
-    const parsed = new URL(url);
-    
-    const trackingParams = [
-      'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-      'ref', 'affiliate', 'src', 'source', 'fbclid', 'gclid', 'msclkid',
-      'cmp', 'abtest', 'utm_source', 'utm_medium', 'promo', 'category'
-    ];
-    trackingParams.forEach(param => parsed.searchParams.delete(param));
-    
-    parsed.hash = '';
-    
-    const productIdPatterns = [
-      { pattern: /\/produto\/(\d+)/, format: (m: RegExpMatchArray) => `/produto/${m[1]}` },
-      { pattern: /\/dp\/([A-Z0-9]+)/, format: (m: RegExpMatchArray) => `/dp/${m[1]}` },
-      { pattern: /\/MLB-(\d+)/, format: (m: RegExpMatchArray) => `/MLB-${m[1]}` },
-      { pattern: /\/p\/([a-z0-9]+)/i, format: (m: RegExpMatchArray) => `/p/${m[1]}` },
-      { pattern: /\/product\/(\d+)/, format: (m: RegExpMatchArray) => `/product/${m[1]}` },
-      { pattern: /\/(\d+)\/p/, format: (m: RegExpMatchArray) => `/${m[1]}/p` },
-      { pattern: /\/sku\/([A-Z0-9]+)/i, format: (m: RegExpMatchArray) => `/sku/${m[1]}` },
-    ];
-    
-    for (const { pattern, format } of productIdPatterns) {
-      const match = parsed.pathname.match(pattern);
-      if (match) {
-        parsed.pathname = format(match);
-        break;
-      }
-    }
-    
-    return parsed.toString();
-  } catch {
-    return url;
-  }
-}
-
-function generateProductId(url: string): string {
-  const normalized = normalizeProductUrl(url);
-  let hash = 0;
-  for (let i = 0; i < normalized.length; i++) {
-    const char = normalized.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash).toString(36);
-}
 
 // Use USER_DATA_PATH for Electron production, or current dir for dev
 // SQLite database replaces data.json (FASE 1)

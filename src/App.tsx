@@ -42,6 +42,7 @@ import {
   EyeOff
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
+import { generateProductId } from "./lib/url";
 
 declare global {
   interface Window {
@@ -674,59 +675,8 @@ const info = await response.json();
 }
 
   // Generate ID based on URL for consistency (same logic as backend)
-  const normalizeProductUrl = (url: string): string => {
-    try {
-      const parsed = new URL(url);
-      const trackingParams = [
-        'utm_source', 'utm_medium', 'utm_campaign', 'utm_term', 'utm_content',
-        'ref', 'affiliate', 'src', 'source', 'fbclid', 'gclid', 'msclkid',
-        'cmp', 'abtest', 'promo', 'category', 'gad_source', 'gad_campaignid',
-        'gclid', 'msclkid', 'fbclid'
-      ];
-      trackingParams.forEach(param => parsed.searchParams.delete(param));
-      parsed.hash = '';
-
-      // Extract product ID for known patterns - return standardized format
-      const patterns = [
-        { regex: /\/produto\/(\d+)/, format: (m: RegExpMatchArray) => `/produto/${m[1]}` }, // Terabyte, Pichau
-        { regex: /\/dp\/([A-Z0-9]+)/, format: (m: RegExpMatchArray) => `/dp/${m[1]}` }, // Amazon
-        { regex: /\/MLB-(\d+)/, format: (m: RegExpMatchArray) => `/MLB-${m[1]}` }, // Mercado Livre
-        { regex: /\/p\/([a-z0-9]+)/i, format: (m: RegExpMatchArray) => `/p/${m[1]}` }, // Magalu
-        { regex: /\/product\/(\d+)/, format: (m: RegExpMatchArray) => `/product/${m[1]}` }, // Generic
-        { regex: /\/(\d+)\/p/, format: (m: RegExpMatchArray) => `/${m[1]}/p` }, // Alternative
-        { regex: /\/sku\/([A-Z0-9]+)/i, format: (m: RegExpMatchArray) => `/sku/${m[1]}` }, // Kabum
-      ];
-
-      for (const { regex, format } of patterns) {
-        const match = parsed.pathname.match(regex);
-        if (match) {
-          const normalizedPath = format(match);
-          console.log(`[URL Normalization] ${parsed.pathname} -> ${normalizedPath}`);
-          return `${parsed.origin}${normalizedPath}`;
-        }
-      }
-
-      // Se não match, usar pathname completo sem trailing slash
-      const cleanPath = parsed.pathname.replace(/\/$/, '') || '/';
-      return `${parsed.origin}${cleanPath}`;
-    } catch {
-      return url;
-    }
-  };
-
-  const generateProductIdFromUrl = (url: string): string => {
-    const normalized = normalizeProductUrl(url);
-    let hash = 0;
-    for (let i = 0; i < normalized.length; i++) {
-      const char = normalized.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash;
-    }
-    return Math.abs(hash).toString(36);
-  };
-
   const product = {
-    id: generateProductIdFromUrl(url),
+    id: generateProductId(url),
       name: info.name || "UNKNOWN PRODUCT",
       url: url,
       currentPrice: info.price || 0,

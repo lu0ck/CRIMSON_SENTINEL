@@ -12,3 +12,6 @@ crimson.db-shm
 crimson.db-wal
 data.json
 data.json.bak-*
+# Scraper cache/cookies (FASE 3 — sob DATA_DIR)
+.cache/
+.cookies/

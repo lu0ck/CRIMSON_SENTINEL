@@ -16,6 +16,18 @@ if (!fs.existsSync(DATA_DIR)) {
 
 const DB_PATH = path.join(DATA_DIR, "crimson.db");
 
+// Cache e cookies do scraper também vivem sob DATA_DIR (FASE 3), para o caminho
+// não depender de process.cwd() do processo (api vs workers pm2 vs produção).
+const CACHE_DIR = path.join(DATA_DIR, ".cache");
+const COOKIE_DIR = path.join(DATA_DIR, ".cookies");
+
+if (!fs.existsSync(CACHE_DIR)) {
+  fs.mkdirSync(CACHE_DIR, { recursive: true });
+}
+if (!fs.existsSync(COOKIE_DIR)) {
+  fs.mkdirSync(COOKIE_DIR, { recursive: true });
+}
+
 let dbInstance: Database.Database | null = null;
 
 export function getDb(): Database.Database {
@@ -45,4 +57,4 @@ export function closeDb(): void {
   }
 }
 
-export { DB_PATH, DATA_DIR };
+export { DB_PATH, DATA_DIR, CACHE_DIR, COOKIE_DIR };
