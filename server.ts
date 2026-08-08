@@ -2,7 +2,6 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { scrapeProductInfo } from "./src/lib/gemini.ts";
 import {
   sendDiscordNotification,
   sendTelegramNotification,
@@ -13,13 +12,12 @@ import { AppDataRepository } from "./src/repositories/appDataRepository.ts";
 import { ProductRepository } from "./src/repositories/productRepository.ts";
 import { ProfileRepository } from "./src/repositories/profileRepository.ts";
 import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
+import { safeLog } from "./src/lib/safeLog.ts";
+import { getScanQueue } from "./src/queue/queues.ts";
+import { registerSchedulers } from "./src/queue/schedulers.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-
-const safeLog = (msg: any) => {
-  console.log(typeof msg === 'string' ? msg : JSON.stringify(msg));
-};
 
 function normalizeProductUrl(url: string): string {
   try {
@@ -234,289 +232,42 @@ if (!data.products) data.products = [];
   });
 
 app.post("/api/scrape", async (req, res) => {
-  const { url, profileId } = req.body;
+  const { url, productId, profileId } = req.body;
   try {
-    const profile = ProfileRepository.getById(profileId);
-
-    safeLog("[Scrape] Profile config:");
-    safeLog("  - lmStudioUrl: " + (profile?.lmStudioUrl || "NOT SET"));
-    safeLog("  - nvidiaApiKey: " + (profile?.nvidiaApiKey ? "SET (len=" + profile.nvidiaApiKey.length + ")" : "NOT SET"));
-    safeLog("  - geminiApiKey: " + (profile?.geminiApiKey ? "SET" : "NOT SET"));
-    safeLog("  - useAdvancedScraping: " + (profile?.useAdvancedScraping || false));
-
-    const { advancedScrape } = await import("./src/lib/scraper.ts");
-
-    const info = await advancedScrape(url, {
-      lmStudioUrl: profile?.lmStudioUrl,
-      nvidiaApiKey: profile?.nvidiaApiKey,
-      geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY
+    const queue = getScanQueue();
+    const job = await queue.add("scrape", {
+      type: "scrape",
+      url,
+      productId,
+      profileId,
     });
-
-    res.json(info);
+    safeLog(`[scrape] enfileirado job ${job.id} para ${url}`);
+    res.json({ jobId: job.id, status: "queued" });
   } catch (error: any) {
-    console.error("[SCRAPE ERROR] Full error:", error);
-    console.error("[SCRAPE ERROR] Message:", error.message);
-    console.error("[SCRAPE ERROR] Stack:", error.stack);
-    safeLog("Scraping failed: " + error);
-    res.status(500).json({
-      error: error.message || "Scraping failed",
-      details: error.stack || "No stack trace",
-      fullError: String(error)
-    });
+    safeLog("[scrape] erro ao enfileirar: " + error.message);
+    res.status(500).json({ error: error.message || "Failed to enqueue scrape" });
   }
 });
 
-let isComparing = false;
-const MIN_SEARCH_INTERVAL = 5000;
-let lastSearchTime = 0;
-const SCAN_TIMEOUT_MS = SettingsRepository.getNumber('scan_timeout_ms') ?? 590000;
-const SCHEDULE_HOUR = SettingsRepository.getNumber('scan_daily_hour') ?? 15;
-const SCAN_INTERVAL = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
-
-const TRUSTED_DOMAINS = [
-  "mercadolivre.com.br", 
-  "amazon.com.br", 
-  "kabum.com.br", 
-  "pichau.com.br", 
-  "terabyteshop.com.br", 
-  "magazineluiza.com.br",
-  "casasbahia.com.br",
-  "pontofrio.com.br",
-  "extra.com.br",
-  "fastshop.com.br",
-  "girafa.com.br",
-  "carrefour.com.br",
-  "americanas.com.br"
-];
-
-async function searchWithSerper(query: string, apiKey: string) {
-  const storeFilter = "Mercado Livre OR Amazon OR Kabum OR Pichau OR Terabyte OR Magalu OR Casas Bahia OR Fast Shop";
-  const optimizedQuery = `${query} (${storeFilter})`;
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-
-  try {
-    const response = await fetch("https://google.serper.dev/search", {
-      method: "POST",
-      headers: {
-        "X-API-KEY": apiKey,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ q: optimizedQuery, gl: "br", hl: "pt-br", num: 8 }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    const data = await response.json();
-    return data.organic?.map((item: any) => ({
-      title: item.title,
-      link: item.link,
-      snippet: item.snippet
-    })) || [];
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      throw new Error('Serper API request timeout');
-    }
-    throw error;
-  }
-}
-
-async function searchWithTavily(query: string, apiKey: string) {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-
-  try {
-    const response = await fetch("https://api.tavily.com/search", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        api_key: apiKey,
-        query: query,
-        search_depth: "basic",
-        include_domains: TRUSTED_DOMAINS
-      }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    const data = await response.json();
-    return data.results?.map((item: any) => ({
-      title: item.title,
-      link: item.url,
-      snippet: item.content
-    })) || [];
-  } catch (error: any) {
-    clearTimeout(timeoutId);
-    if (error.name === 'AbortError') {
-      throw new Error('Tavily API request timeout');
-    }
-    throw error;
-  }
-}
+// Throttle de comparações removido: BullMQ controla concorrência por job (FASE 2).
+// O user_settings ainda guarda scan_timeout_ms para os workers.
 
 app.post("/api/compare", async (req, res) => {
-    const { productName, profileId } = req.body;
-
-    const profile = ProfileRepository.getById(profileId);
-    const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
-    
-    // Global throttle to prevent concurrent searches and respect rate limits
-    if (isComparing) {
-      return res.status(429).json({ error: "SYSTEM BUSY: Another search is in progress. Please wait." });
-    }
-
-    const now = Date.now();
-    const timeSinceLastSearch = now - lastSearchTime;
-    if (timeSinceLastSearch < MIN_SEARCH_INTERVAL) {
-      const waitRemaining = Math.ceil((MIN_SEARCH_INTERVAL - timeSinceLastSearch) / 1000);
-      return res.status(429).json({ error: `COOLING DOWN: Please wait ${waitRemaining}s before next search.` });
-    }
-
-    isComparing = true;
-    lastSearchTime = now;
-
-    try {
-      safeLog(`Comparing product: ${productName}`);
-
-      const systemInstruction = `Você é o SENTINEL, um agente de inteligência de mercado de elite. 
-      Sua missão é extrair preços REAIS e ATUAIS de produtos no mercado brasileiro com precisão cirúrgica.
-      
-      DIRETRIZES DE EXTRAÇÃO:
-      1. FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
-      2. PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
-      3. ESTOQUE: Extraia APENAS se o produto estiver claramente EM ESTOQUE.
-      4. PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto). 
-      5. PARCELAMENTO: IGNORE o valor total parcelado se houver um preço à vista menor. 
-      6. ERROS COMUNS: Não confunda o valor da parcela (ex: 10x de R$ 50) com o preço total. Se o preço total não estiver claro, ignore o resultado.
-      7. PREÇOS ANTIGOS: Ignore preços riscados ("De: R$ ...") ou "Preço Sugerido". Foque no "Por: R$ ...".
-      
-      Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.
-      Se não houver resultados válidos, retorne [].`;
-
-      const prompt = `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`;
-      
-      const { GoogleGenAI, Type } = await import("@google/genai");
-      
-      // Try Gemini Search first if no other keys or as default
-      if (finalApiKey && !profile?.serperApiKey && !profile?.tavilyApiKey) {
-        try {
-          const ai = new GoogleGenAI({ apiKey: finalApiKey });
-          const response = await ai.models.generateContent({
-            model: "gemini-3-flash-preview",
-            contents: prompt,
-            config: {
-              systemInstruction,
-              tools: [{ googleSearch: {} }],
-              responseMimeType: "application/json",
-              responseSchema: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    site: { type: Type.STRING },
-                    price: { type: Type.NUMBER },
-                    url: { type: Type.STRING },
-                  },
-                  required: ["site", "price", "url"],
-                }
-              }
-            }
-          });
-          
-          const text = response.text || "[]";
-          safeLog(`Gemini Search result received for ${productName}`);
-          return res.json(JSON.parse(text));
-        } catch (geminiError: any) {
-          safeLog(`Gemini Search failed, checking fallbacks: ${geminiError.message}`);
-          // If it's a quota error, we continue to fallbacks
-        }
-      }
-
-      // Fallback Search Strategy: Serper or Tavily + LLM Extraction
-      let searchResults = [];
-      if (profile?.serperApiKey) {
-        safeLog("Using Serper.dev for market analysis...");
-        searchResults = await searchWithSerper(`${productName} preço brasil`, profile.serperApiKey);
-      } else if (profile?.tavilyApiKey) {
-        safeLog("Using Tavily for market analysis...");
-        searchResults = await searchWithTavily(`${productName} preço brasil`, profile.tavilyApiKey);
-      }
-
-if (searchResults.length > 0) {
-  safeLog(`Found ${searchResults.length} search results, extracting prices...`);
-
-  let urlsToScrape: string[] = [];
-
-  // Usar diretamente URLs dos resultados de busca (mais rápido)
-  safeLog("[URL Selection] Using URLs directly from search results...");
-
-  // Pegar URLs das lojas brasileiras conhecidas
-  for (const result of searchResults) {
-    if (urlsToScrape.length >= 3) break;
-    const url = result.link;
-    if (!url) continue;
-
-    try {
-      const hostname = new URL(url).hostname.replace('www.', '');
-      const isValid = TRUSTED_DOMAINS.some(domain => hostname.includes(domain));
-      if (isValid) {
-        urlsToScrape.push(url);
-        safeLog(`[URL Selection] Added URL: ${hostname}`);
-      }
-    } catch {
-      // URL inválida, ignorar
-    }
-  }
-
-  safeLog(`[URL Selection] Selected ${urlsToScrape.length} valid URLs`);
-
-  const results = [];
-  const { advancedScrape } = await import("./src/lib/scraper.ts");
-
-  for (const url of urlsToScrape) {
-    try {
-      const info = await advancedScrape(url, {
-        geminiApiKey: finalApiKey,
-        nvidiaApiKey: profile?.nvidiaApiKey,
-        lmStudioUrl: profile?.lmStudioUrl
-      });
-      if (info && info.price > 0) {
-        results.push({
-          site: new URL(url).hostname.replace("www.", "").split(".")[0].toUpperCase(),
-          price: info.price,
-          url: url,
-          imageUrl: info.imageUrl
-        });
-      }
-    } catch (scrapeErr) {
-      safeLog(`Failed to scrape ${url}: ${scrapeErr}`);
-    }
-  }
-
-  if (results.length > 0) {
-    return res.json(results);
-  }
-
-  // Se não encontrou resultados, retornar vazio
-  safeLog("No valid prices found after scraping all URLs");
-  return res.json([]);
-}
-
-} catch (error: any) {
-    const errorMessage = error?.message || String(error);
-    safeLog(`Market analysis failed for ${productName}: ${errorMessage}`);
-
-    if (error.name === 'AbortError' || errorMessage.includes('timeout') || errorMessage.includes('Timeout')) {
-      res.status(408).json({
-        error: "REQUEST TIMEOUT: Market scan took too long. Please try again.",
-        details: "The search exceeded the 3 minute limit."
-      });
-    } else {
-      res.status(500).json({ error: errorMessage });
-    }
-  } finally {
-    isComparing = false;
-    safeLog("[Compare] State released, ready for new scan");
+  const { productName, profileId } = req.body;
+  try {
+    const queue = getScanQueue();
+    const jobKey = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const job = await queue.add("compare", {
+      type: "compare",
+      productName,
+      profileId,
+      jobKey,
+    });
+    safeLog(`[compare] enfileirado job ${job.id} para "${productName}"`);
+    res.json({ jobId: job.id, jobKey, status: "queued" });
+  } catch (error: any) {
+    safeLog("[compare] erro ao enfileirar: " + error.message);
+    res.status(500).json({ error: error.message || "Failed to enqueue compare" });
   }
 });
 
@@ -558,21 +309,18 @@ app.get("/api/status", async (req, res) => {
   status.serper.available = !!(profile?.serperApiKey || process.env.SERPER_API_KEY);
   status.nvidia.available = !!profile?.nvidiaApiKey;
 
-  // Calculate next scan time
-  const now = new Date();
-  const today15 = new Date(now);
-  today15.setHours(SCHEDULE_HOUR, 0, 0, 0);
-  let nextScan = new Date(today15);
-  if (now >= today15) {
-    nextScan.setDate(nextScan.getDate() + 1);
+  // Próximo scan: derivado dos schedulers do BullMQ
+  try {
+    const daily = await getScanQueue().getJobScheduler("scan-daily-cron");
+    if (daily?.next) {
+      status.nextScanMinutes = Math.max(0, Math.round((daily.next - Date.now()) / 60000));
+    }
+  } catch {
+    // bullmq indisponível — retorna 0
   }
-  status.nextScanMinutes = Math.round((nextScan.getTime() - now.getTime()) / 60000);
 
   res.json(status);
 });
-
-// Global schedule hour for status endpoint
-// (moved to top of status endpoint)
 
 app.post("/api/analyze", async (req, res) => {
     const { productName, currentPrice, currency, history, profileId, lowestPrice, lowestPriceDate } = req.body;
@@ -670,7 +418,31 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-
+  // Polling de status de jobs (FASE 2) — registrado antes do SPA fallback
+  app.get("/api/jobs/:queue/:id", async (req, res) => {
+    try {
+      const queueMap: Record<string, any> = {
+        scan: getScanQueue(),
+      };
+      const queue = queueMap[req.params.queue];
+      if (!queue) return res.status(404).json({ error: "unknown queue" });
+      const job = await queue.getJob(req.params.id);
+      if (!job) return res.status(404).json({ error: "job not found" });
+      const state = await job.getState();
+      res.json({
+        id: job.id,
+        name: job.name,
+        state,
+        attemptsMade: job.attemptsMade,
+        progress: job.progress,
+        returnvalue: job.returnvalue,
+        failedReason: job.failedReason,
+        timestamp: job.timestamp,
+      });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
 
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
@@ -707,7 +479,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     });
   }
 
-  app.listen(PORT, "0.0.0.0", () => {
+  app.listen(PORT, "0.0.0.0", async () => {
     console.log("=".repeat(80));
     console.log("CRIMSON SENTINEL SERVER RUNNING!");
     console.log("Port:", PORT);
@@ -715,86 +487,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     console.log("Access: http://localhost:" + PORT);
     console.log("=".repeat(80));
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
-    
-  // Background automation: Scan all products (interval from user_settings)
-  const SCAN_INTERVAL = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
 
-  // Daily scan function
-  async function scanAllProducts() {
-    safeLog("Starting scheduled background market scan...");
-    try {
-      const data = AppDataRepository.getAll();
-
-      let updatedCount = 0;
-      let errorCount = 0;
-
-      for (const product of data.products) {
-        safeLog(`Background scanning: ${product.name}`);
-        try {
-          const profile = data.profiles.find((p: any) => p.id === product.profileId);
-          const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
-          if (apiKey) {
-            const info = await scrapeProductInfo(product.url, apiKey, product.profileId);
-            if (info && info.price) {
-              const now = new Date().toISOString();
-              const priceChanged = info.price !== product.currentPrice;
-
-              product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
-              product.currentPrice = info.price;
-              product.lastUpdated = now;
-              if (priceChanged) {
-                product.priceHistory.push({ date: now, price: info.price });
-              }
-              ProductRepository.save(product);
-              safeLog(`Updated ${product.name}: R$ ${info.price}`);
-              updatedCount++;
-            }
-          }
-          await new Promise(resolve => setTimeout(resolve, 5000));
-        } catch (err) {
-          safeLog(`Failed background scan for ${product.name}: ${err}`);
-          errorCount++;
-        }
-      }
-
-      safeLog(`Scheduled background scan complete. Updated: ${updatedCount}, Errors: ${errorCount}`);
-    } catch (err) {
-      safeLog("Background scan error: " + err);
-    }
-  }
-
-  // Schedule daily scan at 15:00
-  function scheduleDailyScan() {
-    const now = new Date();
-    const today15 = new Date(now);
-    today15.setHours(SCHEDULE_HOUR, 0, 0, 0);
-
-    let nextScan = new Date(today15);
-    if (now >= today15) {
-      nextScan.setDate(nextScan.getDate() + 1);
-    }
-
-    const delay = nextScan.getTime() - now.getTime();
-    safeLog(`Next daily scan scheduled for: ${nextScan.toISOString()} (in ${Math.round(delay / 60000)} minutes)`);
-
-    const timer = setTimeout(async () => {
-      safeLog("=".repeat(60));
-      safeLog("DAILY SCHEDULED SCAN AT 15:00 STARTING...");
-      await scanAllProducts();
-      scheduleDailyScan(); // Schedule next
-    }, delay);
-    timer.unref();
-  }
-
-  scheduleDailyScan();
-
-  // Keep 12-hour interval as backup
-  const backupTimer = setInterval(async () => {
-    safeLog("Starting 12-hour interval background market scan...");
-    await scanAllProducts();
-  }, SCAN_INTERVAL);
-  backupTimer.unref();
-});
+    // Registra os schedulers BullMQ (substituem setTimeout/setTimeout recursivo + setInterval)
+    const scanIntervalMs = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
+    const dailyHour = SettingsRepository.getNumber('scan_daily_hour') ?? 15;
+    await registerSchedulers({ scanIntervalMs, dailyHour });
+  });
 }
 
 startServer();

@@ -18,6 +18,13 @@
     "clean": "rm -rf dist release .cache .cookies",
     "lint": "tsc --noEmit",
     "migrate": "tsx scripts/migrate-json-to-sqlite.ts",
+    "worker:scan": "tsx src/workers/scanWorkerEntry.ts",
+    "worker:route": "tsx src/workers/routeWorkerEntry.ts",
+    "worker:social": "tsx src/workers/socialWorkerEntry.ts",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:restart": "pm2 restart ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop ecosystem.config.cjs",
+    "pm2:logs": "pm2 logs",
     "electron:dev": "electron .",
     "electron:build": "npm run clean && npm run build && electron-builder",
     "clear-cache": "rm -rf .cache .cookies"

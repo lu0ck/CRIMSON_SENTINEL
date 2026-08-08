@@ -213,3 +213,40 @@ O problema estrutural de I/O em `data.json` foi eliminado. Arquivos criados:
 - ✅ Typecheck: 41 erros pré-existentes (store-handlers.ts, scraper.ts), **zero erros novos**
 - ⚠️ Observação: param `tag` (Amazon) não está na lista `trackingParams` do `server.ts` — bug pré-existente, será corrigido quando a lógica for centralizada (Fase 3)
 - ⚠️ Nota: melhorar estratégia de start (pm2, ver Fase 2) — durante teste, processos órfãos seguraram a porta 3000
+
+---
+
+## 6.2 Status da FASE 2 (concluída)
+
+Infraestrutura de filas BullMQ + Redis + pm2 implementada e testada E2E. O backend passa a **enfileirar jobs** e responder imediatamente com `{jobId, status:"queued"}`; o processamento acontece em **workers separados**.
+
+| Arquivo | Papel |
+|---|---|
+| `src/queue/connection.ts` | Singleton ioredis (`maxRetriesPerRequest: null`) |
+| `src/queue/types.ts` | Payloads tipados dos jobs (ScrapeJob, CompareJob, ScanAllJob, RouteJob, SocialJob) |
+| `src/queue/queues.ts` | 3 filas (`scan-queue`, `route-queue`, `social-monitor-queue`) + `closeAllQueues` |
+| `src/queue/schedulers.ts` | API BullMQ v6: `upsertJobScheduler`/`removeJobScheduler`/`getJobSchedulers` (substitui `add`+`repeat` antigos) |
+| `src/workers/scanWorker.ts` | Handlers `scrape`/`scan-all`/`compare`; concurrency 2; retries 3, backoff exp. 30s |
+| `src/workers/scanWorkerEntry.ts` | Entry point pm2 com SIGTERM/SIGINT limpo |
+| `src/workers/routeWorker.ts` | Stub (TSP/OSRM na Fase 7) |
+| `src/workers/socialWorker.ts` | Stub (respeita `social_monitoring_enabled`; corpo nas Fases 9/10) |
+| `src/lib/safeLog.ts` | Log compartilhado API/workers |
+| `ecosystem.config.cjs` | 4 processos pm2 (api + 3 workers) |
+
+**Mudanças no contrato da API (FASE 2):**
+- `POST /api/scrape` e `POST /api/compare` → respondem `{jobId, status:"queued"}` (compare também `jobKey`) em vez de bloquear. **`src/App.tsx` precisa fazer polling em `GET /api/jobs/:queue/:id`** (ainda não alterado).
+- Novo `GET /api/jobs/:queue/:id` → `{id, name, state, attemptsMade, progress, returnvalue, failedReason, timestamp}`.
+- `GET /api/status` → `nextScanMinutes` lido do scheduler BullMQ (`getJobScheduler("scan-daily-cron")`).
+- Agendadores `setTimeout`/`setInterval` removidos; substituídos por `upsertJobScheduler` idempotente (`scan-daily-cron` 15:00 e `scan-interval-12h`), intervalos lidos de `user_settings`.
+
+**Testes realizados (2026-08-08):**
+- ✅ `pm2 start ecosystem.config.cjs` → 4 processos online (api + 3 workers), sem crash
+- ✅ Schedulers registrados no boot: log `[scheduler] schedulers registrados: daily=15:00, interval=720min`; keys no Redis `bull:scan-queue:repeat:scan-daily-cron` e `repeat:scan-interval-12h`
+- ✅ O scheduler `scan-interval-12h` disparou scan-all automático no registro (prova do ciclo completo)
+- ✅ `POST /api/scrape` → `{jobId:"6", status:"queued"}`; `GET /api/jobs/scan/6` → `state: delayed`, `attemptsMade: 2`, `failedReason` (retry automático com backoff funcionando; falha real do scraper externo, esperado)
+- ✅ `POST /api/compare` → `{jobId:"9", jobKey, status:"queued"}`; `GET /api/jobs/scan/9` → `state: completed` com `returnvalue: {jobKey, results:[]}`
+- ✅ `route-queue`: job manual → worker processou (`[route-worker] planejando rota com 2 itens`), state completed
+- ✅ `GET /api/status` → `nextScanMinutes: 1186` (lido do scheduler)
+- ⚠️ Bug corrigido: `/api/jobs/:queue/:id` estava registrado **depois** do SPA fallback (`app.get('*')`), retornando index.html — movido para antes do bloco Vite
+- ⚠️ Bug corrigido: `ecosystem.config.cjs` usava `script: "tsx"`, que o pm2 não resolve (path relativo do CLI) — trocado para `./node_modules/.bin/tsx`
+
