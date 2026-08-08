@@ -17,6 +17,7 @@
     "preview": "vite preview",
     "clean": "rm -rf dist release .cache .cookies",
     "lint": "tsc --noEmit",
+    "migrate": "tsx scripts/migrate-json-to-sqlite.ts",
     "electron:dev": "electron .",
     "electron:build": "npm run clean && npm run build && electron-builder",
     "clear-cache": "rm -rf .cache .cookies"

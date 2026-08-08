@@ -6,3 +6,9 @@ coverage/
 *.log
 .env*
 !.env.example
+# SQLite database (FASE 1)
+crimson.db
+crimson.db-shm
+crimson.db-wal
+data.json
+data.json.bak-*

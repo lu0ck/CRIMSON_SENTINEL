@@ -4,6 +4,8 @@
 **Data**: 2026-08-07
 **Objetivo**: catalogar, antes de qualquer alteração, todos os pontos do código atual onde (a) chamadas de rede externas acontecem de forma síncrona dentro de handlers Express, (b) agendamentos via `setInterval`/`setTimeout`, e (c) leitura/escrita direta em `data.json`. Nada foi corrigido — este documento é a baseline para a Fase 2 em diante.
 
+> **ATUALIZAÇÃO — FASE 1 (2026-08-08):** Este documento descreve o estado pré-reconstrução. O item **3 (data.json I/O)** foi **completamente resolvido na Fase 1** (SQLite + repositórios). Veja seção "6.1 Status da FASE 1" abaixo. Itens 1 e 2 serão atacados nas Fases 2-3.
+
 ---
 
 ## 1. Chamadas de rede síncronas dentro de handlers Express (`server.ts`)
@@ -177,4 +179,37 @@ A Mutex `async-mutex` (`server.ts:4,76,122,135`) **só protege `POST /api/data`*
 
 ---
 
-**Conclusão**: o diagnóstico confirma os três motivos pelos quais o sistema atual trava e não é robusto. A reconstrução começa pela Fase 1 (camada de banco + repositórios) para eliminar o problema estrutural de I/O, depois Fase 2 (BullMQ + pm2) para eliminar o problema de agendamento e bloqueio, depois Fase 3 para mover o scraping pesado para fora da thread HTTP.
+## 6.1 Status da FASE 1 (resolvido)
+
+O problema estrutural de I/O em `data.json` foi eliminado. Arquivos criados:
+
+| Arquivo | Papel |
+|---|---|
+| `src/database/schema.sql` | 12 tabelas (profiles, product_lists, products, price_history + 8 do módulo local) + defaults em user_settings |
+| `src/database/db.ts` | `getDb()` singleton, WAL, FK, executa schema.sql, path idêntico ao antigo `DATA_DIR` |
+| `src/repositories/profileRepository.ts` | CRUD + `saveAll` com upsert transacional |
+| `src/repositories/productListRepository.ts` | Idem para lists |
+| `src/repositories/productRepository.ts` | Idem + `price_history` normalizado em `syncPriceHistory` |
+| `src/repositories/settingsRepository.ts` | `get/set/getNumber/getBool` para user_settings (substitui consts hardcoded) |
+| `src/repositories/appDataRepository.ts` | `getAll()`/`saveAll()` = equivalente do antigo data.json |
+| `src/repositories/types.ts` | Row↔Domain mappers |
+
+**Mudanças no `server.ts`** (API HTTP inalterada — frontend continua igual):
+- Removidos `Mutex`/`async-mutex` e toda leitura/escrita em `data.json` (17 ocorrências) → repositórios.
+- `SCAN_TIMEOUT_MS`, `SCHEDULE_HOUR`, `SCAN_INTERVAL` agora leem de `user_settings` (com fallback igual aos valores antigos).
+- Timers de scan agora usam `.unref()` para não segurar o processo.
+- `gemini.ts` não lê mais `data.json` — usa `ProfileRepository.getById`.
+
+**Migração**: `npm run migrate` (script one-shot) copia `data.json` → SQLite e renomeia o original para `.bak-<timestamp>`.
+
+**Testes realizados (2026-08-08)**:
+- ✅ Boot limpo: SQLite criado com 12 tabelas, server sobe via pm2
+- ✅ `GET /api/data` → 200 com `{profiles, lists, products}`
+- ✅ `POST /api/data` → 200, persiste profiles/lists/products
+- ✅ `POST /api/products` → add/replaced/exists/update conforme esperado (mesma lógica do original)
+- ✅ Deduplicação por URL normalizada funciona (params tracking da lista removidos)
+- ✅ Migração `data.json` → SQLite: profiles, lists, products + price_history normalizado + backup `.bak-<timestamp>`
+- ✅ `user_settings` populada com 7 defaults; `SCHEDULE_HOUR`/`SCAN_INTERVAL`/`SCAN_TIMEOUT_MS` lidos do banco
+- ✅ Typecheck: 41 erros pré-existentes (store-handlers.ts, scraper.ts), **zero erros novos**
+- ⚠️ Observação: param `tag` (Amazon) não está na lista `trackingParams` do `server.ts` — bug pré-existente, será corrigido quando a lógica for centralizada (Fase 3)
+- ⚠️ Nota: melhorar estratégia de start (pm2, ver Fase 2) — durante teste, processos órfãos seguraram a porta 3000

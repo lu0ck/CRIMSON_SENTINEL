@@ -1,14 +1,18 @@
 import express from "express";
 import path from "path";
 import fs from "fs";
-import { Mutex } from "async-mutex";
 import { fileURLToPath } from "url";
 import { scrapeProductInfo } from "./src/lib/gemini.ts";
-import { 
-  sendDiscordNotification, 
-  sendTelegramNotification, 
-  sendEmailNotification 
+import {
+  sendDiscordNotification,
+  sendTelegramNotification,
+  sendEmailNotification
 } from "./src/lib/notifications.ts";
+import { getDb } from "./src/database/db";
+import { AppDataRepository } from "./src/repositories/appDataRepository.ts";
+import { ProductRepository } from "./src/repositories/productRepository.ts";
+import { ProfileRepository } from "./src/repositories/profileRepository.ts";
+import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -66,24 +70,8 @@ function generateProductId(url: string): string {
 }
 
 // Use USER_DATA_PATH for Electron production, or current dir for dev
-const DATA_DIR = process.env.USER_DATA_PATH || (process.env.NODE_ENV === 'production' ? '/tmp' : __dirname);
-
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-const DATA_FILE = path.join(DATA_DIR, "data.json");
-const dataMutex = new Mutex();
-
-// Initialize data file if it doesn't exist
-if (!fs.existsSync(DATA_FILE)) {
-  fs.writeFileSync(DATA_FILE, JSON.stringify({
-    profiles: [],
-    lists: [],
-    products: [],
-    notifications: []
-  }, null, 2));
-}
+// SQLite database replaces data.json (FASE 1)
+getDb();
 
 async function startServer() {
   console.log("=".repeat(80));
@@ -101,43 +89,30 @@ async function startServer() {
   app.get("/api/data", (req, res) => {
     safeLog('GET /api/data requested');
     try {
-      if (!fs.existsSync(DATA_FILE)) {
-        safeLog('Data file not found, returning empty state');
-        return res.json({ profiles: [], lists: [], products: [] });
-      }
-      const content = fs.readFileSync(DATA_FILE, "utf-8");
-      safeLog('Data file read success, size: ' + content.length);
-      if (!content || !content.trim()) {
-        return res.json({ profiles: [], lists: [], products: [] });
-      }
-      const data = JSON.parse(content);
+      const data = AppDataRepository.getAll();
+      safeLog('Data read success, profiles: ' + data.profiles.length + ', products: ' + data.products.length);
       res.json(data);
     } catch (error) {
-      safeLog("Error reading data file: " + error);
+      safeLog("Error reading database: " + error);
       res.status(500).json({ error: "Failed to read database" });
     }
   });
 
-  app.post("/api/data", async (req, res) => {
-    const release = await dataMutex.acquire();
+  app.post("/api/data", (req, res) => {
     try {
-      fs.writeFileSync(DATA_FILE, JSON.stringify(req.body, null, 2));
+      AppDataRepository.saveAll(req.body);
       res.json({ status: "ok" });
     } catch (error) {
       safeLog("Error saving data: " + error);
       res.status(500).json({ error: "Failed to save data" });
-    } finally {
-      release();
     }
   });
 
-  app.post("/api/products", async (req, res) => {
-    const release = await dataMutex.acquire();
+  app.post("/api/products", (req, res) => {
     try {
       const product = req.body;
-      const content = fs.readFileSync(DATA_FILE, "utf-8");
-      const data = JSON.parse(content || '{"profiles":[],"lists":[],"products":[]}');
-      
+      const data = AppDataRepository.getAll();
+
 if (!data.products) data.products = [];
 
 // Prevent duplicates by normalized URL and listId
@@ -156,36 +131,35 @@ if (!data.products) data.products = [];
 
     // Se existe, verificar se o nome está correto
     if (exists) {
-      const existingProduct = data.products.find((p: any) => 
+      const existingProduct = data.products.find((p: any) =>
         (normalizeProductUrl(p.url) === normalizedUrl || p.id === normalizedId) && p.listId === product.listId
       );
-      
+
       // Se o produto existente tem nome muito diferente do novo, pode ser dado corrompido
       if (existingProduct && product.name && existingProduct.name) {
         const existingNameLower = existingProduct.name.toLowerCase();
         const newNameLower = product.name.toLowerCase();
-        
+
         // Verificar se os nomes têm palavras em comum
         const existingWords = existingNameLower.split(/\s+/);
         const newWords = newNameLower.split(/\s+/);
         const commonWords = existingWords.filter(w => w.length > 3 && newWords.includes(w));
-        
+
         if (commonWords.length === 0) {
           // Nomes completamente diferentes - dados corrompidos
           safeLog("[Product] WARNING: Existing product has completely different name!");
           safeLog("[Product] Existing: " + existingProduct.name);
           safeLog("[Product] New: " + product.name);
           safeLog("[Product] Deleting corrupted product and adding new one...");
-          
+
           // Deletar produto corrompido
-          data.products = data.products.filter((p: any) => p.id !== existingProduct.id);
-          
+          ProductRepository.delete(existingProduct.id);
+
           // Adicionar novo produto
           if (!product.id || product.id.length < 8) {
             product.id = normalizedId;
           }
-          data.products.push(product);
-          fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+          ProductRepository.save(product);
           safeLog("Product added (replaced corrupted): " + product.name + " to list " + product.listId + " (ID: " + product.id + ")");
           res.json({ status: "ok", action: "replaced", product: product });
           return;
@@ -198,14 +172,13 @@ if (!data.products) data.products = [];
       if (!product.id || product.id.length < 8) {
         product.id = normalizedId;
       }
-      data.products.push(product);
-      fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+      ProductRepository.save(product);
       safeLog("Product added: " + product.name + " to list " + product.listId + " (ID: " + product.id + ")");
       res.json({ status: "ok", action: "added", product: product });
     } else {
       safeLog("Product already exists: " + normalizedUrl + " in list " + product.listId);
       // Atualizar preço se encontrou versão mais recente
-      const existingProduct = data.products.find((p: any) => 
+      const existingProduct = data.products.find((p: any) =>
         (normalizeProductUrl(p.url) === normalizedUrl || p.id === normalizedId) && p.listId === product.listId
       );
       if (existingProduct && product.currentPrice && product.currentPrice !== existingProduct.currentPrice) {
@@ -217,7 +190,7 @@ if (!data.products) data.products = [];
           date: new Date().toISOString(),
           price: product.currentPrice
         });
-        fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
+        ProductRepository.save(existingProduct);
         safeLog("Product price updated: " + existingProduct.name + " from R$ " + existingProduct.previousPrice + " to R$ " + existingProduct.currentPrice);
         res.json({ status: "ok", action: "updated", product: existingProduct });
       } else {
@@ -227,8 +200,6 @@ if (!data.products) data.products = [];
   } catch (error) {
     safeLog("Error adding product: " + error);
     res.status(500).json({ error: "Failed to add product" });
-  } finally {
-    release();
   }
 });
 
@@ -265,8 +236,7 @@ if (!data.products) data.products = [];
 app.post("/api/scrape", async (req, res) => {
   const { url, profileId } = req.body;
   try {
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-    const profile = data.profiles.find((p: any) => p.id === profileId);
+    const profile = ProfileRepository.getById(profileId);
 
     safeLog("[Scrape] Profile config:");
     safeLog("  - lmStudioUrl: " + (profile?.lmStudioUrl || "NOT SET"));
@@ -299,7 +269,9 @@ app.post("/api/scrape", async (req, res) => {
 let isComparing = false;
 const MIN_SEARCH_INTERVAL = 5000;
 let lastSearchTime = 0;
-const SCAN_TIMEOUT_MS = 590000;
+const SCAN_TIMEOUT_MS = SettingsRepository.getNumber('scan_timeout_ms') ?? 590000;
+const SCHEDULE_HOUR = SettingsRepository.getNumber('scan_daily_hour') ?? 15;
+const SCAN_INTERVAL = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
 
 const TRUSTED_DOMAINS = [
   "mercadolivre.com.br", 
@@ -384,9 +356,8 @@ async function searchWithTavily(query: string, apiKey: string) {
 
 app.post("/api/compare", async (req, res) => {
     const { productName, profileId } = req.body;
-    
-    const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-    const profile = data.profiles.find((p: any) => p.id === profileId);
+
+    const profile = ProfileRepository.getById(profileId);
     const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
     
     // Global throttle to prevent concurrent searches and respect rate limits
@@ -550,13 +521,10 @@ if (searchResults.length > 0) {
 });
 
   // System Status Endpoint
-const SCHEDULE_HOUR = 15; // 15:00 = 3 PM São Paulo
 
 app.get("/api/status", async (req, res) => {
   const profileId = req.query.profileId as string;
-  const rawData = fs.readFileSync(DATA_FILE, "utf-8");
-  const fileData = JSON.parse(rawData);
-  const profile = fileData.profiles.find((p: any) => p.id === profileId);
+  const profile = ProfileRepository.getById(profileId);
 
   const status = {
     lmStudio: { connected: false, model: null as string | null },
@@ -610,8 +578,7 @@ app.post("/api/analyze", async (req, res) => {
     const { productName, currentPrice, currency, history, profileId, lowestPrice, lowestPriceDate } = req.body;
 
     try {
-      const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-      const profile = data.profiles.find((p: any) => p.id === profileId);
+      const profile = ProfileRepository.getById(profileId);
       const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
       const prompt = `Você é um assistente ajudando um amigo a decidir se vale a pena comprar um produto de tecnologia.
@@ -749,16 +716,14 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     console.log("=".repeat(80));
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
     
-  // Background automation: Scan all products every 12 hours
-  const SCAN_INTERVAL = 12 * 60 * 60 * 1000; // 12 hours
-  // SCHEDULE_HOUR is defined at the top of the file
+  // Background automation: Scan all products (interval from user_settings)
+  const SCAN_INTERVAL = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
 
   // Daily scan function
   async function scanAllProducts() {
     safeLog("Starting scheduled background market scan...");
     try {
-      const content = fs.readFileSync(DATA_FILE, "utf-8");
-      const data = JSON.parse(content);
+      const data = AppDataRepository.getAll();
 
       let updatedCount = 0;
       let errorCount = 0;
@@ -780,6 +745,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
               if (priceChanged) {
                 product.priceHistory.push({ date: now, price: info.price });
               }
+              ProductRepository.save(product);
               safeLog(`Updated ${product.name}: R$ ${info.price}`);
               updatedCount++;
             }
@@ -791,7 +757,6 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         }
       }
 
-      fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
       safeLog(`Scheduled background scan complete. Updated: ${updatedCount}, Errors: ${errorCount}`);
     } catch (err) {
       safeLog("Background scan error: " + err);
@@ -812,21 +777,23 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     const delay = nextScan.getTime() - now.getTime();
     safeLog(`Next daily scan scheduled for: ${nextScan.toISOString()} (in ${Math.round(delay / 60000)} minutes)`);
 
-    setTimeout(async () => {
+    const timer = setTimeout(async () => {
       safeLog("=".repeat(60));
       safeLog("DAILY SCHEDULED SCAN AT 15:00 STARTING...");
       await scanAllProducts();
       scheduleDailyScan(); // Schedule next
     }, delay);
+    timer.unref();
   }
 
   scheduleDailyScan();
 
   // Keep 12-hour interval as backup
-  setInterval(async () => {
+  const backupTimer = setInterval(async () => {
     safeLog("Starting 12-hour interval background market scan...");
     await scanAllProducts();
   }, SCAN_INTERVAL);
+  backupTimer.unref();
 });
 }
 

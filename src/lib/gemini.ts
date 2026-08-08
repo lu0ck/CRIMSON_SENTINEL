@@ -10,26 +10,21 @@ export async function scrapeProductInfo(url: string, customApiKey?: string, prof
   if (profileId) {
     try {
       const { advancedScrape } = await import("./scraper.ts");
-      const fs = await import("fs");
-      const path = await import("path");
-      const DATA_FILE = path.join(process.cwd(), "data.json");
+      const { ProfileRepository } = await import("../repositories/profileRepository.ts");
 
-      if (fs.existsSync(DATA_FILE)) {
-        const data = JSON.parse(fs.readFileSync(DATA_FILE, "utf-8"));
-        const profile = data.profiles.find((p: any) => p.id === profileId);
+      const profile = ProfileRepository.getById(profileId);
 
-        console.log("[Gemini] Attempting advanced scrape with profile:", profileId);
+      console.log("[Gemini] Attempting advanced scrape with profile:", profileId);
 
-        const info = await advancedScrape(url, {
-          geminiApiKey: finalApiKey,
-          nvidiaApiKey: profile?.nvidiaApiKey,
-          lmStudioUrl: profile?.lmStudioUrl
-        });
+      const info = await advancedScrape(url, {
+        geminiApiKey: finalApiKey,
+        nvidiaApiKey: profile?.nvidiaApiKey,
+        lmStudioUrl: profile?.lmStudioUrl
+      });
 
-        if (info && info.name && info.price && info.price > 0) {
-          console.log("[Gemini] Advanced scrape successful:", info.name.substring(0, 50), "- R$", info.price);
-          return info;
-        }
+      if (info && info.name && info.price && info.price > 0) {
+        console.log("[Gemini] Advanced scrape successful:", info.name.substring(0, 50), "- R$", info.price);
+        return info;
       }
     } catch (err) {
       console.error("[Gemini] Advanced scrape failed, falling back to Gemini URL context:", err);
