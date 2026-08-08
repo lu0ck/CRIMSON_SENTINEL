@@ -621,9 +621,42 @@ const deleteComparisonResult = (productId: string, index: number) => {
     setSystemMessage(`NEW LIST CREATED: ${newList.name.toUpperCase()}`);
   };
 
+  // Polling de jobs BullMQ (FASE 4): o backend enfileira e responde imediatamente
+  // com {jobId}; aqui aguardamos o worker concluir e devolvemos o returnvalue.
+  const pollJob = async (
+    jobId: string,
+    signal?: AbortSignal,
+    intervalMs = 2000,
+    timeoutMs = 590_000
+  ): Promise<any> => {
+    const deadline = Date.now() + timeoutMs;
+    while (Date.now() < deadline) {
+      if (signal?.aborted) {
+        const err: any = new Error("Aborted");
+        err.name = "AbortError";
+        throw err;
+      }
+      const res = await fetch(`/api/jobs/scan/${jobId}`, { signal });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Job status fetch failed");
+      }
+      const job = await res.json();
+      if (job.state === "completed") return job.returnvalue;
+      if (job.state === "failed") throw new Error(job.failedReason || "Job failed");
+      await new Promise(r => setTimeout(r, intervalMs));
+      if (signal?.aborted) {
+        const err: any = new Error("Aborted");
+        err.name = "AbortError";
+        throw err;
+      }
+    }
+    throw new Error("Job polling timed out");
+  };
+
   const addProduct = async () => {
     if (newUrls.every(u => !u.trim()) || !selectedListId || !activeProfileId) return;
-    
+
     const urls = newUrls.map(u => u.trim()).filter(u => u.length > 0);
     if (urls.length === 0) return;
 
@@ -668,9 +701,13 @@ const deleteComparisonResult = (productId: string, index: number) => {
               throw new Error(errorData.error || "Scrape failed");
             }
             
-const info = await response.json();
+const queued = await response.json();
+    if (!queued.jobId) throw new Error(queued.error || "Scrape queueing failed");
 
-    if (info.method) {
+    // FASE 4: aguarda o worker processar via polling
+    const info = await pollJob(queued.jobId, controller.signal, 2000, 240_000);
+
+    if (info?.method) {
       setSystemMessage(`DATA EXTRACTED VIA: ${info.method.toUpperCase()}`);
 }
 
@@ -709,7 +746,10 @@ const info = await response.json();
     return product;
     } catch (error: any) {
       clearTimeout(timeoutId);
-      if (error.name === 'AbortError') {
+      if (error.name === 'AbortError' && controller.signal.aborted) {
+        console.log(`Scrape cancelled for ${url}`);
+        return null;
+      } else if (error.name === 'AbortError') {
         console.error(`Scrape timed out for ${url}`);
         addToast(`TIMEOUT: ${url.substring(0, 30)}...`, "error");
       } else {
@@ -839,7 +879,12 @@ const info = await response.json();
         throw new Error(errorData.error || "Comparison failed");
       }
 
-      const results = await response.json();
+      const queued = await response.json();
+      if (!queued.jobId) throw new Error(queued.error || "Comparison queueing failed");
+
+      // FASE 4: aguarda o worker concluir a comparação via polling
+      const jobResult = await pollJob(queued.jobId, controller.signal, 2000, 590_000);
+      const results = jobResult?.results || [];
       console.log("MARKET SCAN RESULTS ACQUIRED:", results);
 
       setSelectedProductId(currentId => {

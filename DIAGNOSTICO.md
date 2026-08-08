@@ -277,3 +277,24 @@ Hardening do scraper dentro do worker. Três frentes resolvidas:
 - ⚠️ Nota técnica: imports de módulos TS com e sem extensão `.ts` no mesmo processo criam **duas instâncias** de módulo em tsx (visto com `scraperBreaker`). No worker não há impacto (só `scraper.ts` importa o breaker), mas padronizou-se `./circuitBreaker.ts` com extensão para evitar a armadilha futuramente.
 - ⚠️ Atenção: ao unificar a normalização, o ID canônico passou a descartar TODA query string (antes o backend mantinha params não-tracking via `parsed.toString()`). Para produtos adicionados pelo frontend não muda nada (o frontend já descartava query); só afeta produtos salvos diretamente via API com query params não-tracking (migração dev).
 
+---
+
+## 6.4 Status da FASE 4 (concluída)
+
+Frontend adaptado ao contrato assíncrono da FASE 2 (`/api/scrape` e `/api/compare` agora respondem `{jobId, status:"queued"}` em vez de bloquear até processar). Antes desta fase o UI **quebrava** ao adicionar produtos/rodar comparação.
+
+**O que mudou em `src/App.tsx`:**
+- Novo helper `pollJob(jobId, signal, intervalMs, timeoutMs)`: faz polling em `GET /api/jobs/scan/:jobId` a cada 2s até `completed` (devolve `returnvalue`) ou `failed` (lança `Error(failedReason)`); respeita `AbortSignal` (cancelamento do usuário) e timeout.
+- `addProduct`: `POST /api/scrape` → `pollJob` → `info` = returnvalue do worker (`ScrapeResult` com `name/price/currency/available/imageUrl/method`). Timeout por alvo 240s (antes era 60s de HTTP síncrono, que não refletia o processamento real).
+- `compareProduct`: `POST /api/compare` → `pollJob` → `results = returnvalue.results` (shape `{jobKey, results}`). Timeout 590s (alinhado ao countdown de 600s do modal).
+- Cancelamento do scrape: `AbortError` com o controller principal abortado → não exibe toast falso de "TIMEOUT" (trata como cancelamento silencioso).
+
+**Testes realizados (2026-08-08):**
+- ✅ `POST /api/scrape` (produto real Kabum) → `{jobId:"4"}` → poll → `completed` com `returnvalue {name:"Crepioca 3 em 1 Britânia", price:11, method:"FETCH_FALLBACK"}` — shape idêntico ao que `info` consome.
+- ✅ `POST /api/compare` → `{jobId, jobKey}` → poll → `completed` com `returnvalue {jobKey, results:[]}` — shape idêntico ao `jobResult.results`.
+- ✅ Caminho de falha: URL inválida → job `delayed` (retry com backoff) → eventualmente `failed` com `failedReason` → `pollJob` lança o erro → toast existente exibe.
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK.
+
+**Nota FASE 4→5:** com o UI de volta ao contrato novo, a FASE 5 pode partir para o módulo local/geolocalizado: `routeWorker` (TSP/OSRM) e `shopping_list_items`/`price_observations`/`promotions` com notificações.
+
+
