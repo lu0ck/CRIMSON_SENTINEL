@@ -89,6 +89,13 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [igLoginLoading, setIgLoginLoading] = useState(false);
   const [igScanning, setIgScanning] = useState(false);
 
+  // ---- Instagram credentials (sem .env) ----
+  const [igHasCredentials, setIgHasCredentials] = useState(false);
+  const [igUserInput, setIgUserInput] = useState("");
+  const [igPassInput, setIgPassInput] = useState("");
+  const [igSavingCreds, setIgSavingCreds] = useState(false);
+  const [igShowPass, setIgShowPass] = useState(false);
+
   const toast = (message: string, type: ToastType, details?: string) =>
     addToast(message, type, details);
 
@@ -146,11 +153,46 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     }
   };
 
+  const loadIgCredentials = async () => {
+    try {
+      const data = await apiJson("/api/social/instagram/credentials");
+      setIgHasCredentials(!!data.username);
+      if (data.username) setIgUserInput(data.username);
+    } catch {
+      // ignora
+    }
+  };
+
+  const saveIgCredentials = async () => {
+    if (!igUserInput.trim() || !igPassInput.trim()) {
+      toast("PREENCHA USUÁRIO E SENHA", "error");
+      return;
+    }
+    setIgSavingCreds(true);
+    try {
+      await apiJson("/api/social/instagram/credentials", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: igUserInput.trim(), password: igPassInput.trim() }),
+      });
+      toast("INSTAGRAM CONFIGURADO", "success", "Serviço será iniciado automaticamente");
+      setIgHasCredentials(true);
+      setIgPassInput("");
+      // Aguarda o serviço subir e re-verifica saúde
+      setTimeout(() => loadInstagramHealth(), 4000);
+    } catch (err: any) {
+      toast("FALHA AO SALVAR", "error", String(err?.message || err));
+    } finally {
+      setIgSavingCreds(false);
+    }
+  };
+
   useEffect(() => {
     loadSources();
     loadSocialSettings();
     loadStatus();
     loadWhatsAppStatus();
+    loadIgCredentials();
     loadInstagramHealth();
     const t = setInterval(() => {
       loadStatus();
@@ -283,9 +325,9 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     try {
       const data = await apiJson("/api/social/instagram/login", { method: "POST" });
       if (data.status === "ok") {
-        toast("LOGIN INSTAGRAM OK", "success", "Sessão salva em python_instagram/session.json");
+        toast("LOGIN INSTAGRAM OK", "success", "Sessão autenticada com sucesso");
       } else {
-        toast("LOGIN INSTAGRAM FALHOU", "error", "Verifique IG_USERNAME/IG_PASSWORD no processo instagram-service");
+        toast("LOGIN INSTAGRAM FALHOU", "error", "Verifique o usuário e senha configurados");
       }
       loadInstagramHealth();
     } catch (err: any) {
@@ -605,61 +647,100 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       <section>
         <div className="flex items-center justify-between">
           <SectionTitle icon={<Instagram size={16} />}>INSTAGRAM — STORIES COM PREÇO</SectionTitle>
-          <div className="flex items-center gap-2">
-            <span className={cn("text-[9px] font-mono", !igEnabled ? "text-crimson/40" : !igOk ? "text-red-500" : igSessionLoaded ? "text-green-500" : "text-amber-500")}>
-              {!igEnabled ? "● DESLIGADO" : !igOk ? "● SERVIÇO OFF" : igSessionLoaded ? "● CONECTADO" : "○ SEM SESSÃO"}
-            </span>
-            <button
-              onClick={() => { playSound("click"); loginInstagram().catch(() => {}); }}
-              disabled={igLoginLoading || !igEnabled}
-              className="hud-button flex items-center gap-2 disabled:opacity-50"
-              title="Faz login no microserviço Python (instagrapi)"
-            >
-              {igLoginLoading ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
-              {igLoginLoading ? "LOGGING..." : "LOGIN"}
-            </button>
-            <button
-              onClick={() => { playSound("click"); scanInstagram().catch(() => {}); }}
-              disabled={igScanning || !igEnabled || !igSessionLoaded}
-              className="hud-button flex items-center gap-2 disabled:opacity-50"
-            >
-              {igScanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
-              {igScanning ? "ESCANEANDO..." : "SCAN STORIES"}
-            </button>
-          </div>
+          {igHasCredentials && (
+            <div className="flex items-center gap-2">
+              <span className={cn("text-[9px] font-mono", !igOk ? "text-red-500" : igSessionLoaded ? "text-green-500" : "text-amber-500")}>
+                {!igOk ? "● INICIANDO" : igSessionLoaded ? "● CONECTADO" : "○ SEM SESSÃO"}
+              </span>
+              <button
+                onClick={() => { playSound("click"); loginInstagram().catch(() => {}); }}
+                disabled={igLoginLoading || !igOk}
+                className="hud-button flex items-center gap-2 disabled:opacity-50"
+              >
+                {igLoginLoading ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
+                {igLoginLoading ? "LOGGING..." : "LOGIN"}
+              </button>
+              <button
+                onClick={() => { playSound("click"); scanInstagram().catch(() => {}); }}
+                disabled={igScanning || !igOk || !igSessionLoaded}
+                className="hud-button flex items-center gap-2 disabled:opacity-50"
+              >
+                {igScanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
+                {igScanning ? "ESCANEANDO..." : "SCAN STORIES"}
+              </button>
+            </div>
+          )}
         </div>
 
         <div className="hud-border bg-black/40 p-5 mt-4">
-          {!igEnabled ? (
-            <div className="flex items-start gap-3">
-              <ShieldAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-              <p className="text-[10px] font-mono text-amber-500/70 leading-relaxed">
-                INSTAGRAM_ENABLED=false no .env. Defina true e reinicie para ativar o scan de Stories
-                dos handles cadastrados (estabelecimentos com instagram_handle). Requer conta secundária
-                — risco de banimento.
-              </p>
+          {!igHasCredentials ? (
+            /* Sem credenciais — formulário de configuração */
+            <div className="flex flex-col gap-4">
+              <div className="flex items-start gap-3">
+                <Instagram size={14} className="text-crimson shrink-0 mt-0.5" />
+                <p className="text-[10px] font-mono text-crimson/70 leading-relaxed">
+                  Configure sua conta secundária do Instagram para monitorar Stories com preços.
+                  Use sempre uma conta dedicada — existe risco de banimento.
+                </p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="flex flex-col gap-1">
+                  <label className="text-[9px] font-mono text-crimson/50 tracking-widest">USUÁRIO</label>
+                  <input
+                    type="text"
+                    value={igUserInput}
+                    onChange={(e) => setIgUserInput(e.target.value)}
+                    placeholder="seu_usuario_secundario"
+                    className="hud-input text-xs"
+                  />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className="text-[9px] font-mono text-crimson/50 tracking-widest">SENHA</label>
+                  <div className="flex gap-1">
+                    <input
+                      type={igShowPass ? "text" : "password"}
+                      value={igPassInput}
+                      onChange={(e) => setIgPassInput(e.target.value)}
+                      placeholder="••••••••"
+                      className="hud-input text-xs flex-1"
+                    />
+                    <button
+                      onClick={() => setIgShowPass(!igShowPass)}
+                      className="hud-button px-2 text-[10px]"
+                      title={igShowPass ? "Ocultar" : "Mostrar"}
+                    >
+                      {igShowPass ? "◉" : "○"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={() => { playSound("click"); saveIgCredentials().catch(() => {}); }}
+                disabled={igSavingCreds || !igUserInput.trim() || !igPassInput.trim()}
+                className="hud-button self-start flex items-center gap-2 disabled:opacity-50"
+              >
+                {igSavingCreds ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {igSavingCreds ? "SALVANDO..." : "SALVAR E INICIAR"}
+              </button>
             </div>
           ) : igHealthLoading ? (
             <div className="flex items-center gap-3 text-crimson/50 font-mono text-xs">
               <Loader2 size={14} className="animate-spin" /> VERIFICANDO SERVIÇO...
             </div>
           ) : !igOk ? (
-            <div className="flex flex-col gap-1">
-              <p className="text-[10px] font-mono text-red-500/80">
-                SERVIÇO INSTAGRAPY OFFLINE EM 127.0.0.1:8721.
-              </p>
-              <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
-                SUBIR: cd python_instagram && python3 -m pip install -r requirements.txt && pm2 start ecosystem.config.cjs --only crimson-instagram-service
+            <div className="flex items-start gap-3">
+              <Loader2 size={14} className="text-amber-500 animate-spin shrink-0 mt-0.5" />
+              <p className="text-[10px] font-mono text-amber-500/70 leading-relaxed">
+                Serviço iniciando... caso não conecte em alguns segundos, reinicie o app.
               </p>
             </div>
           ) : !igSessionLoaded ? (
             <div className="flex flex-col gap-2">
               <p className="text-[10px] font-mono text-amber-500/80">
-                SERVIÇO OK, MAS SEM SESSÃO CARREGADA.
+                Serviço ativo. Clique em LOGIN para autenticar.
               </p>
-              <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
-                Defina IG_USERNAME e IG_PASSWORD no ambiente do processo crimson-instagram-service
-                (veja python_instagram/README.md) e clique em LOGIN.
+              <p className="text-[9px] font-mono text-crimson/40">
+                Usuário: @{igUserInput.toUpperCase() || igUsername?.toUpperCase()}
               </p>
             </div>
           ) : (
@@ -668,8 +749,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
                 <CheckCircle2 size={14} /> SESSÃO ATIVA {igUsername ? `— @${igUsername.toUpperCase()}` : ""}
               </div>
               <p className="text-[9px] font-mono text-crimson/40">
-                O SCAN LÊ OS STORIES DOS HANDLES EM establishments.instagram_handle, PASSA AO GEMINI
-                VISION PARA EXTRAIR PREÇOS E GRAVA PROMOÇÕES (throttle em instagram_scan_per_handle_min).
+                O SCAN LÊ OS STORIES DOS HANDLES EM establishments.instagram_handle E EXTRAI PREÇOS VIA GEMINI VISION.
               </p>
             </div>
           )}

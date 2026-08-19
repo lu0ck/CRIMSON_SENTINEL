@@ -804,27 +804,59 @@ app.get("/api/status", async (req, res) => {
     }
   });
 
+  // C3 — Instagram credentials (stored in DB, no .env needed)
+  app.get("/api/social/instagram/credentials", async (_req, res) => {
+    try {
+      const username = SettingsRepository.get("ig_username") || "";
+      res.json({ username });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/social/instagram/credentials", async (req, res) => {
+    try {
+      const { username, password } = req.body || {};
+      if (!username || !password) {
+        return res.status(400).json({ error: "Username e senha são obrigatórios" });
+      }
+      SettingsRepository.set("ig_username", username);
+      SettingsRepository.set("ig_password", password);
+      safeLog("[instagram] Credenciais salvas no banco, reiniciando serviço...");
+      restartInstagramService();
+      res.json({ ok: true, username });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // C3 — endpoints Instagram Stories via microserviço Python (instagrapi)
-  // Verifica saúde do serviço instagrapi. Retorna 200 mesmo se sessão não
-  // estiver carregada — UI mostra instrução para fazer login.
-  app.get("/api/social/instagram/health", async (req, res) => {
-    if (process.env.INSTAGRAM_ENABLED !== "true") {
+  app.get("/api/social/instagram/health", async (_req, res) => {
+    const hasCredentials = !!SettingsRepository.get("ig_username");
+    if (!hasCredentials) {
       return res.json({ enabled: false, ok: false, sessionLoaded: false });
     }
     try {
       const { instagramServiceHealth } = await import("./src/social/instagramClient.ts");
       const h = await instagramServiceHealth();
       res.json({ enabled: true, ...h });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
+    } catch {
+      // Serviço offline ou erro de conexão — retorna status offline
+      res.json({ enabled: true, ok: false, sessionLoaded: false });
     }
   });
 
-  // Dispara /login no microserviço Python. Requer IG_USERNAME/IG_PASSWORD no
-  // ambiente do processo instagram-service (não no Node).
-  app.post("/api/social/instagram/login", async (req, res) => {
-    if (process.env.INSTAGRAM_ENABLED !== "true") {
-      return res.status(403).json({ error: "INSTAGRAM_ENABLED=false no .env" });
+  app.post("/api/social/instagram/login", async (_req, res) => {
+    const hasCredentials = !!SettingsRepository.get("ig_username");
+    if (!hasCredentials) {
+      return res.status(400).json({ error: "Configure usuário e senha primeiro" });
+    }
+    // Se serviço não está rodando, tenta iniciar
+    if (!instagramProcess) {
+      safeLog("[instagram] Serviço offline, reiniciando antes do login...");
+      restartInstagramService();
+      // Aguarda o serviço subir
+      await new Promise((r) => setTimeout(r, 3000));
     }
     try {
       const { instagramLogin } = await import("./src/social/instagramClient.ts");
@@ -835,11 +867,10 @@ app.get("/api/status", async (req, res) => {
     }
   });
 
-  // Enfileira scan de Stories dos handles cadastrados em
-  // establishments.instagram_handle.
-  app.post("/api/social/instagram/scan", async (req, res) => {
-    if (process.env.INSTAGRAM_ENABLED !== "true") {
-      return res.status(403).json({ error: "INSTAGRAM_ENABLED=false no .env" });
+  app.post("/api/social/instagram/scan", async (_req, res) => {
+    const hasCredentials = !!SettingsRepository.get("ig_username");
+    if (!hasCredentials) {
+      return res.status(400).json({ error: "Configure Instagram primeiro" });
     }
     try {
       const queue = getSocialQueue();
@@ -1180,7 +1211,12 @@ app.get("/api/status", async (req, res) => {
 let instagramProcess: ReturnType<typeof spawn> | null = null;
 
 function startInstagramService() {
-  if (process.env.INSTAGRAM_ENABLED !== "true") return;
+  const igUsername = SettingsRepository.get("ig_username");
+  const igPassword = SettingsRepository.get("ig_password");
+  if (!igUsername || !igPassword) {
+    safeLog("[instagram] Sem credenciais configuradas, serviço não será iniciado");
+    return;
+  }
 
   const appRoot = path.resolve(__dirname, "..");
   const venvDir = path.join(appRoot, "python_instagram", ".venv");
@@ -1209,7 +1245,11 @@ function startInstagramService() {
   ], {
     cwd: appRoot,
     stdio: ["ignore", "pipe", "pipe"],
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      IG_USERNAME: igUsername,
+      IG_PASSWORD: igPassword,
+    },
   });
 
   instagramProcess.stdout?.on("data", (data) => {
@@ -1235,6 +1275,12 @@ function stopInstagramService() {
     instagramProcess.kill("SIGTERM");
     instagramProcess = null;
   }
+}
+
+function restartInstagramService() {
+  stopInstagramService();
+  // Aguarda um instante para garantir que a porta foi liberada
+  setTimeout(() => startInstagramService(), 1000);
 }
 
 startServer();
