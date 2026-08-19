@@ -31,13 +31,19 @@ export function getRedis(): Redis {
     },
   });
 
-  // Silencia erros após desistir de reconectar
-  connection.on("error", () => {
+  // Silencia erros ECONNREFUSED após desistir de reconectar
+  // (erros vêm do TCP layer do Node.js, não só do ioredis)
+  let suppressErrors = false;
+  connection.on("error", (err: any) => {
+    if (suppressErrors) return;
+    if (err?.code === "ECONNREFUSED" && !redisAvailable) {
+      suppressErrors = true; // silencia todos os erros futuros deste tipo
+      console.error("[redis] ECONNREFUSED — Redis indisponível. Erros de conexão silenciados.");
+      return;
+    }
     if (redisAvailable) {
       console.error("[redis] conexão perdida");
     }
-    // Após retryStrategy retornar null, status vira "end" e BullMQ
-    // continua emitindo erros. Silencia para não floodar.
   });
   connection.on("connect", () => {
     redisAvailable = true;

@@ -1143,7 +1143,7 @@ Return ONLY valid JSON, no explanation.`
     : `Extract product info from this URL: ${url}. Return JSON: {name, price (number), currency ("BRL"), available (boolean), imageUrl}.`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.0-flash",
+    model: "gemini-2.5-flash",
     contents: prompt,
     config: {
       tools: contextText ? [] : [{ urlContext: {} }],

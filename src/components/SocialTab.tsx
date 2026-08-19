@@ -303,7 +303,24 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     setWaQrAnsi(null);
     setWaQrStatus(null);
     try {
-      const data = await apiJson("/api/social/whatsapp/qr");
+      // Poll até o QR estar pronto (máx 15s)
+      let attempts = 0;
+      let data: any = null;
+      while (attempts < 15) {
+        data = await apiJson("/api/social/whatsapp/qr");
+        if (data.status === "qr" || data.status === "ready" || data.status === "pending_no_session") break;
+        if (data.status === "pending") {
+          setWaQrStatus("Iniciando sessão WhatsApp...");
+          await new Promise((r) => setTimeout(r, 1000));
+          attempts++;
+          continue;
+        }
+        break;
+      }
+      if (!data) {
+        toast("FALHA AO GERAR QR", "error", "Timeout aguardando sessão");
+        return;
+      }
       setWaQrAnsi(data.qrAnsi ?? null);
       setWaQrStatus(data.message ?? null);
       if (data.status === "qr") {
@@ -312,6 +329,8 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       } else if (data.status === "ready") {
         setWaReady(true);
         toast("WHATSAPP JÁ AUTENTICADO", "success");
+      } else if (data.status === "pending") {
+        setWaQrStatus("QR não disponível ainda. Tente novamente em alguns segundos.");
       }
       loadWhatsAppStatus();
     } catch (err: any) {
