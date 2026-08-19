@@ -18,3 +18,7 @@ data.json.bak-*
 # Redis data
 appendonlydir/
 dump.rdb
+# Python venv
+python_instagram/.venv/
+# WhatsApp Web session
+.wwebjs_auth/

@@ -74,7 +74,7 @@ NÃO adicione explicações. APENAS o JSON.`;
   for (let i = 0; i < maxRetries; i++) {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: prompt,
         config: {
           systemInstruction: "You are a specialized product data extractor for Brazilian e-commerce. Be precise with price extraction. Always return the lowest available price.",

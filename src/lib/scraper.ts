@@ -206,11 +206,19 @@ function parseBrazilianPrice(text: string): number {
   return sanitizePrice(result);
 }
 
-export async function advancedScrape(url: string, options: {
+export async function advancedScrape(rawUrl: string, options: {
   lmStudioUrl?: string;
   nvidiaApiKey?: string;
   geminiApiKey?: string;
 }): Promise<ScrapeResult> {
+  // Normalizar URL: adicionar https:// se ausente
+  const url = (() => {
+    let u = rawUrl.trim();
+    if (!/^https?:\/\//i.test(u)) {
+      u = "https://" + u;
+    }
+    return u;
+  })();
   // Usar URL completa como chave do cache
   const urlHash = simpleHash(url);
   const cacheFile = path.join(CACHE_DIR, `${urlHash}.json`);
@@ -1143,7 +1151,7 @@ Return ONLY valid JSON, no explanation.`
     : `Extract product info from this URL: ${url}. Return JSON: {name, price (number), currency ("BRL"), available (boolean), imageUrl}.`;
 
   const response = await ai.models.generateContent({
-    model: "gemini-2.5-flash",
+    model: "gemini-3.6-flash",
     contents: prompt,
     config: {
       tools: contextText ? [] : [{ urlContext: {} }],

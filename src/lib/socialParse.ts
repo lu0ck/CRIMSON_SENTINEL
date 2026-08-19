@@ -200,7 +200,7 @@ export async function parsePromosFromTextWithAI(
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-2.5-flash",
+        model: "gemini-3.6-flash",
         contents: buildSocialParsePrompt(text),
         config: { responseMimeType: "application/json" },
       });

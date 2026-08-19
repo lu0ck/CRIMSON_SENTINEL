@@ -208,7 +208,11 @@ if (!data.products) data.products = [];
   });
 
 app.post("/api/scrape", async (req, res) => {
-  const { url, productId, profileId } = req.body;
+  let { url, productId, profileId } = req.body;
+  // Normalizar URL: adicionar https:// se ausente
+  if (url && !/^https?:\/\//i.test(String(url).trim())) {
+    url = "https://" + String(url).trim();
+  }
   try {
     const { isRedisAvailable } = await import("./src/queue/connection.ts");
 
@@ -1283,21 +1287,24 @@ async function startInstagramService() {
   const venvDir = path.join(appRoot, "python_instagram", ".venv");
   const venvPython = path.join(venvDir, "bin", "python");
   const venvPip = path.join(venvDir, "bin", "pip");
+  const uvicorn = path.join(venvDir, "bin", "uvicorn");
   const reqFile = path.join(appRoot, "python_instagram", "requirements.txt");
 
-  if (!fs.existsSync(venvPython)) {
-    safeLog("[instagram] Configurando venv pela primeira vez...");
+  if (!fs.existsSync(venvPython) || !fs.existsSync(uvicorn)) {
+    safeLog("[instagram] Configurando venv...");
     try {
+      if (fs.existsSync(venvDir)) {
+        safeLog("[instagram] Removendo venv vazio/incompleto...");
+        await execAsync(`rm -rf "${venvDir}"`);
+      }
       await execAsync(`python3 -m venv "${venvDir}"`);
-      await execAsync(`"${venvPip}" install -q -r "${reqFile}"`);
+      await execAsync(`"${venvPip}" install --upgrade pip && "${venvPip}" install -q -r "${reqFile}"`);
       safeLog("[instagram] Venv configurado com sucesso");
     } catch (err: any) {
       safeLog(`[instagram] Falha ao criar venv: ${err.message}. Instale python3 e tente novamente.`);
       return;
     }
   }
-
-  const uvicorn = path.join(venvDir, "bin", "uvicorn");
 
   instagramProcess = spawn(uvicorn, [
     "python_instagram.server:app",
