@@ -747,7 +747,19 @@ const queued = await response.json();
         listId: selectedListId,
         profileId: activeProfileId,
       };
-      return { product, info };
+      // Salvar no servidor (mesmo fluxo do caminho queued)
+      const saveResponse = await fetch("/api/products", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(product),
+      });
+      const saveResult = await saveResponse.json();
+      if (saveResult.action === "exists") {
+        console.log(`Product already exists: ${product.name}`);
+      } else if (saveResult.action === "updated") {
+        console.log(`Product price updated: ${product.name}`);
+      }
+      return product;
     }
     if (!queued.jobId) throw new Error(queued.error || "Scrape queueing failed");
 
