@@ -357,6 +357,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       setCurrentLoc(data);
       if (data.lat) { setLocLat(String(data.lat)); setLocLng(String(data.lng)); }
       if (data.address) setLocAddress(data.address);
+      if (data.cep) setLocCep(data.cep);
       if (data.radiusMeters) setLocRadiusKm(String(Math.round(data.radiusMeters / 1000)));
     } catch {
       // sem localização salva — mantém defaults
@@ -381,6 +382,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
     setLocSaving(true);
     try {
       const body: any = { radiusKm: parseFloat(locRadiusKm) || 5 };
+      if (locCep.trim()) body.cep = locCep.trim();
       if (validCoords) {
         body.lat = lat;
         body.lng = lng;

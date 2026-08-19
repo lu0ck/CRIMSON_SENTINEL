@@ -79,6 +79,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [waQrStatus, setWaQrStatus] = useState<string | null>(null);
   const [waQrLoading, setWaQrLoading] = useState(false);
   const [waScanning, setWaScanning] = useState(false);
+  const [waToggling, setWaToggling] = useState(false);
 
   // ---- Instagram Stories (C3 — instagrapi) ----
   const [igEnabled, setIgEnabled] = useState(false);
@@ -136,6 +137,23 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       setWaReady(!!data.ready);
     } catch {
       // flag desligada ou erro — mantém defaults
+    }
+  };
+
+  const toggleWhatsApp = async (enabled: boolean) => {
+    setWaToggling(true);
+    try {
+      await apiJson("/api/social/whatsapp/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      setWaEnabled(enabled);
+      toast(enabled ? "WHATSAPP ATIVADO" : "WHATSAPP DESATIVADO", "success");
+    } catch (err: any) {
+      toast("FALHA AO ALTERAR WHATSAPP", "error", String(err?.message || err));
+    } finally {
+      setWaToggling(false);
     }
   };
 
@@ -584,9 +602,18 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
             <span className={cn("text-[9px] font-mono", waEnabled ? (waReady ? "text-green-500" : "text-amber-500") : "text-crimson/40")}>
               {waEnabled ? (waReady ? "● CONECTADO" : "○ NÃO AUTENTICADO") : "● DESLIGADO"}
             </span>
+            {waEnabled && (
+              <button
+                onClick={() => { playSound("click"); toggleWhatsApp(false).catch(() => {}); }}
+                disabled={waToggling}
+                className="hud-button flex items-center gap-2 text-red-400 disabled:opacity-50"
+              >
+                DESATIVAR
+              </button>
+            )}
             <button
               onClick={() => { playSound("click"); generateWhatsAppQr().catch(() => {}); }}
-              disabled={waQrLoading}
+              disabled={waQrLoading || !waEnabled}
               className="hud-button flex items-center gap-2 disabled:opacity-50"
               title="Gera/atualiza o QR de conexão"
             >
@@ -606,13 +633,22 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
 
         <div className="hud-border bg-black/40 p-5 mt-4">
           {!waEnabled ? (
-            <div className="flex items-start gap-3">
-              <ShieldAlert size={14} className="text-amber-500 shrink-0 mt-0.5" />
-              <p className="text-[10px] font-mono text-amber-500/70 leading-relaxed">
-                WHATSAPP_ENABLED=false no .env. Defina true e reinicie para ativar a leitura de Status
-                dos contatos cadastrados (estabelecimentos com whatsapp_number). Requer número secundário
-                dedicado — risco de banimento.
-              </p>
+            <div className="flex flex-col gap-3">
+              <div className="flex items-start gap-3">
+                <MessageSquare size={14} className="text-crimson shrink-0 mt-0.5" />
+                <p className="text-[10px] font-mono text-crimson/70 leading-relaxed">
+                  Ative o WhatsApp para monitorar Status dos contatos cadastrados.
+                  Use sempre um número secundário — existe risco de banimento.
+                </p>
+              </div>
+              <button
+                onClick={() => { playSound("click"); toggleWhatsApp(true).catch(() => {}); }}
+                disabled={waToggling}
+                className="hud-button self-start flex items-center gap-2 disabled:opacity-50"
+              >
+                {waToggling ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {waToggling ? "ATIVANDO..." : "ATIVAR WHATSAPP"}
+              </button>
             </div>
           ) : waReady ? (
             <div className="flex flex-col gap-2">

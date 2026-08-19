@@ -3,7 +3,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { spawn, execSync } from "child_process";
+import { spawn, exec } from "child_process";
 import {
   sendDiscordNotification,
   sendTelegramNotification,
@@ -210,6 +210,10 @@ if (!data.products) data.products = [];
 app.post("/api/scrape", async (req, res) => {
   const { url, productId, profileId } = req.body;
   try {
+    const { isRedisAvailable } = await import("./src/queue/connection.ts");
+    if (!isRedisAvailable()) {
+      return res.status(503).json({ error: "Redis indisponível. Inicie Redis para usar scraping." });
+    }
     const queue = getScanQueue();
     const job = await queue.add("scrape", {
       type: "scrape",
@@ -434,6 +438,7 @@ app.get("/api/status", async (req, res) => {
       SettingsRepository.set("user_lat", String(finalLat));
       SettingsRepository.set("user_lng", String(finalLng));
       if (finalAddress) SettingsRepository.set("user_address", finalAddress);
+      if (cep) SettingsRepository.set("user_cep", cep);
       if (typeof radiusKm === "number") {
         SettingsRepository.set("geolocation_search_radius_m", String(Math.round(radiusKm * 1000)));
       }
@@ -454,6 +459,7 @@ app.get("/api/status", async (req, res) => {
         lat: SettingsRepository.getNumber("user_lat") || null,
         lng: SettingsRepository.getNumber("user_lng") || null,
         address: SettingsRepository.get("user_address") || null,
+        cep: SettingsRepository.get("user_cep") || null,
         radiusMeters: SettingsRepository.getNumber("geolocation_search_radius_m") ?? 5000,
       });
     } catch (error: any) {
@@ -462,9 +468,12 @@ app.get("/api/status", async (req, res) => {
   });
 
   // B1 — dispara descoberta de estabelecimentos via Overpass em segundo plano.
-  // Enfileira job `discover-establishments` no scan-queue e responde {jobId}.
   app.post("/api/establishments/discover", async (req, res) => {
     try {
+      const { isRedisAvailable } = await import("./src/queue/connection.ts");
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ error: "Redis indisponível — filas desabilitadas. Inicie Redis e tente novamente." });
+      }
       const userLat = SettingsRepository.getNumber("user_lat");
       const userLng = SettingsRepository.getNumber("user_lng");
       if (userLat === 0 && userLng === 0) {
@@ -740,12 +749,31 @@ app.get("/api/status", async (req, res) => {
   });
 
   // C2 — endpoints WhatsApp real (whatsapp-web.js)
-  // Inicia sessão (se ainda não iniciada), devolve QR code para escanear com
-  // a conta secundária. Requer WHATSAPP_ENABLED=true no .env.
+  // Toggle WhatsApp on/off via DB (sem .env)
+  app.get("/api/social/whatsapp/toggle", (_req, res) => {
+    try {
+      const enabled = SettingsRepository.getBool("whatsapp_enabled");
+      res.json({ enabled });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/social/whatsapp/toggle", (req, res) => {
+    try {
+      const { enabled } = req.body || {};
+      SettingsRepository.set("whatsapp_enabled", enabled ? "true" : "false");
+      safeLog(`[whatsapp] ${enabled ? "ativado" : "desativado"} via UI`);
+      res.json({ enabled: !!enabled });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.get("/api/social/whatsapp/qr", async (req, res) => {
-    if (process.env.WHATSAPP_ENABLED !== "true") {
+    if (!SettingsRepository.getBool("whatsapp_enabled")) {
       return res.status(403).json({
-        error: "WHATSAPP_ENABLED=false no .env. Configure para true e reinicie antes de usar.",
+        error: "WhatsApp desativado. Ative-o no painel social primeiro.",
       });
     }
     try {
@@ -773,7 +801,8 @@ app.get("/api/status", async (req, res) => {
   });
 
   app.get("/api/social/whatsapp/status", async (req, res) => {
-    if (process.env.WHATSAPP_ENABLED !== "true") {
+    const enabled = SettingsRepository.getBool("whatsapp_enabled");
+    if (!enabled) {
       return res.json({ enabled: false, ready: false });
     }
     try {
@@ -788,8 +817,8 @@ app.get("/api/status", async (req, res) => {
   // Enfileira scan de Status dos contatos salvos em establishments.whatsapp_number.
   // O worker respeita throttle configurável (whatsapp_scan_per_contact_min).
   app.post("/api/social/whatsapp/scan", async (req, res) => {
-    if (process.env.WHATSAPP_ENABLED !== "true") {
-      return res.status(403).json({ error: "WHATSAPP_ENABLED=false no .env" });
+    if (!SettingsRepository.getBool("whatsapp_enabled")) {
+      return res.status(403).json({ error: "WhatsApp desativado. Ative-o no painel social." });
     }
     try {
       const queue = getSocialQueue();
@@ -822,9 +851,10 @@ app.get("/api/status", async (req, res) => {
       }
       SettingsRepository.set("ig_username", username);
       SettingsRepository.set("ig_password", password);
-      safeLog("[instagram] Credenciais salvas no banco, reiniciando serviço...");
-      restartInstagramService();
+      safeLog("[instagram] Credenciais salvas no banco");
+      // Responde primeiro, reinicia serviço em background
       res.json({ ok: true, username });
+      setTimeout(() => restartInstagramService(), 100);
     } catch (err: any) {
       res.status(500).json({ error: err.message });
     }
@@ -1195,13 +1225,20 @@ app.get("/api/status", async (req, res) => {
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
 
     // Registra os schedulers BullMQ (substituem setTimeout/setTimeout recursivo + setInterval)
-    const scanIntervalMs = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
-    const dailyHour = SettingsRepository.getNumber('scan_daily_hour') ?? 15;
-    await registerSchedulers({ scanIntervalMs, dailyHour });
+    try {
+      const scanIntervalMs = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
+      const dailyHour = SettingsRepository.getNumber('scan_daily_hour') ?? 15;
+      await registerSchedulers({ scanIntervalMs, dailyHour });
+    } catch {
+      safeLog("[scheduler] Falha ao registrar schedulers — Redis indisponível?");
+    }
 
-    // FASE 9: agendador do scan social recorrente.
-    const socialIntervalMs = SettingsRepository.getNumber('social_scan_interval_ms') ?? (6 * 60 * 60 * 1000);
-    await registerSocialScheduler({ intervalMs: socialIntervalMs });
+    try {
+      const socialIntervalMs = SettingsRepository.getNumber('social_scan_interval_ms') ?? (6 * 60 * 60 * 1000);
+      await registerSocialScheduler({ intervalMs: socialIntervalMs });
+    } catch {
+      safeLog("[scheduler] Falha ao registrar scheduler social — Redis indisponível?");
+    }
 
     // C3 — auto-start Instagram microservice
     startInstagramService();
@@ -1210,7 +1247,13 @@ app.get("/api/status", async (req, res) => {
 
 let instagramProcess: ReturnType<typeof spawn> | null = null;
 
-function startInstagramService() {
+function execAsync(cmd: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    exec(cmd, (err) => (err ? reject(err) : resolve()));
+  });
+}
+
+async function startInstagramService() {
   const igUsername = SettingsRepository.get("ig_username");
   const igPassword = SettingsRepository.get("ig_password");
   if (!igUsername || !igPassword) {
@@ -1227,8 +1270,8 @@ function startInstagramService() {
   if (!fs.existsSync(venvPython)) {
     safeLog("[instagram] Configurando venv pela primeira vez...");
     try {
-      execSync(`python3 -m venv "${venvDir}"`, { stdio: "pipe" });
-      execSync(`"${venvPip}" install -q -r "${reqFile}"`, { stdio: "pipe" });
+      await execAsync(`python3 -m venv "${venvDir}"`);
+      await execAsync(`"${venvPip}" install -q -r "${reqFile}"`);
       safeLog("[instagram] Venv configurado com sucesso");
     } catch (err: any) {
       safeLog(`[instagram] Falha ao criar venv: ${err.message}. Instale python3 e tente novamente.`);

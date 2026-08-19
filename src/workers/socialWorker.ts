@@ -180,8 +180,8 @@ async function handleSocialScanAll(job: Job<SocialMonitorJobPayload & { type: "s
 // para o socialParse (Gemini opcional) e grava promotions source='whatsapp'.
 // Respeita throttle definido em user_settings.whatsapp_scan_per_contact_min.
 async function handleWhatsappStatusScan(job: Job<SocialMonitorJobPayload & { type: "whatsapp-status-scan" }>) {
-  if (process.env.WHATSAPP_ENABLED !== "true") {
-    return { skipped: true, reason: "WHATSAPP_ENABLED=false no .env" };
+  if (!SettingsRepository.getBool("whatsapp_enabled")) {
+    return { skipped: true, reason: "whatsapp desativado" };
   }
   if (!SettingsRepository.getBool("social_monitoring_enabled")) {
     return { skipped: true, reason: "social_monitoring_enabled=false" };

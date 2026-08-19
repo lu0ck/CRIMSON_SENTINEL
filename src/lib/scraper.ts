@@ -309,9 +309,9 @@ for (const strategy of strategies) {
     try {
       console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
       
-      // Timeout de 30 segundos por estratégia
+      // Timeout de 15 segundos por estratégia (reduzido de 30s)
       const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error('Strategy timeout (30s)')), 30000);
+        setTimeout(() => reject(new Error('Strategy timeout (15s)')), 15000);
       });
       
       const result = await Promise.race([
