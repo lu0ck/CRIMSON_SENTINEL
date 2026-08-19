@@ -158,6 +158,42 @@ function isPriceRealistic(price: number, productName?: string): boolean {
   return true;
 }
 
+// Nomes que NÃO são nomes de produto (filtros, labels, headers de busca)
+const INVALID_PRODUCT_NAMES = [
+  "intervalo de preço", "intervalo de preco", "faixa de preço", "faixa de preco",
+  "preço", "preco", "price", "filtrar", "ordenar", "relevantes",
+  "menor preço", "menor preco", "maior preço", "maior preco",
+  "novidades", "promoções", "promocoes", "mais vendidos",
+  "resultados para", "buscando por", "nenhum resultado",
+  "comprar", "adicionar", "ver mais", "ver todos",
+  "marca", "modelo", "cor", "tamanho", "capacidade",
+  "descrição", "descricao", "especificações", "especificacoes",
+  "avaliações", "avaliacoes", "opinião", "opiniao",
+  "frete", "entrega", "garantia", "devolução", "devolucao",
+  "parcelamento", "à vista", "a vista",
+];
+
+function isProductNameValid(name: string): boolean {
+  if (!name || name.length < 5) return false;
+  const lower = name.toLowerCase().trim();
+  // Rejeitar nomes que são labels/filtros
+  for (const invalid of INVALID_PRODUCT_NAMES) {
+    if (lower === invalid || lower.startsWith(invalid + " ") || lower.startsWith(invalid + ":")) {
+      return false;
+    }
+  }
+  // Rejeitar nomes muito curtos ou genéricos
+  if (lower.split(" ").length < 2 && !/\d/.test(lower)) {
+    return false;
+  }
+  return true;
+}
+
+// Detectar URLs de busca (não são páginas de produto)
+function isSearchUrl(url: string): boolean {
+  return /\/busca\/|\/search\?|\/s\?|q=|search=/i.test(url);
+}
+
 function getRandomUserAgent(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
@@ -342,7 +378,7 @@ for (const strategy of strategies) {
       }
 
       // Validar se o nome faz sentido antes de salvar
-      if (result.name && result.name.length > 5) {
+      if (result.name && result.name.length > 5 && isProductNameValid(result.name)) {
         // Validar se o preço é realista
         if (!isPriceRealistic(result.price, result.name)) {
           console.log(`[Scraper] ⚠️ WARNING: Price R$ ${result.price} seems unrealistic for "${result.name?.substring(0, 40)}"`);
@@ -376,8 +412,8 @@ for (const strategy of strategies) {
   }
 }
 
-  // Se todas as estratégias falharam mas temos um fallback, usar ele
-  if (bestFallback) {
+  // Se todas as estratégias falharam mas temos um fallback válido, usar ele
+  if (bestFallback && isProductNameValid(bestFallback.name)) {
     console.log(`[Scraper] ⚠️ Using best available fallback: R$ ${bestFallback.price} — "${bestFallback.name?.substring(0, 50)}" (${bestFallback.method})`);
     fs.writeFileSync(cacheFile, JSON.stringify(bestFallback));
     return bestFallback;

@@ -684,6 +684,12 @@ const deleteComparisonResult = (productId: string, index: number) => {
     const urls = newUrls.map(u => u.trim()).filter(u => u.length > 0);
     if (urls.length === 0) return;
 
+    // Avisar sobre URLs de busca
+    const searchUrls = urls.filter(u => /\/busca\/|\/search\?|\/s\?|q=|search=/i.test(u));
+    if (searchUrls.length > 0) {
+      addToast("AVISO: URLs de busca detectadas", "info", "Use URLs de produtos individuais para melhores resultados. Ex: https://www.kabum.com.br/produto/12345");
+    }
+
     setIsLoading(true);
     const controller = new AbortController();
     setAbortController(controller);
