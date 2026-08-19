@@ -726,6 +726,29 @@ const deleteComparisonResult = (productId: string, index: number) => {
             }
             
 const queued = await response.json();
+    if (queued.status === "direct" && queued.result) {
+      // Scraping direto (Redis offline) — resultado já veio
+      const info = queued.result;
+      if (info?.method) {
+        setSystemMessage(`DATA EXTRACTED VIA: ${info.method.toUpperCase()}`);
+      }
+      const product = {
+        id: generateProductId(url),
+        name: info.name || "UNKNOWN PRODUCT",
+        url: url,
+        currentPrice: info.price || 0,
+        previousPrice: info.price || 0,
+        currency: info.currency || "BRL",
+        available: info.available ?? true,
+        imageUrl: info.imageUrl,
+        lastUpdated: new Date().toISOString(),
+        lastScrapeMethod: info.method,
+        priceHistory: [{ date: new Date().toISOString(), price: info.price || 0 }],
+        listId: selectedListId,
+        profileId: activeProfileId,
+      };
+      return { product, info };
+    }
     if (!queued.jobId) throw new Error(queued.error || "Scrape queueing failed");
 
     // FASE 4: aguarda o worker processar via polling

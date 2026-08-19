@@ -7,7 +7,6 @@ const REDIS_URL =
 let connection: Redis | null = null;
 let redisAvailable = false;
 let loggedUnavailable = false;
-let errorLogCount = 0;
 
 export function isRedisAvailable(): boolean {
   return redisAvailable;
@@ -26,22 +25,23 @@ export function getRedis(): Redis {
           loggedUnavailable = true;
         }
         redisAvailable = false;
-        return null;
+        return null; // para de reconectar definitivamente
       }
       return Math.min(times * 100, 2000);
     },
   });
 
+  // Silencia erros após desistir de reconectar
   connection.on("error", () => {
-    errorLogCount++;
-    if (errorLogCount <= 5) {
-      console.error("[redis]连接失败 — tentativa", errorLogCount, "/ 5");
+    if (redisAvailable) {
+      console.error("[redis] conexão perdida");
     }
+    // Após retryStrategy retornar null, status vira "end" e BullMQ
+    // continua emitindo erros. Silencia para não floodar.
   });
   connection.on("connect", () => {
     redisAvailable = true;
     loggedUnavailable = false;
-    errorLogCount = 0;
     console.log("[redis] conectado:", REDIS_URL);
   });
 

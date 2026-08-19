@@ -65,7 +65,9 @@ export async function startWhatsappSession(events: WhatsappSessionEvents): Promi
   await loadWhatsAppLibs();
   if (!ClientCtor || !qrcode) throw new Error("WhatsApp libs não carregadas");
   // Sessão persistida em disco sob DATA_DIR (criado por db.ts)
-  const { Client, LocalAuth } = await import("whatsapp-web.js");
+  const wa = await import("whatsapp-web.js");
+  const mod = wa.default || wa;
+  const { Client, LocalAuth } = mod;
   sessionInstance = new Client({
     authStrategy: new LocalAuth({ dataPath: undefined }), // default .wwebjs_auth
     puppeteer: {

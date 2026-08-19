@@ -211,21 +211,35 @@ app.post("/api/scrape", async (req, res) => {
   const { url, productId, profileId } = req.body;
   try {
     const { isRedisAvailable } = await import("./src/queue/connection.ts");
-    if (!isRedisAvailable()) {
-      return res.status(503).json({ error: "Redis indisponível. Inicie Redis para usar scraping." });
+
+    if (isRedisAvailable()) {
+      // Caminho normal: enfileira via BullMQ
+      const queue = getScanQueue();
+      const job = await queue.add("scrape", {
+        type: "scrape",
+        url,
+        productId,
+        profileId,
+      });
+      safeLog(`[scrape] enfileirado job ${job.id} para ${url}`);
+      return res.json({ jobId: job.id, status: "queued" });
     }
-    const queue = getScanQueue();
-    const job = await queue.add("scrape", {
-      type: "scrape",
-      url,
-      productId,
-      profileId,
+
+    // Fallback: scraping direto sem Redis
+    safeLog(`[scrape] Redis offline, executando scraping direto para ${url}`);
+    const { advancedScrape } = await import("./src/lib/scraper.ts");
+    const { ProfileRepository } = await import("./src/repositories/profileRepository.ts");
+    const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
+    const result = await advancedScrape(url, {
+      lmStudioUrl: profile?.lmStudioUrl,
+      nvidiaApiKey: profile?.nvidiaApiKey,
+      geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
     });
-    safeLog(`[scrape] enfileirado job ${job.id} para ${url}`);
-    res.json({ jobId: job.id, status: "queued" });
+    safeLog(`[scrape] scraping direto OK via ${result.method} para ${url}`);
+    res.json({ jobId: null, status: "direct", result });
   } catch (error: any) {
-    safeLog("[scrape] erro ao enfileirar: " + error.message);
-    res.status(500).json({ error: error.message || "Failed to enqueue scrape" });
+    safeLog("[scrape] erro: " + error.message);
+    res.status(500).json({ error: error.message || "Failed to scrape" });
   }
 });
 
@@ -738,6 +752,10 @@ app.get("/api/status", async (req, res) => {
   // Scan de todas as fontes ativas (varre cada fonte e enfileira capturas).
   app.post("/api/social/scan-all", async (req, res) => {
     try {
+      const { isRedisAvailable } = await import("./src/queue/connection.ts");
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ error: "Redis indisponível. Inicie Redis para usar scan social." });
+      }
       const queue = getSocialQueue();
       const job = await queue.add("social-scan-all", { type: "social-scan-all", triggeredBy: "manual" });
       safeLog(`[social] scan-all enfileirado job ${job.id}`);
@@ -1261,7 +1279,7 @@ async function startInstagramService() {
     return;
   }
 
-  const appRoot = path.resolve(__dirname, "..");
+  const appRoot = __dirname;
   const venvDir = path.join(appRoot, "python_instagram", ".venv");
   const venvPython = path.join(venvDir, "bin", "python");
   const venvPip = path.join(venvDir, "bin", "pip");
