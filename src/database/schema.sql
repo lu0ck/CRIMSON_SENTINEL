@@ -94,6 +94,7 @@ CREATE TABLE IF NOT EXISTS establishments (
   state TEXT,
   postal_code TEXT,
   osm_id BIGINT, -- OpenStreetMap ID via Overpass
+  price_url TEXT, -- URL de busca de preço local; {term} substituído pelo nome do item (FASE 11)
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -179,6 +180,33 @@ CREATE TABLE IF NOT EXISTS route_stops (
 
 CREATE INDEX IF NOT EXISTS idx_route_stops_route ON route_stops(route_id);
 
+-- Log de notificações enviadas (FASE 6) — dedup anti-spam + histórico de alertas
+CREATE TABLE IF NOT EXISTS notification_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  entity_type TEXT NOT NULL, -- "product" | "shopping_item" | "promotion"
+  entity_id TEXT NOT NULL,
+  channel TEXT NOT NULL,     -- "discord" | "telegram" | "email"
+  title TEXT NOT NULL,
+  message TEXT NOT NULL,
+  sent_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_log_entity ON notification_log(entity_type, entity_id);
+
+-- Fontes de monitoramento social (FASE 8) — WhatsApp (texto colado) e Instagram (perfil)
+CREATE TABLE IF NOT EXISTS social_sources (
+  id TEXT PRIMARY KEY,
+  channel TEXT NOT NULL CHECK (channel IN ('whatsapp', 'instagram')),
+  name TEXT NOT NULL,
+  url TEXT, -- perfil/post do Instagram (opcional para WhatsApp)
+  establishment_hint TEXT, -- nome do estabelecimento para associar as promoções
+  enabled INTEGER DEFAULT 1,
+  last_checked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_social_sources_channel ON social_sources(channel);
+
 -- Configurações do usuário (substitui hardcoded consts do server.ts)
 CREATE TABLE IF NOT EXISTS user_settings (
   key TEXT PRIMARY KEY,
@@ -194,4 +222,27 @@ INSERT OR IGNORE INTO user_settings (key, value) VALUES
   ('social_monitoring_enabled', 'false'),
   ('scrape_cache_ttl_ms', '3600000'),       -- 1h (igual ao CACHE_TTL do scraper)
   ('geolocation_search_radius_m', '5000'),  -- 5km
-  ('route_max_stops', '15');
+  ('route_max_stops', '15'),
+  ('notifications_enabled', 'true'),        -- FASE 6: master switch de alertas
+  ('notification_cooldown_hours', '24'),     -- FASE 6: não re-alerta mesmo alvo neste intervalo
+  ('social_scan_interval_ms', '21600000'),   -- FASE 9: scan social recorrente (6h)
+  ('user_lat', NULL),                       -- FASE 4: latitude do usuário (geocoded)
+  ('user_lng', NULL),                       -- FASE 4: longitude do usuário
+  ('user_address', NULL),                   -- FASE 4: endereço formatado
+  ('scan_concurrency', '5'),                -- A3: concorrência por worker (5 x 4 processos pm2 = 20)
+  ('flash_threshold_pct', '30'),            -- C1: % abaixo da média para ser flash
+  ('flash_history_days', '30'),              -- C1: janela temporal da média histórica
+  ('flash_telegram_priority', 'true'),       -- C1: flash só Telegram (ignora Discord/email)
+  ('whatsapp_scan_per_contact_min', '20'),   -- C2: throttle entre checks de Status (15-30 min)
+  ('instagram_scan_per_handle_min', '45');    -- C3: throttle entre checks de Stories (30-60 min)
+
+-- Sites de promoções (links de sites com ofertas para monitorar)
+CREATE TABLE IF NOT EXISTS promotion_sites (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  url TEXT NOT NULL,
+  category TEXT,
+  enabled INTEGER DEFAULT 1,
+  last_checked_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);

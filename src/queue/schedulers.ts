@@ -1,9 +1,10 @@
-import { getScanQueue, QUEUE_NAMES } from "./queues";
-import type { ScanJobPayload } from "./types";
+import { getScanQueue, getSocialQueue, QUEUE_NAMES } from "./queues";
+import type { ScanJobPayload, SocialMonitorJobPayload } from "./types";
 
 // Chave para o scheduler diário. Mantida constante para que BullMQ não duplique.
 const REPEAT_DAILY_KEY = "scan-daily-cron";
 const REPEAT_INTERVAL_KEY = "scan-interval-12h";
+const SOCIAL_SCAN_KEY = "social-scan-cron";
 
 export async function registerSchedulers(opts?: {
   scanIntervalMs?: number;
@@ -58,6 +59,54 @@ export async function listScheduledJobs() {
   const schedulers = await queue.getJobSchedulers();
   return schedulers.map((s) => ({
     id: s.id ?? null,
+    name: s.name,
+    pattern: s.pattern ?? null,
+    every: s.every ?? null,
+    next: s.next ?? null,
+  }));
+}
+
+// ---------------------------------------------------------------------------
+// FASE 9 — agendador do scan social (varredura recorrente das fontes).
+// Usa um repeatable job do BullMQ, como o scan de e-commerce.
+// ---------------------------------------------------------------------------
+
+export async function registerSocialScheduler(opts?: {
+  intervalMs?: number;
+}): Promise<void> {
+  const queue = getSocialQueue();
+  const intervalMs = opts?.intervalMs ?? 6 * 60 * 60 * 1000; // 6h
+
+  // Upsert idempotente: não duplica se já existir e atualiza o intervalo.
+  await queue.upsertJobScheduler(
+    SOCIAL_SCAN_KEY,
+    { every: intervalMs },
+    {
+      name: "social-scan-all",
+      data: { type: "social-scan-all", triggeredBy: "cron" } as SocialMonitorJobPayload,
+    }
+  );
+
+  console.log(
+    `[scheduler] scan social registrado: a cada ${Math.round(intervalMs / 60000)}min`
+  );
+}
+
+export async function unregisterSocialScheduler(): Promise<void> {
+  const queue = getSocialQueue();
+  try {
+    await queue.removeJobScheduler(SOCIAL_SCAN_KEY);
+    console.log(`[scheduler] removido ${SOCIAL_SCAN_KEY}`);
+  } catch {
+    // já não existia
+  }
+}
+
+export async function listSocialScheduledJob() {
+  const queue = getSocialQueue();
+  const schedulers = await queue.getJobSchedulers();
+  return schedulers.map((s) => ({
+    id: (s as any).key ?? null,
     name: s.name,
     pattern: s.pattern ?? null,
     every: s.every ?? null,

@@ -299,7 +299,7 @@ export async function advancedScrape(url: string, options: {
   // 4. Gemini como ÚLTIMO recurso (apenas se configurado)
   if (options.geminiApiKey) {
     console.log("[Scraper] Adding GEMINI_FALLBACK as last resort");
-    strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, options.geminiApiKey, "") });
+    strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, "", options.geminiApiKey) });
   }
 
   console.log(`[Scraper] Total strategies: ${strategies.length}`);
@@ -927,7 +927,7 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 	return { name: name, price: price, currency: "BRL", available: available, imageUrl: imageUrl };
 	})()
 	`;
-	const data = await page.evaluate(evaluateCode);
+	const data = await page.evaluate(evaluateCode) as ScrapeResult;
 
   var namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
   console.log("[Generic] Extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -1121,7 +1121,7 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeR
   }
 }
 
-async function scrapeWithGemini(url: string, apiKey?: string, contextText: string): Promise<ScrapeResult> {
+async function scrapeWithGemini(url: string, contextText: string, apiKey?: string): Promise<ScrapeResult> {
   if (!apiKey) throw new Error("GEMINI_API_KEY is required for fallback scraping.");
 
   const ai = new GoogleGenAI({ apiKey });

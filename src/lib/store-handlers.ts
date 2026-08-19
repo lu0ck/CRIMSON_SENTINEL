@@ -187,7 +187,7 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 	})()
 	`;
 
-	const data = await page.evaluate(evaluateCode);
+	const data = await page.evaluate(evaluateCode) as ScrapeResult;
 
 		const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 		console.log("[Handler] Pichau extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -270,7 +270,7 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 })()
 		`;
 
-const data = await page.evaluate(kabumCode);
+const data = await page.evaluate(kabumCode) as ScrapeResult;
 
 		const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 		console.log("[Handler] Kabum extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -426,7 +426,7 @@ const data = await page.evaluate(kabumCode);
 	imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
 	};
 	})()
-	`);
+	`) as ScrapeResult;
 
 	const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 	console.log("[Handler] Terabyte extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -508,7 +508,7 @@ const data = await page.evaluate(kabumCode);
 	imageUrl: imageEl && imageEl.getAttribute("content") || imageEl && imageEl.getAttribute("src") || undefined,
 	};
 	})()
-	`);
+	`) as ScrapeResult;
 
 	const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 	console.log("[Handler] Amazon extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -659,7 +659,7 @@ const data = await page.evaluate(kabumCode);
 	imageUrl: imageEl && imageEl.getAttribute("content") || imageEl && imageEl.getAttribute("src") || undefined,
 	};
 	})()
-	`);
+	`) as ScrapeResult;
 
 	const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 	console.log("[Handler] Mercado Livre extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -737,7 +737,7 @@ const data = await page.evaluate(kabumCode);
 	imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
 	};
 	})()
-	`);
+	`) as ScrapeResult;
 
 	const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 	console.log("[Handler] Magalu extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -812,7 +812,7 @@ const data = await page.evaluate(kabumCode);
 	imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
 	};
 	})()
-	`);
+	`) as ScrapeResult;
 
 	const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 	console.log("[Handler] Casas Bahia extracted: name=\"" + namePreview + "\", price=" + data.price);
@@ -884,7 +884,7 @@ const data = await page.evaluate(kabumCode);
 	imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
 	};
 	})()
-	`);
+	`) as ScrapeResult;
 
 	const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
 	console.log("[Handler] Ponto extracted: name=\"" + namePreview + "\", price=" + data.price);

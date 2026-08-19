@@ -39,10 +39,17 @@ import {
   Scan,
   Activity,
   Eye,
-  EyeOff
+  EyeOff,
+  MapPin,
+  Radio
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId } from "./lib/url";
+import { LocalTab } from "./components/LocalTab";
+import { NotificationsTab } from "./components/NotificationsTab";
+import { SocialTab } from "./components/SocialTab";
+import { PriceHistoryTab } from "./components/PriceHistoryTab";
+import { ErrorBoundary } from "./components/ErrorBoundary";
 
 declare global {
   interface Window {
@@ -148,7 +155,7 @@ export default function App() {
   }, [activeProfileId]);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "settings">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "settings" | "local" | "alerts" | "social" | "history">("dashboard");
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [isAddingList, setIsAddingList] = useState(false);
@@ -231,6 +238,19 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState<{ gemini: boolean; serper: boolean; nvidia: boolean }>({ gemini: false, serper: false, nvidia: false });
   const [nextScanMinutes, setNextScanMinutes] = useState<number>(0);
   const [alertSent, setAlertSent] = useState(false);
+  const [notificationsCount, setNotificationsCount] = useState(0);
+
+  const loadNotificationsCount = async () => {
+    try {
+      const response = await fetch("/api/notifications?limit=1000");
+      if (response.ok) {
+        const data = await response.json();
+        setNotificationsCount(Array.isArray(data) ? data.length : 0);
+      }
+    } catch {
+      // silencioso — o painel de alertas cuida do erro
+    }
+  };
 
   // Check system status
   const checkSystemStatus = async () => {
@@ -345,6 +365,10 @@ export default function App() {
   useEffect(() => {
     fetchData();
   }, []);
+
+  useEffect(() => {
+    loadNotificationsCount();
+  }, [activeTab]);
 
   // Check system status on load and every hour
   useEffect(() => {
@@ -546,10 +570,6 @@ const deleteComparisonResult = (productId: string, index: number) => {
     playSound('scan');
 
     try {
-      const historyStr = product.priceHistory
-        .map(h => `${h.date}: ${product.currency} ${h.price}`)
-        .join("\n");
-
       // Calculate lowest price from history
       let lowestPrice: number | null = null;
       let lowestPriceDate: string | null = null;
@@ -559,25 +579,28 @@ const deleteComparisonResult = (productId: string, index: number) => {
         lowestPriceDate = new Date(lowest.date).toLocaleDateString('pt-BR');
       }
 
-      const response = await fetch("/api/analyze", {
+      // A2: enfileira e faz polling (não bloqueia o handler Express)
+      const enqRes = await fetch("/api/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           productName: product.name,
           currentPrice: product.currentPrice,
           currency: product.currency,
-          history: historyStr,
           lowestPrice,
           lowestPriceDate,
           profileId: activeProfile?.id
         })
       });
 
-      if (!response.ok) {
-        throw new Error("Analysis request failed");
+      if (!enqRes.ok) {
+        throw new Error("Analysis enqueue failed");
       }
+      const { jobId } = await enqRes.json();
 
-      const result = await response.json();
+      // Poll do worker com timeout generoso (análise LLM pode demorar)
+      const result = await pollJob(jobId, undefined, 2000, 240_000, "scan");
+
       // Only update if we are still looking at the same product
       setSelectedProductId(currentId => {
         if (currentId === product.id) {
@@ -627,7 +650,8 @@ const deleteComparisonResult = (productId: string, index: number) => {
     jobId: string,
     signal?: AbortSignal,
     intervalMs = 2000,
-    timeoutMs = 590_000
+    timeoutMs = 590_000,
+    queue = "scan"
   ): Promise<any> => {
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
@@ -636,7 +660,7 @@ const deleteComparisonResult = (productId: string, index: number) => {
         err.name = "AbortError";
         throw err;
       }
-      const res = await fetch(`/api/jobs/scan/${jobId}`, { signal });
+      const res = await fetch(`/api/jobs/${queue}/${jobId}`, { signal });
       if (!res.ok) {
         const errData = await res.json().catch(() => ({}));
         throw new Error(errData.error || "Job status fetch failed");
@@ -1267,6 +1291,30 @@ const queued = await response.json();
             icon={<Settings size={24} />}
             label="CONFIG"
           />
+          <NavButton 
+            active={activeTab === "local"} 
+            onClick={() => { playSound('click'); setActiveTab("local"); }}
+            icon={<MapPin size={24} />}
+            label="LOCAL"
+          />
+          <NavButton 
+            active={activeTab === "alerts"} 
+            onClick={() => { playSound('click'); setActiveTab("alerts"); }}
+            icon={<Bell size={24} />}
+            label="ALERTAS"
+          />
+          <NavButton 
+            active={activeTab === "social"} 
+            onClick={() => { playSound('click'); setActiveTab("social"); }}
+            icon={<Radio size={24} />}
+            label="SOCIAL"
+          />
+          <NavButton 
+            active={activeTab === "history"} 
+            onClick={() => { playSound('click'); setActiveTab("history"); }}
+            icon={<Activity size={24} />}
+            label="HISTÓRICO"
+          />
           <div className="mt-auto flex flex-col gap-4">
             <NavButton 
               active={false} 
@@ -1297,7 +1345,7 @@ const queued = await response.json();
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
                   <StatCard 
                     label="ALERTAS ENVIADOS" 
-                    value={profileProducts.reduce((acc, p) => acc + (p.priceHistory?.filter((h, i) => i > 0 && h.price < p.priceHistory[i-1].price).length || 0), 0)} 
+                    value={notificationsCount} 
                   />
                 </motion.div>
                 
@@ -1690,6 +1738,72 @@ const queued = await response.json();
               </button>
             </div>
                 </div>
+              </motion.div>
+            )}
+
+            {activeTab === "local" && (
+              <motion.div
+                key="local"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+              >
+                <ErrorBoundary fallbackLabel="ERRO NA ABA LOCAL">
+                  <LocalTab
+                    addToast={addToast}
+                    playSound={playSound}
+                    pollJob={pollJob}
+                  />
+                </ErrorBoundary>
+              </motion.div>
+            )}
+
+            {activeTab === "alerts" && (
+              <motion.div
+                key="alerts"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+              >
+                <ErrorBoundary fallbackLabel="ERRO NA ABA ALERTAS">
+                  <NotificationsTab
+                    addToast={addToast}
+                    playSound={playSound}
+                  />
+                </ErrorBoundary>
+              </motion.div>
+            )}
+
+            {activeTab === "social" && (
+              <motion.div
+                key="social"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+              >
+                <ErrorBoundary fallbackLabel="ERRO NA ABA SOCIAL">
+                  <SocialTab
+                    addToast={addToast}
+                    playSound={playSound}
+                    pollJob={pollJob}
+                  />
+                </ErrorBoundary>
+              </motion.div>
+            )}
+
+            {activeTab === "history" && (
+              <motion.div
+                key="history"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+              >
+                <ErrorBoundary fallbackLabel="ERRO NA ABA HISTÓRICO">
+                  <PriceHistoryTab
+                    addToast={addToast}
+                    playSound={playSound}
+                  />
+                </ErrorBoundary>
               </motion.div>
             )}
           </AnimatePresence>

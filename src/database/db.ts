@@ -43,6 +43,46 @@ export function getDb(): Database.Database {
   const schema = fs.readFileSync(schemaPath, "utf-8");
   db.exec(schema);
 
+  // Migrações leves (FASE 11): tabelas existentes não ganham colunas novas via
+  // CREATE TABLE IF NOT EXISTS, então aplicamos ALTER defensivo quando faltam.
+  function ensureColumn(table: string, column: string, ddl: string): void {
+    const cols = db.prepare(`PRAGMA table_info(${table})`).all() as { name: string }[];
+    if (!cols.some((c) => c.name === column)) {
+      db.exec(`ALTER TABLE ${table} ADD COLUMN ${ddl}`);
+      console.log(`[db] migração: ${table}.${column} adicionada`);
+    }
+  }
+  // Migrações FASE 1 / A1 — colunas faltantes conforme plano original.
+  // establishments: source (manual|discovered), contatos sociais
+  ensureColumn("establishments", "price_url", "price_url TEXT");
+  ensureColumn("establishments", "source", "source TEXT DEFAULT 'manual'");
+  ensureColumn("establishments", "whatsapp_number", "whatsapp_number TEXT");
+  ensureColumn("establishments", "instagram_handle", "instagram_handle TEXT");
+
+  // price_observations: valid_until heurístico (FASE 5)
+  ensureColumn("price_observations", "valid_until", "valid_until TEXT");
+
+  // promotions: product_id (FK opcional), discount_pct, is_flash (FASE 6/8), expires_at distinto end_date
+  ensureColumn("promotions", "product_id", "product_id TEXT");
+  ensureColumn("promotions", "discount_pct", "discount_pct REAL");
+  ensureColumn("promotions", "is_flash", "is_flash INTEGER DEFAULT 0");
+  ensureColumn("promotions", "expires_at", "expires_at TEXT");
+
+  // routes: vehicle_type, total_time_min, suggested_departure_at, travel_cost comcustível (FASE 7)
+  ensureColumn("routes", "vehicle_type", "vehicle_type TEXT");
+  ensureColumn("routes", "total_time_min", "total_time_min REAL");
+  ensureColumn("routes", "suggested_departure_at", "suggested_departure_at TEXT");
+  ensureColumn("routes", "travel_cost", "travel_cost REAL");
+  ensureColumn("routes", "fuel_consumption_km_l", "fuel_consumption_km_l REAL");
+  ensureColumn("routes", "fuel_price_per_l", "fuel_price_per_l REAL");
+
+  // route_stops: arrival_time_estimate, quiet_score (FASE 7)
+  ensureColumn("route_stops", "arrival_time_estimate", "arrival_time_estimate TEXT");
+  ensureColumn("route_stops", "quiet_score", "quiet_score REAL");
+
+  // shopping_list_items: FK opcional para products (FASE 5)
+  ensureColumn("shopping_list_items", "product_id", "product_id TEXT");
+
   dbInstance = db;
 
   console.log(`[db] SQLite inicializado: ${DB_PATH}`);

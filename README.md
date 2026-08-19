@@ -1,78 +1,128 @@
 # 🛡️ Crimson Sentinel — Iron Man HUD Price Tracker
 
-**Crimson Sentinel** é um rastreador de preços avançado inspirado na interface (HUD) do Homem de Ferro. Ele utiliza Inteligência Artificial de ponta para monitorar, analisar e notificar variações de preços em tempo real no mercado brasileiro.
+**Crimson Sentinel** é um rastreador de preços inspirado no HUD do Homem de Ferro. Ele monitora produtos online e lojas físicas locais, roteiriza compras, detecta promoções-relâmpago e notifica via Discord/Telegram — tudo processado por uma arquitetura de **fila de jobs assíncrona** (BullMQ + Redis) com workers isolados em PM2.
 
 ---
 
-## 🚀 Funcionalidades Principais
+## 🏗️ Arquitetura
 
-- **Monitoramento Inteligente:** Rastreia produtos em grandes varejistas (Amazon, Mercado Livre, Magalu, Kabum, etc.).
-- **Análise de Mercado com IA:** O núcleo **SENTINEL** (baseado no Gemini 3 Flash) fornece análises concisas sobre tendências de preço, recomendações de compra e avaliação de risco.
-- **Automação de Varredura:** O sistema realiza escaneamentos automáticos de mercado 2 vezes por dia (a cada 12 horas) para todos os produtos rastreados.
-- **Notificações Multi-Plataforma:** Receba alertas instantâneos via **Discord**, **Telegram** ou **Email (Gmail)** quando um preço atingir seu alvo.
-- **Interface HUD Imersiva:** Design futurista com animações de scanlines, partículas e grade tecnológica, totalmente responsivo e em Português.
-- **Histórico de Telemetria:** Gráficos detalhados de variação de preço ao longo do tempo para cada item.
+```
+┌────────────┐   HTTP (UI)   ┌─────────────┐      BullMQ/Redis      ┌─────────────────────┐
+│ React+Vite │ ────────────► │ Express API │ ─────────────────────► │ crimson-scan-worker  │ 4× cluster
+│ (HUD)      │               │  server.ts  │                        │   scrape, scan-all,   │ concurrency 5
+└────────────┘               └─────────────┘                        │   compare, analyze,   │ = até 20 jobs
+                                    │  SQLite (better-sqlite3)      │   local-price-scan,   │
+                                    │  src/database/crimson.db      │   discover, insight   │
+                                    ▼                               └─────────────────────┘
+                          ┌────────────────────┐                    ┌─────────────────────┐
+                          │ Filas (3):         │                    │ crimson-route-worker │
+                          │  scan-queue        │◄───────────────────│   roteirização TSP   │
+                          │  route-queue       │                    │   (OSRM + veículo)   │
+                          │  social-monitor-   │                    └─────────────────────┘
+                          │    queue           │                    ┌─────────────────────┐
+                          └────────────────────┘                    │ crimson-social-worker│
+                                                                    │   whatsapp-web.js    │
+                                                                    │   instagrapi client  │
+                                                                    └─────────────────────┘
+                                                                     ┌─────────────────────┐
+                                                                     │ crimson-instagram-  │
+                                                                     │   service (Python)  │
+                                                                     │   FastAPI:8721      │
+                                                                     └─────────────────────┘
+```
+
+- **Fila única de scan** com 4 instâncias PM2 em cluster (`concurrency: 5` cada) → até **20 jobs simultâneos** sem OOM.
+- **Lock anti-travamento**: `lockDuration: 65s`, `stalledInterval: 30s`, `maxStalledCount: 1`.
+- **Toda IA roda em worker** (nunca no handler HTTP): LM Studio → NVIDIA → Gemini, em cascata.
+- **Persistência** em SQLite (`src/database/schema.sql`), acessada via repositórios em `src/repositories/`.
 
 ---
 
-## 🛠️ Tecnologias Utilizadas
-
-- **Frontend:** React 18, Vite, Tailwind CSS, Framer Motion (animações), Recharts (gráficos), Lucide React (ícones).
-- **Backend:** Node.js, Express (API e automação).
-- **IA & Dados:** 
-  - **Google Gemini API:** Extração de dados de URLs e análise de mercado.
-  - **Serper.dev / Tavily:** Motores de busca para comparação de preços em tempo real.
-  - **NVIDIA API (Opcional):** Suporte para modelos Llama-3 para extração de alta precisão.
-- **Notificações:** Nodemailer (Email), Webhooks (Discord/Telegram).
-
----
-
-## 💻 Como Usar em Outros PCs
-
-Para rodar o Crimson Sentinel em outra máquina, siga os passos abaixo:
+## ⚡ Início rápido
 
 ### 1. Pré-requisitos
-- **Node.js** (v18 ou superior) instalado.
-- Uma chave de API do **Google Gemini** (obtenha em [ai.google.dev](https://ai.google.com/dev)).
+- Node.js ≥ 18 e npm
+- Docker (para o Redis) ou um Redis em `127.0.0.1:6379`
+- Python 3.10+ **apenas se** for usar o módulo Instagram (C3)
 
-### 2. Instalação
-1. Clone ou baixe os arquivos do projeto.
-2. Abra o terminal na pasta do projeto e instale as dependências:
-   ```bash
-   npm install
-   ```
-
-### 3. Configuração de Variáveis de Ambiente
-Crie um arquivo `.env` na raiz do projeto (ou use o menu de configurações do app) com as seguintes chaves:
-```env
-GEMINI_API_KEY=sua_chave_aqui
-# Opcionais para busca avançada:
-SERPER_API_KEY=sua_chave_serper
-TAVILY_API_KEY=sua_chave_tavily
-```
-
-### 4. Executando o Aplicativo
-Para iniciar o servidor de desenvolvimento e a interface:
+### 2. Suba o Redis
 ```bash
-npm run dev
+docker compose up -d        # redis:7-alpine na porta 6379 (persistente)
 ```
-O aplicativo estará disponível em `http://localhost:3000`.
+
+### 3. Instale e configure
+```bash
+npm install
+cp .env.example .env        # preencha GEMINI_API_KEY e canais de notificação
+```
+
+### 4. Suba tudo com PM2
+```bash
+npm run pm2:start           # 5 processos: api, scan-worker(4), route-worker, social-worker, instagram-service
+npm run pm2:logs            # acompanhe os logs
+```
+
+A UI fica em **http://localhost:3000**.
+
+> Sem PM2: `npm run dev` (API) + `npm run worker:scan`, `worker:route`, `worker:social` em terminais separados.
 
 ---
 
-## 📡 Funcionamento Técnico
+## 📦 Módulos
 
-1. **Extração (Scraping):** Quando você adiciona uma URL, o backend utiliza o Gemini com `urlContext` para ler o site e extrair Nome, Preço (à vista/Pix), Imagem e Disponibilidade.
-2. **Comparação (Market Scan):** O sistema usa motores de busca para encontrar o mesmo produto em outras lojas e a IA filtra os resultados para encontrar o menor preço real em estoque.
-3. **Análise (AI Insight):** O **SENTINEL** processa o histórico de preços e gera um relatório estratégico em português com tom de HUD militar.
-4. **Persistência:** Os dados são salvos localmente em um arquivo `data.json`, permitindo que suas listas e perfis sejam mantidos entre sessões.
+### Módulo Local (geolocalizado)
+- **Localização**: `POST /api/location` (endereço via Nominatim **ou** lat/lng + raio). Fica em `user_settings`.
+- **Descoberta de mercados**: `POST /api/establishments/discover` → enfileira job no scan-queue → Overpass (OpenStreetMap) busca supermercados no raio e faz *upsert* (dedup por `osmId`).
+- **Scan de preços locais**: `POST /api/local-price-scan` — usa a `price_url` dos estabelecimentos (`{term}` = nome do item) e respeita o raio da localização.
+- **Roteirização** (`POST /api/route`): resolve o TSP pela ordem dos itens, calcula **distâncias/durations via OSRM** com fallback haversine, e aceita:
+  - `vehicle`: `car`/`motorcycle` (consumo km/L + preço do combustível), `public` (tarifa), `bike`, `foot`;
+  - `startTime`: ISO específico **ou** `"suggest"` (heurística Popular Times escolhe janela de menor movimento 7h–20h);
+  - retorna `suggestedDepartureAt`, `arrivalTimeEstimate` e `quietScore` por parada.
+
+### Promoções-relâmpago (flash)
+- Detecção automática (média dos últimos N dias × threshold **ou** abaixo do menor preço histórico × 0.99) ao registrar preços — `src/lib/flashDetect.ts`.
+- Expiração em 24h (`expires_at`), badge `RELÂMPAGO` na UI e alerta prioritário no Telegram (`flash_telegram_priority`).
+
+### Monitoramento Social
+- **WhatsApp (C2)** — `whatsapp-web.js` lê os *Status* dos contatos salvos em `establishments.whatsapp_number` e extrai promoções.
+  - `GET /api/social/whatsapp/qr` (QR para o celular), `GET /api/social/whatsapp/status`, `POST /api/social/whatsapp/scan`.
+  - Throttle: `user_settings.whatsapp_scan_per_contact_min` (default 20min).
+- **Instagram Stories (C3)** — microserviço **Python (instagrapi)** baixa Stories dos handles cadastrados, e o **Gemini Vision** (`gemini-2.0-flash`) extrai preços da imagem.
+  - `GET /api/social/instagram/health`, `POST /api/social/instagram/login`, `POST /api/social/instagram/scan`.
+  - Throttle: `user_settings.instagram_scan_per_handle_min` (default 45min).
+- **Captura manual**: `POST /api/social/capture` (texto colado do WhatsApp ou URL de perfil público).
+- **⚠️ Aviso**: os módulos C2/C3 usam APIs **não oficiais** e violam os ToS. Use SEMPRE conta secundária dedicada. Ligue apenas se `WHATSAPP_ENABLED=true`/`INSTAGRAM_ENABLED=true` (ver `python_instagram/README.md`).
+
+### Análise com IA
+- `POST /api/analyze` e `POST /api/local-insights/analyze` **enfileiram** jobs e respondem `{ jobId }`; a UI faz *poll* via `GET /api/jobs/:queue/:id`.
+- Cadeia de provedores: **LM Studio → NVIDIA → Gemini** (a primeira disponível vence).
 
 ---
 
-## ⚠️ Notas de Segurança
-- **API Keys:** Nunca compartilhe seu arquivo `.env` ou `data.json` que contenha chaves privadas.
-- **Imagens:** O sistema possui um mecanismo de fallback (Picsum) caso a imagem original do lojista esteja protegida ou inacessível.
+## 🧪 Verificação (validação de cada fase)
+
+```bash
+npm run lint               # typecheck (tsc --noEmit)
+docker compose ps          # Redis saudável
+pm2 ls                     # 5 processos online, scan-worker 4/4
+curl -s localhost:3000/api/status
+curl -s "localhost:3000/api/jobs/scan-queue/<JOB_ID>"
+```
+
+Teste de estresse de 24h: `bash scripts/stress-test-24h.sh` (gera `RELATORIO_TESTE_24H.md`).
 
 ---
-*Desenvolvido para ser o seu sentinela definitivo no mercado digital.* 
-**[SISTEMA SENTINEL ATIVO]**
+
+## 🔑 Variáveis de ambiente
+
+Ver `.env.example`. Destaques: `GEMINI_API_KEY`, `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `REDIS_URL`, `SERPAPI_KEY` (Popular Times best-effort), `SOCIAL_MONITORING_ENABLED`, `WHATSAPP_ENABLED`, `INSTAGRAM_ENABLED`, `INSTAGRAM_SERVICE_PORT=8721`.
+
+---
+
+## ⚠️ Segurança
+- Nunca commite `.env` nem `data.json`/`crimson.db` com chaves privadas.
+- Chaves podem ser configuradas pela UI (aba CONFIG), salvas por perfil de operador.
+
+---
+
+*[SISTEMA SENTINEL ATIVO]*

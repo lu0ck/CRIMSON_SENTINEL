@@ -297,4 +297,166 @@ Frontend adaptado ao contrato assíncrono da FASE 2 (`/api/scrape` e `/api/compa
 
 **Nota FASE 4→5:** com o UI de volta ao contrato novo, a FASE 5 pode partir para o módulo local/geolocalizado: `routeWorker` (TSP/OSRM) e `shopping_list_items`/`price_observations`/`promotions` com notificações.
 
+---
+
+## 6.5 Status da FASE 5 (concluída) — ver histórico de trabalho
+
+Módulo local/geolocalizado completo: roteirização com TSP/OSRM (worker BullMQ), CRUD de estabelecimentos/lista de compras/promoções, observações de preço e rotas salvas. Frontend na aba **LOCAL**. Detalhes e correções de auditoria registrados na sessão anterior.
+
+---
+
+## 6.6 Status da FASE 6 (concluída)
+
+Sistema de Notificações — integrou o `notify.ts` (antes código morto) com alertas tipados e **dedup anti-spam**.
+
+| Arquivo | Papel |
+|---|---|
+| `src/database/schema.sql` | Tabela `notification_log` (histórico + dedup) + settings `notifications_enabled`, `notification_cooldown_hours` (default 24h) |
+| `src/repositories/notificationRepository.ts` | `hasSentWithin` (cooldown), `record`, `getAll`, `deleteByEntity` |
+| `src/lib/notify.ts` | `alertProductTargetReached`, `alertShoppingItemTargetReached`, `alertActivePromotion` — todos com dedup via `notification_log` + master switch |
+| `src/workers/scanWorker.ts` | Dispara alerta de preço-alvo em `handleScrape` e `handleScanAll` quando `currentPrice <= targetPrice` |
+| `server.ts` | Alerta em `POST /api/price-observations` (item local entra no alvo) e `POST /api/promotions` (promoção ativa); novo `GET /api/notifications` |
+| `src/components/NotificationsTab.tsx` | Aba **ALERTAS** no frontend (histórico de notificações) |
+| `src/App.tsx` | Tab `alerts` + StatCard "ALERTAS ENVIADOS" agora usa contador real de `notification_log` |
+
+**Fluxo de alertas:**
+1. **Produto e-commerce** (`scanWorker`): após scrape/scan-all, se `currentPrice <= targetPrice` → envia para o perfil do produto.
+2. **Item local** (`POST /api/price-observations`): se `price <= item.targetPrice` → envia para todos os perfis com canal configurado.
+3. **Promoção ativa** (`POST /api/promotions`): alerta com % OFF calculado.
+4. **Dedup**: qualquer alerta é registrado em `notification_log`; o mesmo alvo não é re-notificado dentro de `notification_cooldown_hours` (24h). Master switch `notifications_enabled`.
+
+**Testes realizados (2026-08-09):**
+- ✅ Dedup unit: `hasSentWithin` false → record → true; cooldown respeitado.
+- ✅ E2E API: perfil com webhook + estabelecimento + item (alvo R$25) + observação R$23,90 → alerta gravado; segunda observação R$22,50 → **count permaneceu 1** (dedup).
+- ✅ Promoção ativa → alerta gravado com % OFF.
+- ✅ Alerta de produto (script): primeiro `true`, repetição imediata `false` (dedup 24h). Erro Discord 405 é esperado (webhook fake) — `sendDiscordNotification` já engole falha de canal.
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK; 4 processos pm2 online.
+- ⚠️ Ambiente: `better-sqlite3` precisou de `npm rebuild` (compilado para Node 20, atual Node 22) — recompilado com sucesso.
+- ⚠️ Nota: `alertShoppingItemTargetReached`/`alertActivePromotion` enviam a **todos** os perfis com canal (itens/promoções locais não têm `profile_id` no schema) — comportamento proposital.
+
+**Nota FASE 6→7:** próximo passo natural é o monitoramento social (`socialWorker`: WhatsApp/Instagram) previsto nas Fases 9/10, ou análise local com IA (melhor estabelecimento por item/economia entre rotas).
+
+## 6.7 Status da FASE 7 (em andamento) — Insights locais com IA
+
+Análise local determinística (sem rede) + narrativa do núcleo SENTINEL (Gemini) via job assíncrono, com painel INSIGHTS no módulo local.
+
+| Arquivo | Papel |
+|---|---|
+| `src/lib/localInsights.ts` | `normalize` (minúsculas/sem acento), `promotionMatchesItem` (substring ≥4 chars), `buildLocalInsights` (preço efetivo = min(observado, promo)), `singleStoreBest` (max cobertura → min custo), `economyVsSingleStore` (+Pct), `summarizeInsights` (fallback determinístico), `buildInsightPrompt` (tom HUD militar) |
+| `src/queue/types.ts` | `LocalInsightJobPayload { type: "local-insight"; profileId? }` na união `ScanJobPayload` |
+| `src/workers/scanWorker.ts` | `handleLocalInsight`: `buildLocalInsights` + Gemini (`profile?.geminiApiKey \|\| GEMINI_API_KEY`) com fallback em `summarizeInsights`; retorna `{ insights, text, method }` |
+| `server.ts` | `GET /api/local-insights` (síncrono) + `POST /api/local-insights/analyze` (enfileira na scan-queue, retorna `{ jobId }`) |
+| `src/components/LocalTab.tsx` | Painel INSIGHTS: melhor preço por item (com flag NO ALVO/PROMO), cartões de estratégia (rota otimizada × tudo-em-um × economia), botão "ANALISAR COM IA" (poll `queue="scan"`) |
+
+**Fluxo:**
+1. `GET /api/local-insights` → resposta imediata e determinística (dados locais via repositórios, sem rede).
+2. "ANALISAR COM IA" → `POST /api/local-insights/analyze` → job `local-insight` na scan-queue → worker computa insights e gera narrativa Gemini (se API key configurada) ou fallback determinístico.
+3. Frontend faz `pollJob(jobId, …, "scan")` e exibe o relatório com badge `method: gemini|deterministic`.
+
+**Testes realizados (2026-08-09):**
+- ✅ E2E determinístico: 2 estabelecimentos + 3 itens + promoção de café. Resultado: multi-parada R$49,70 vs tudo-em-um R$52,30 → economia R$2,60 (5%); promo aplicada (Café R$17,90 no Atacadão); flags NO ALVO corretas.
+- ✅ Pipeline IA: job `local-insight` enfileirado → `state: completed` com `returnvalue` (insights + texto). Sem `GEMINI_API_KEY` no ambiente, `method: deterministic` (fallback funciona).
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK; 4 processos pm2 online.
+- ⏳ Pendente: configurar `GEMINI_API_KEY` (via `.env` ou perfil) para validar caminho Gemini real.
+
+**Nota FASE 7→8:** próximo passo natural é o monitoramento social (`socialWorker`: WhatsApp/Instagram) previsto nas Fases 9/10.
+
+## 6.8 Status da FASE 8 (concluída) — Monitoramento social
+
+Antecipou o monitoramento social previsto para as Fases 9/10: `socialWorker` deixa de ser stub e captura promoções de WhatsApp (texto colado) e Instagram (captions via Playwright) → grava em `promotions` (source `whatsapp`/`instagram`) + alerta nos canais configurados.
+
+| Arquivo | Papel |
+|---|---|
+| `src/database/schema.sql` | Tabela `social_sources` (id, channel whatsapp/instagram, name, url, establishment_hint, enabled, last_checked_at) |
+| `src/repositories/socialSourceRepository.ts` | CRUD de fontes sociais + `setLastChecked` |
+| `src/queue/types.ts` | `SocialCaptureJobPayload` (channel/text/url/sourceId/profileId) + `SocialScanAllJobPayload`; união `SocialMonitorJobPayload` |
+| `src/lib/socialParse.ts` | `parsePromosFromText` (determinístico: "de R$ X por R$ Y", preço único, múltiplos preços), `cleanProductName` (remove prefixos "OFERTA RELÂMPAGO/PROMOÇÃO" e nomes de estabelecimento), `matchEstablishment` (por nome normalizado no texto ou hint), `parsePromosFromTextWithAI` (Gemini opcional), `isDuplicatePromo` (dedup por produto+estabelecimento ativos) |
+| `src/workers/socialWorker.ts` | `handleSocialCapture` (texto → parse → save + alerta, atualiza last_checked; Instagram sem texto baixa captions via Playwright), `handleSocialScanAll`; respeita `social_monitoring_enabled` |
+| `server.ts` | CRUD `/api/social/sources` (GET/POST/DELETE), `POST /api/social/capture` (enfileira), `POST /api/social/scan-all` (enfileira); queue `social` adicionada ao map `/api/jobs/:queue/:id` |
+| `src/components/SocialTab.tsx` | Aba **SOCIAL**: lista de fontes com "CAPTURAR", formulário de nova fonte, botão SCAN ALL, caixa de captura manual de texto WhatsApp |
+| `src/App.tsx` | Tab `social` + NavButton com ícone Radio |
+
+**Correção de bug pré-existente:** `PromotionRepository.save` passava `is_active` como boolean puro → better-sqlite3 rejeita booleans ("can only bind numbers, strings..."). Agora coerce para `1|0`. (O fluxo manual da aba LOCAL já enviava `isActive: true` e falharia no mesmo ponto.)
+
+**Testes realizados (2026-08-09):**
+- ✅ Captura WhatsApp (texto colado): 3 promoções extraídas com nomes limpos (`Café 500g` de R$24,90 por R$17,90; `Arroz 5kg` por R$22,90; `Leite Integral 1L` R$4,99), todas associadas ao estabelecimento correto via match por nome/hint, source=`whatsapp`.
+- ✅ Dedup: segunda captura do mesmo texto → `saved: 0`, `skippedDuplicates: [Café 500g, Arroz 5kg]`.
+- ✅ Alerta: com perfil + webhook fake, `notification_log` gravou 3 alertas `promotion` (erro 405 do Discord é esperado — canal fake).
+- ✅ Instagram via Playwright: `npx playwright install chromium` (headless shell 1217) baixado; captura do perfil público retornou `method: playwright` com captions, 0 promoções (perfil sem preços — correto).
+- ✅ CRUD fontes + scan-all: fonte instagram criada/removida, `scan-all` completou com `{sources: 1}`.
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK.
+- ⚠️ Limite: Instagram público exige browser (heavy); o profile view mostra captions mas preços podem vir em imagens — Gemini (se `GEMINI_API_KEY`) refina.
+- ⚠️ pm2 caiu durante o teste (sem OOM log explícito) — reiniciado com `pm2 start ecosystem.config.cjs`.
+
+**Nota FASE 8→9:** próximos passos naturais: agendamento recorrente do scan social (repeatable jobs), integração WhatsApp real (sessão), ou painel de histórico de preços.
+
+## 6.9 Status da FASE 9 (concluída) — Agendador do scan social
+
+Transformou o scan social em **repeatable job do BullMQ** (mesmo padrão do scan de e-commerce), com frequência configurável via UI.
+
+| Arquivo | Papel |
+|---|---|
+| `src/database/schema.sql` | Setting `social_scan_interval_ms` (default 6h) |
+| `src/queue/schedulers.ts` | `registerSocialScheduler` (upsert idempotente do `social-scan-cron` na social-queue), `unregisterSocialScheduler`, `listSocialScheduledJob` (usa `key` do scheduler, não `id`) |
+| `src/workers/socialWorker.ts` | `handleSocialScanAll` agora **enfileira um `social-capture` por fonte ativa** (retorna `{sources, enqueued}`); `last_checked_at` é atualizado mesmo quando não há texto/URL válida |
+| `server.ts` | Registro do scheduler no boot; `GET /api/social/settings` (intervalo + scheduler ativo), `PUT /api/social/settings` (altera intervalo e re-registra); `/api/status` agora expõe `nextSocialScanMinutes` |
+| `src/components/SocialTab.tsx` | Seletor de frequência (1h/6h/12h/24h) + indicador "PRÓXIMO SCAN ..." com refresh a cada 60s |
+
+**Testes realizados (2026-08-09):**
+- ✅ Scheduler registrado no boot com default 6h; `PUT` para 1h → `/api/status` retornou `nextSocialScanMinutes: 60`.
+- ✅ Persistência: scheduler listado com `key: social-scan-cron`, `every: 21600000` após revert.
+- ✅ scan-all com 3 fontes (1 IG + 2 WhatsApp) → `returnvalue {sources:3, enqueued:3}`; jobs `social-capture` individuais completaram (Instagram `method: playwright`; WhatsApp sem texto → `reason: sem texto nem URL válida`, sem crash).
+- ✅ `last_checked_at` atualizado em todas as fontes após o scan-all.
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK; 4 processos pm2 online.
+- ✅ Nota: fix em `listSocialScheduledJob` — `getJobSchedulers()` expõe o campo `key`, não `id`.
+
+**Nota FASE 9→10:** próximos passos naturais: painel de histórico de preços (price_history + price_observations), integração WhatsApp real (sessão), ou dedup/mescla de estabelecimentos.
+
+## 6.10 Status da FASE 10 (concluída) — Painel de histórico de preços
+
+Visualização de séries temporais unificadas: **e-commerce** (tabela `price_history`, acumulada por scan) e **local** (`price_observations`, por item + estabelecimento).
+
+| Arquivo | Papel |
+|---|---|
+| `src/lib/priceHistory.ts` | `buildEcommerceEntities`, `buildLocalEntities` (agrupa observações por item→estabelecimento), `computeStats` (atual/mín/máx/média/variação %), `sortPointsByDate`, `filterByRange` |
+| `server.ts` | `GET /api/price-history?rangeDays=N` — séries + stats, com filtro de período aplicado server-side |
+| `src/components/PriceHistoryTab.tsx` | Nova aba com switch E-COMMERCE/LOCAL, dropdown de produto/item, gráfico recharts multi-série, filtros TUDO/7D/30D/90D e cards de estatísticas |
+| `src/App.tsx` | Tab `history` + NavButton (ícone Activity) |
+
+**Testes realizados (2026-08-09):**
+- ✅ Seed: produto `f10-prod` (4 pontos `price_history`), item `f10-item` + est. `f10-est` com 4 `price_observations`; ambos criados via repositórios (FK `profile_id` exige profile real — criado `profile-1`).
+- ✅ `GET /api/price-history?rangeDays=0`: e-commerce 4 pts (variação +22,1%), local item "Café Torrado 500g" @ "Mercado F10" com min 18,9 / max 21 / atual 18,9.
+- ✅ `rangeDays=5` corta pontos antigos (e-commerce 4→3, local 4→2) — filtro server-side OK.
+- ✅ Frontend (Playwright): tela de perfil → aba HISTÓRICO → gráfico e-commerce renderiza (`svg.recharts-surface` = 2, cards ATUAL etc. presentes); escopo LOCAL mostra item + estabelecimento + série. Sem pageerror.
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK.
+- ✅ Dados de teste removidos (produto/item/observações/estabelecimento); perfil `profile-1` preservado.
+
+**Nota FASE 10→11:** próximos passos naturais: integração WhatsApp real (sessão), dedup/mescla de estabelecimentos, ou scraping de preços locais assíncrono.
+
+## 6.11 Status da FASE 11 (concluída) — Scraping de preços locais assíncrono
+
+Coleta automática de preços de itens locais via scraping em background (sem travar o event loop), alimentando `price_observations` (source `scraping`) e, por consequência, o painel de histórico da FASE 10.
+
+| Arquivo | Papel |
+|---|---|
+| `src/database/schema.sql` + `src/database/db.ts` | Coluna `price_url` em `establishments` (URL de busca com `{term}`); migração defensiva via `ensureColumn` (`ALTER TABLE` só quando a coluna falta) — SQLite não tem `ADD COLUMN IF NOT EXISTS` |
+| `src/types.ts`, `src/repositories/types.ts`, `establishmentRepository.ts` | Campo `priceUrl` + mapeamento `price_url` |
+| `src/lib/localPriceScrape.ts` | `buildSearchUrl` (substitui `{term}` ou usa `?q=`), `scrapeItemPrice` (chama `advancedScrape` com chaves do perfil, dedup por item+est+preço com tolerância R$0,01, grava observation com notes=URL), `scanEstablishmentPrices` |
+| `src/queue/types.ts` | `LocalPriceScanJobPayload { type: "local-price-scan", establishmentId?, profileId? }` |
+| `src/workers/scanWorker.ts` | `handleLocalPriceScan` — varre est. específico (ou todos com `price_url`) × todos os itens, retorna `{ establishments, recorded, duplicates, errors, outcomes }` |
+| `server.ts` | `POST /api/local-price-scan` (enfileira na scan-queue, retorna `{ jobId }`) |
+| `src/components/LocalTab.tsx` | Campo "URL DE PREÇO LOCAL" no form de estabelecimento + botão **SCAN PREÇOS** por estabelecimento com spinner e toast do resumo |
+
+**Testes realizados (2026-08-10):**
+- ✅ Migração `price_url` aplicada no banco existente (log `[db] migração: establishments.price_url adicionada`).
+- ✅ URL sem `{term}` recebe `?q=` automaticamente; com `{term}` é substituída (encodeURIComponent).
+- ✅ Servidor fake local (`127.0.0.1:5678`) devolvendo "R$ 12,34": job registrou **2 observações** (`recorded: 2`, method `PLAYWRIGHT_STEALTH_BASIC`).
+- ✅ **Dedup**: re-scan → `recorded: 0, duplicates: 2`, banco mantém 2 linhas.
+- ✅ URL inacessível (example.com 404): falhas capturadas (`errors` contados) **sem crash do worker**.
+- ✅ Integração FASE 10: `price_history` local mostra as observações com fonte `scraping`.
+- ⚠️ Nota: durante o teste, o **pm2 estava vazio** (ambiente reiniciado) — tudo recuperado com `pm2 start ecosystem.config.cjs` (4 processos online).
+- ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK. Dados de teste removidos.
+
+**Nota FASE 11→12:** próximos passos naturais: integração WhatsApp real (sessão), dedup/mescla de estabelecimentos, ou agendador do scan de preços locais (repeatable job, como o social).
+
 
