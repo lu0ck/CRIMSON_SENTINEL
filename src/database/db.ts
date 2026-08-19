@@ -83,6 +83,13 @@ export function getDb(): Database.Database {
   // shopping_list_items: FK opcional para products (FASE 5)
   ensureColumn("shopping_list_items", "product_id", "product_id TEXT");
 
+  // FASE 8+: habilitar social_monitoring por padrão em bancos antigos
+  const smSetting = db.prepare("SELECT value FROM user_settings WHERE key = 'social_monitoring_enabled'").get() as { value: string } | undefined;
+  if (smSetting && smSetting.value === "false") {
+    db.prepare("UPDATE user_settings SET value = 'true' WHERE key = 'social_monitoring_enabled'").run();
+    console.log("[db] migração: social_monitoring_enabled atualizado para true");
+  }
+
   dbInstance = db;
 
   console.log(`[db] SQLite inicializado: ${DB_PATH}`);

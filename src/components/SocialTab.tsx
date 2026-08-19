@@ -375,7 +375,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               <option value={24 * 60 * 60 * 1000}>SCAN A CADA 24H</option>
             </select>
             <button
-              onClick={() => { playSound("click"); scanAll(); }}
+              onClick={() => { playSound("click"); scanAll().catch(() => {}); }}
               disabled={scanning}
               className="hud-button flex items-center gap-2 disabled:opacity-50"
             >
@@ -543,7 +543,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               {waEnabled ? (waReady ? "● CONECTADO" : "○ NÃO AUTENTICADO") : "● DESLIGADO"}
             </span>
             <button
-              onClick={() => { playSound("click"); generateWhatsAppQr(); }}
+              onClick={() => { playSound("click"); generateWhatsAppQr().catch(() => {}); }}
               disabled={waQrLoading}
               className="hud-button flex items-center gap-2 disabled:opacity-50"
               title="Gera/atualiza o QR de conexão"
@@ -552,7 +552,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               {waQrLoading ? "GERANDO..." : "GERAR QR"}
             </button>
             <button
-              onClick={() => { playSound("click"); scanWhatsApp(); }}
+              onClick={() => { playSound("click"); scanWhatsApp().catch(() => {}); }}
               disabled={waScanning || !waReady}
               className="hud-button flex items-center gap-2 disabled:opacity-50"
             >
@@ -610,7 +610,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               {!igEnabled ? "● DESLIGADO" : !igOk ? "● SERVIÇO OFF" : igSessionLoaded ? "● CONECTADO" : "○ SEM SESSÃO"}
             </span>
             <button
-              onClick={() => { playSound("click"); loginInstagram(); }}
+              onClick={() => { playSound("click"); loginInstagram().catch(() => {}); }}
               disabled={igLoginLoading || !igEnabled}
               className="hud-button flex items-center gap-2 disabled:opacity-50"
               title="Faz login no microserviço Python (instagrapi)"
@@ -619,7 +619,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               {igLoginLoading ? "LOGGING..." : "LOGIN"}
             </button>
             <button
-              onClick={() => { playSound("click"); scanInstagram(); }}
+              onClick={() => { playSound("click"); scanInstagram().catch(() => {}); }}
               disabled={igScanning || !igEnabled || !igSessionLoaded}
               className="hud-button flex items-center gap-2 disabled:opacity-50"
             >

@@ -64,9 +64,9 @@ module.exports = {
       // Sobe automaticamente; se usuário não usar Instagram, processo roda idle
       // (consome poucos recursos). Desativar via `pm2 stop crimson-instagram-service`.
       name: "crimson-instagram-service",
-      script: "uvicorn",
+      script: "python_instagram/.venv/bin/uvicorn",
       args: "python_instagram.server:app --host 127.0.0.1 --port 8721",
-      interpreter: "python3",
+      interpreter: "none",
       env: {
         INSTAGRAM_SERVICE_PORT: "8721",
       },

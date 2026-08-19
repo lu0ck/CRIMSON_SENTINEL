@@ -219,7 +219,7 @@ INSERT OR IGNORE INTO user_settings (key, value) VALUES
   ('scan_interval_ms', '43200000'),        -- 12h (igual ao hardcoded atual)
   ('scan_daily_hour', '15'),                 -- 15h (igual ao scheduleDailyScan atual)
   ('scan_timeout_ms', '590000'),            -- 9.83min (igual ao SCAN_TIMEOUT_MS atual)
-  ('social_monitoring_enabled', 'false'),
+  ('social_monitoring_enabled', 'true'),
   ('scrape_cache_ttl_ms', '3600000'),       -- 1h (igual ao CACHE_TTL do scraper)
   ('geolocation_search_radius_m', '5000'),  -- 5km
   ('route_max_stops', '15'),
