@@ -3,6 +3,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
+import { spawn, execSync } from "child_process";
 import {
   sendDiscordNotification,
   sendTelegramNotification,
@@ -1170,7 +1171,75 @@ app.get("/api/status", async (req, res) => {
     // FASE 9: agendador do scan social recorrente.
     const socialIntervalMs = SettingsRepository.getNumber('social_scan_interval_ms') ?? (6 * 60 * 60 * 1000);
     await registerSocialScheduler({ intervalMs: socialIntervalMs });
+
+    // C3 — auto-start Instagram microservice
+    startInstagramService();
   });
 }
 
+let instagramProcess: ReturnType<typeof spawn> | null = null;
+
+function startInstagramService() {
+  if (process.env.INSTAGRAM_ENABLED !== "true") return;
+
+  const appRoot = path.resolve(__dirname, "..");
+  const venvDir = path.join(appRoot, "python_instagram", ".venv");
+  const venvPython = path.join(venvDir, "bin", "python");
+  const venvPip = path.join(venvDir, "bin", "pip");
+  const reqFile = path.join(appRoot, "python_instagram", "requirements.txt");
+
+  if (!fs.existsSync(venvPython)) {
+    safeLog("[instagram] Configurando venv pela primeira vez...");
+    try {
+      execSync(`python3 -m venv "${venvDir}"`, { stdio: "pipe" });
+      execSync(`"${venvPip}" install -q -r "${reqFile}"`, { stdio: "pipe" });
+      safeLog("[instagram] Venv configurado com sucesso");
+    } catch (err: any) {
+      safeLog(`[instagram] Falha ao criar venv: ${err.message}. Instale python3 e tente novamente.`);
+      return;
+    }
+  }
+
+  const uvicorn = path.join(venvDir, "bin", "uvicorn");
+
+  instagramProcess = spawn(uvicorn, [
+    "python_instagram.server:app",
+    "--host", "127.0.0.1",
+    "--port", process.env.INSTAGRAM_SERVICE_PORT || "8721",
+  ], {
+    cwd: appRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+    env: { ...process.env },
+  });
+
+  instagramProcess.stdout?.on("data", (data) => {
+    safeLog(`[instagram] ${data.toString().trim()}`);
+  });
+  instagramProcess.stderr?.on("data", (data) => {
+    safeLog(`[instagram] ${data.toString().trim()}`);
+  });
+  instagramProcess.on("error", (err) => {
+    safeLog(`[instagram] Erro ao iniciar: ${err.message}`);
+    instagramProcess = null;
+  });
+  instagramProcess.on("exit", (code) => {
+    safeLog(`[instagram] Processo encerrado com código ${code}`);
+    instagramProcess = null;
+  });
+
+  safeLog("[instagram] Microserviço iniciado em 127.0.0.1:" + (process.env.INSTAGRAM_SERVICE_PORT || "8721"));
+}
+
+function stopInstagramService() {
+  if (instagramProcess) {
+    instagramProcess.kill("SIGTERM");
+    instagramProcess = null;
+  }
+}
+
 startServer();
+
+// Cleanup: matar processos filhos no shutdown
+process.on("exit", () => stopInstagramService());
+process.on("SIGINT", () => { stopInstagramService(); process.exit(0); });
+process.on("SIGTERM", () => { stopInstagramService(); process.exit(0); });
