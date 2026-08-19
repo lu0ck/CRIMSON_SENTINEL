@@ -313,13 +313,16 @@ export async function advancedScrape(rawUrl: string, options: {
   console.log(`[Scraper] Total strategies: ${strategies.length}`);
   console.log(`[Scraper] Strategy order: ${strategies.map(s => s.name).join(" -> ")}`);
 
+  // Guardar melhor resultado "imperfeito" para usar como fallback
+  let bestFallback: ScrapeResult | null = null;
+
 for (const strategy of strategies) {
     try {
       console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
       
-      // Timeout de 15 segundos por estratégia (reduzido de 30s)
+      // Timeout de 25 segundos por estratégia
       const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error('Strategy timeout (15s)')), 15000);
+        setTimeout(() => reject(new Error('Strategy timeout (25s)')), 25000);
       });
       
       const result = await Promise.race([
@@ -338,15 +341,20 @@ for (const strategy of strategies) {
         continue;
       }
 
-      // Validar se o preço é realista
-      if (!isPriceRealistic(result.price, result.name)) {
-        console.log(`[Scraper] ⚠️ WARNING: Price R$ ${result.price} seems unrealistic for "${result.name?.substring(0, 40)}"`);
-        console.log(`[Scraper] Trying next strategy for confirmation...`);
-        continue;
-      }
-
       // Validar se o nome faz sentido antes de salvar
       if (result.name && result.name.length > 5) {
+        // Validar se o preço é realista
+        if (!isPriceRealistic(result.price, result.name)) {
+          console.log(`[Scraper] ⚠️ WARNING: Price R$ ${result.price} seems unrealistic for "${result.name?.substring(0, 40)}"`);
+          // Guardar como fallback se for o melhor até agora
+          if (!bestFallback || result.price > bestFallback.price) {
+            bestFallback = result;
+            console.log(`[Scraper] Saved as fallback candidate (R$ ${result.price})`);
+          }
+          console.log(`[Scraper] Trying next strategy for confirmation...`);
+          continue;
+        }
+
         console.log(`[Scraper] ✓ SUCCESS with ${strategy.name}: price=${result.price}, name="${result.name?.substring(0, 50) || "N/A"}"`);
 
         // Salvar no cache apenas se tiver dados válidos
@@ -367,6 +375,13 @@ for (const strategy of strategies) {
     console.error(`[Scraper] Error stack:`, error.stack?.split("\n").slice(0, 3).join("\n"));
   }
 }
+
+  // Se todas as estratégias falharam mas temos um fallback, usar ele
+  if (bestFallback) {
+    console.log(`[Scraper] ⚠️ Using best available fallback: R$ ${bestFallback.price} — "${bestFallback.name?.substring(0, 50)}" (${bestFallback.method})`);
+    fs.writeFileSync(cacheFile, JSON.stringify(bestFallback));
+    return bestFallback;
+  }
 
   console.error("[Scraper] ✗✗✗ All strategies failed ✗✗✗");
   console.error("[Scraper] Strategies attempted:", strategies.map(s => s.name).join(", "));
