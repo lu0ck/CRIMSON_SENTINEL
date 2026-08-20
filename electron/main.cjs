@@ -72,7 +72,9 @@ function startServer() {
 function createWindow() {
   const fs = require('fs');
   const iconPath = path.join(app.getAppPath(), 'public', 'icon.png');
-  const iconOptions = fs.existsSync(iconPath) ? { icon: iconPath } : {};
+  const iconSvgPath = path.join(app.getAppPath(), 'public', 'icon.svg');
+  const icon = fs.existsSync(iconPath) ? iconPath : (fs.existsSync(iconSvgPath) ? iconSvgPath : undefined);
+  const iconOptions = icon ? { icon } : {};
 
   mainWindow = new BrowserWindow({
     width: 1280,

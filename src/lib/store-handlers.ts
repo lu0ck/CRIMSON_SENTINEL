@@ -892,9 +892,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 
       if (priceEl) {
         var priceText = priceEl.textContent || "";
-        var isSci = /[eE][+-]?\d+/i.test(priceText);
+        var isSci = /[eE][+-]?\\d+/i.test(priceText);
         if (!isSci) {
-          var numbers = priceText.match(/[\d.,]+/g);
+          var numbers = priceText.match(/[\\d.,]+/g);
           if (numbers && numbers.length >= 2) {
             price = parseFloat(numbers.slice(0, -1).join("").replace(/[.,]/g, "")) + parseFloat(numbers[numbers.length - 1]) / 100;
           } else if (numbers) {
@@ -904,13 +904,13 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       if (!(price > 0 && price < 10000000 && Number.isFinite(price))) {
-        var priceMatches = body.match(/R?\$?\s*[\d.,]+/gi) || [];
+        var priceMatches = body.match(/R?\\$?\\s*[\\d.,]+/gi) || [];
         var prices = [];
         for (var i = 0; i < priceMatches.length; i++) {
           var m = priceMatches[i];
-          var isSciMatch = /[eE][+-]?\d+/i.test(m);
+          var isSciMatch = /[eE][+-]?\\d+/i.test(m);
           if (isSciMatch) continue;
-          var num = m.replace(/[^\d.,]/g, "");
+          var num = m.replace(/[^\\d.,]/g, "");
           var parts = num.split(/[.,]/);
           var parsed = 0;
           if (parts.length >= 2) {
@@ -948,6 +948,291 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 	console.log("[Handler] Ponto extracted: name=\"" + namePreview + "\", price=" + data.price);
     return data;
   },
+
+  "olx.com.br": async (page: Page) => {
+    console.log("[Handler] Using OLX handler");
+
+    await page.waitForTimeout(5000);
+    await page.waitForSelector("h1", { timeout: 10000 }).catch(function() {});
+
+    await page.evaluate(`window.scrollTo(0, 600)`);
+    await page.waitForTimeout(2000);
+
+    const data = await page.evaluate(`
+    (function() {
+      var body = document.body.innerText;
+      var bodyLower = body.toLowerCase();
+
+      function parseBrazilianPrice(text) {
+        if (!text) return 0;
+        text = text.replace(/R\\$\\s?/gi, '').trim();
+        if (/[eE][+-]?\\d+/i.test(text)) return 0;
+        text = text.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
+        var price = parseFloat(text);
+        return isNaN(price) ? 0 : price;
+      }
+
+      function isValidPrice(p) {
+        return p >= 10 && p <= 100000 && Number.isFinite(p);
+      }
+
+      // --- Extrair nome ---
+      var loginKeywords = ['acesse', 'conta', 'login', 'entrar', 'cadastro', 'criar conta', 'entre para'];
+      var name = "";
+
+      // Tentar h1 primeiro
+      var h1 = document.querySelector("h1");
+      if (h1) {
+        var h1Text = (h1.textContent || "").trim();
+        var h1Lower = h1Text.toLowerCase();
+        var isLogin = false;
+        for (var k = 0; k < loginKeywords.length; k++) {
+          if (h1Lower.indexOf(loginKeywords[k]) !== -1) {
+            isLogin = true;
+            break;
+          }
+        }
+        if (!isLogin && h1Text.length > 3) {
+          name = h1Text;
+        }
+      }
+
+      // Fallback: meta og:title
+      if (!name) {
+        var ogTitle = document.querySelector('meta[property="og:title"]');
+        if (ogTitle) {
+          var ogText = (ogTitle.getAttribute("content") || "").trim();
+          if (ogText.length > 3) name = ogText;
+        }
+      }
+
+      // Fallback: document.title (strip " | OLX" suffix)
+      if (!name) {
+        var docTitle = document.title || "";
+        docTitle = docTitle.replace(/\\s*[|–-]\\s*OLX.*$/i, '').trim();
+        if (docTitle.length > 3) name = docTitle;
+      }
+
+      // Fallback: URL slug
+      if (!name) {
+        var pathParts = window.location.pathname.split('/').filter(function(p) { return p.length > 0; });
+        // OLX URLs: /d/produto-name/ID or /ofertas/d/produto-name/ID
+        for (var p = pathParts.length - 1; p >= 0; p--) {
+          var part = pathParts[p];
+          if (/^\\d+$/.test(part)) continue; // skip numeric IDs
+          if (part.length > 3) {
+            name = part.replace(/-/g, ' ');
+            break;
+          }
+        }
+      }
+
+      // --- Extrair preço ---
+      var price = 0;
+
+      // Tentar seletores OLX específicos
+      var priceSelectors = [
+        '[data-ds-component="Money"]',
+        '[class*="price"]',
+        '[class*="Price"]',
+        '[class*="preco"]'
+      ];
+
+      for (var i = 0; i < priceSelectors.length; i++) {
+        var el = document.querySelector(priceSelectors[i]);
+        if (el) {
+          var text = el.textContent || "";
+          var parsed = parseBrazilianPrice(text);
+          if (isValidPrice(parsed)) {
+            price = parsed;
+            break;
+          }
+        }
+      }
+
+      // Fallback: regex no body
+      if (!isValidPrice(price)) {
+        var priceMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
+        var prices = [];
+        for (var i = 0; i < priceMatches.length; i++) {
+          var parsed = parseBrazilianPrice(priceMatches[i]);
+          if (isValidPrice(parsed)) {
+            prices.push(parsed);
+          }
+        }
+        if (prices.length > 0) {
+          prices.sort(function(a, b) { return a - b; });
+          price = prices[0];
+        }
+      }
+
+      price = Math.round(price * 100) / 100;
+
+      var imageEl = document.querySelector('meta[property="og:image"]');
+      var available = bodyLower.indexOf("indisponível") === -1 && bodyLower.indexOf("removido") === -1 && bodyLower.indexOf("expirad") === -1;
+
+      return {
+        name: name,
+        price: price,
+        currency: "BRL",
+        available: available,
+        imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
+      };
+    })()
+    `) as ScrapeResult;
+
+    const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
+    console.log("[Handler] OLX extracted: name=\"" + namePreview + "\", price=" + data.price);
+    return data;
+  },
+
+  "webmotors.com.br": async (page: Page) => {
+    console.log("[Handler] Using WebMotors handler");
+
+    await page.waitForTimeout(6000);
+
+    await page.evaluate(`window.scrollTo(0, 800)`);
+    await page.waitForTimeout(2000);
+
+    const data = await page.evaluate(`
+    (function() {
+      var body = document.body.innerText;
+      var bodyLower = body.toLowerCase();
+
+      function parseBrazilianPrice(text) {
+        if (!text) return 0;
+        text = text.replace(/R\\$\\s?/gi, '').trim();
+        if (/[eE][+-]?\\d+/i.test(text)) return 0;
+        text = text.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
+        var price = parseFloat(text);
+        return isNaN(price) ? 0 : price;
+      }
+
+      function isValidPrice(p) {
+        return p >= 1000 && p <= 1000000 && Number.isFinite(p);
+      }
+
+      // --- Extrair nome ---
+      var name = "";
+
+      // Tentar JSON-LD
+      var ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+      for (var i = 0; i < ldScripts.length; i++) {
+        try {
+          var ld = JSON.parse(ldScripts[i].textContent);
+          if (ld && ld.name) {
+            name = ld.name;
+            break;
+          }
+        } catch(e) {}
+      }
+
+      // Fallback: h1
+      if (!name) {
+        var h1 = document.querySelector("h1");
+        if (h1) {
+          var h1Text = (h1.textContent || "").trim();
+          if (h1Text.length > 3) name = h1Text;
+        }
+      }
+
+      // Fallback: URL slug
+      if (!name) {
+        var pathParts = window.location.pathname.split('/').filter(function(p) { return p.length > 0; });
+        // WebMotors: /comprar/brand/model/version/body/doors/year/id
+        // Pegar os segmentos significativos (ignorar /comprar/ e números)
+        var slugParts = [];
+        for (var p = 0; p < pathParts.length; p++) {
+          var part = pathParts[p];
+          if (part === 'comprar' || part === 'vender' || /^\\d+$/.test(part)) continue;
+          slugParts.push(part);
+        }
+        if (slugParts.length > 0) {
+          name = slugParts.join(' ').replace(/-/g, ' ');
+          // Capitalize first letter of each word
+          name = name.replace(/\\b\\w/g, function(c) { return c.toUpperCase(); });
+        }
+      }
+
+      // Fallback: title
+      if (!name) {
+        var docTitle = document.title || "";
+        docTitle = docTitle.replace(/\\s*[|–-]\\s*WebMotors.*$/i, '').trim();
+        if (docTitle.length > 3) name = docTitle;
+      }
+
+      // --- Extrair preço ---
+      var price = 0;
+
+      // Tentar JSON-LD para preço
+      var ldScripts2 = document.querySelectorAll('script[type="application/ld+json"]');
+      for (var i = 0; i < ldScripts2.length; i++) {
+        try {
+          var ld = JSON.parse(ldScripts2[i].textContent);
+          if (ld && ld.offers && ld.offers.price) {
+            var p = parseFloat(ld.offers.price);
+            if (isValidPrice(p)) {
+              price = p;
+              break;
+            }
+          }
+        } catch(e) {}
+      }
+
+      // Fallback: seletores
+      if (!isValidPrice(price)) {
+        var priceSelectors = [
+          '[class*="price"]',
+          '[class*="Price"]',
+          '[data-testid*="price"]'
+        ];
+        for (var i = 0; i < priceSelectors.length; i++) {
+          var el = document.querySelector(priceSelectors[i]);
+          if (el) {
+            var parsed = parseBrazilianPrice(el.textContent || "");
+            if (isValidPrice(parsed)) {
+              price = parsed;
+              break;
+            }
+          }
+        }
+      }
+
+      // Fallback: regex no body — WebMotors mostra preço como "R$ 85.900"
+      if (!isValidPrice(price)) {
+        var priceMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
+        var prices = [];
+        for (var i = 0; i < priceMatches.length; i++) {
+          var parsed = parseBrazilianPrice(priceMatches[i]);
+          if (isValidPrice(parsed)) {
+            prices.push(parsed);
+          }
+        }
+        if (prices.length > 0) {
+          prices.sort(function(a, b) { return a - b; });
+          price = prices[0];
+        }
+      }
+
+      price = Math.round(price * 100) / 100;
+
+      var imageEl = document.querySelector('meta[property="og:image"]');
+      var available = bodyLower.indexOf("indisponível") === -1 && bodyLower.indexOf("vendido") === -1;
+
+      return {
+        name: name,
+        price: price,
+        currency: "BRL",
+        available: available,
+        imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
+      };
+    })()
+    `) as ScrapeResult;
+
+    const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
+    console.log("[Handler] WebMotors extracted: name=\"" + namePreview + "\", price=" + data.price);
+    return data;
+  },
 };
 
 export function getStoreHandler(url: string): ((page: Page) => Promise<Partial<ScrapeResult>>) | null {
@@ -964,6 +1249,8 @@ export function getStoreHandler(url: string): ((page: Page) => Promise<Partial<S
       'amazon.br': 'amazon.com.br',
       'mercadolivre.com.br': 'mercadolivre.com.br',
       'ml.com.br': 'mercadolivre.com.br',
+      'olx.com.br': 'olx.com.br',
+      'webmotors.com.br': 'webmotors.com.br',
     };
 
     var normalizedDomain = domainAliases[hostname] || hostname;

@@ -164,6 +164,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(false);
   const [isComparing, setIsComparing] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
+  const [scrapeProgress, setScrapeProgress] = useState({ percent: 0, currentEngine: "", strategiesTried: [] as string[] });
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [comparingProduct, setComparingProduct] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -388,6 +389,54 @@ export default function App() {
     }, 60000);
     return () => clearInterval(interval);
   }, []);
+
+  const STRATEGIES = [
+    { name: "PLAYWRIGHT_HANDLER", label: "Playwright Handler", estMs: 8000 },
+    { name: "PLAYWRIGHT_STEALTH_BASIC", label: "Playwright Stealth", estMs: 25000 },
+    { name: "PLAYWRIGHT_BASIC", label: "Playwright Basic", estMs: 25000 },
+    { name: "FETCH_FALLBACK", label: "Fetch Fallback", estMs: 5000 },
+    { name: "GEMINI_FALLBACK", label: "Gemini AI", estMs: 10000 },
+  ];
+
+  // Simulate scrape progress based on elapsed time
+  useEffect(() => {
+    if (!isLoading) {
+      setScrapeProgress({ percent: 0, currentEngine: "", strategiesTried: [] });
+      return;
+    }
+
+    const startTime = Date.now();
+    const interval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      let accumulated = 0;
+      let currentIdx = 0;
+      const tried: string[] = [];
+
+      for (let i = 0; i < STRATEGIES.length; i++) {
+        if (elapsed >= accumulated + STRATEGIES[i].estMs) {
+          tried.push(STRATEGIES[i].name);
+          accumulated += STRATEGIES[i].estMs;
+          currentIdx = i + 1;
+        } else {
+          break;
+        }
+      }
+
+      const basePercent = tried.length / STRATEGIES.length * 100;
+      const nextStrategy = STRATEGIES[Math.min(currentIdx, STRATEGIES.length - 1)];
+      const withinCurrent = elapsed - accumulated;
+      const currentProgress = Math.min(withinCurrent / nextStrategy.estMs, 1) * (100 / STRATEGIES.length);
+      const percent = Math.min(basePercent + currentProgress, 99);
+
+      setScrapeProgress({
+        percent,
+        currentEngine: tried.length < STRATEGIES.length ? nextStrategy.label : "Finalizando...",
+        strategiesTried: tried,
+      });
+    }, 300);
+
+    return () => clearInterval(interval);
+  }, [isLoading]);
 
   const profileProducts = data.products.filter(p => p.profileId === activeProfileId);
   const profileLists = data.lists.filter(l => l.profileId === activeProfileId);
@@ -1964,8 +2013,58 @@ const queued = await response.json();
               </div>
               
               {isLoading && (
-                <div className="text-[10px] font-mono text-crimson animate-pulse text-center">
-                  SCRAPING DATA FROM EXTERNAL NODES...
+                <div className="flex flex-col gap-3 py-2">
+                  {/* Progress bar */}
+                  <div className="flex items-center gap-3">
+                    <div className="flex-1 h-2 bg-crimson/10 overflow-hidden border border-crimson/20">
+                      <motion.div
+                        className="h-full bg-crimson shadow-[0_0_8px_rgba(220,20,60,0.6)]"
+                        animate={{ width: `${scrapeProgress.percent}%` }}
+                        transition={{ duration: 0.3 }}
+                      />
+                    </div>
+                    <span className="text-xs font-mono font-bold text-crimson w-12 text-right">
+                      {Math.round(scrapeProgress.percent)}%
+                    </span>
+                  </div>
+
+                  {/* Current engine */}
+                  {scrapeProgress.currentEngine && (
+                    <div className="flex items-center gap-2">
+                      <Cpu size={10} className="text-crimson animate-pulse" />
+                      <span className="text-[10px] font-mono text-crimson">
+                        ENGINE: {scrapeProgress.currentEngine}
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Strategy checklist */}
+                  <div className="flex flex-col gap-1">
+                    {STRATEGIES.map((s) => {
+                      const tried = scrapeProgress.strategiesTried.includes(s.name);
+                      const isCurrent = scrapeProgress.currentEngine === s.label;
+                      return (
+                        <div key={s.name} className="flex items-center gap-2">
+                          <span className={cn(
+                            "w-3 h-3 flex items-center justify-center text-[8px] font-mono border",
+                            tried ? "text-green-500 border-green-500/50" :
+                            isCurrent ? "text-crimson border-crimson animate-pulse" :
+                            "text-crimson/20 border-crimson/10"
+                          )}>
+                            {tried ? "✓" : isCurrent ? "●" : "○"}
+                          </span>
+                          <span className={cn(
+                            "text-[10px] font-mono",
+                            tried ? "text-green-500/70" :
+                            isCurrent ? "text-crimson" :
+                            "text-crimson/20"
+                          )}>
+                            {s.label}
+                          </span>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>

@@ -25,33 +25,45 @@ let socialQueue: Queue<SocialMonitorJobPayload> | null = null;
 
 export function getScanQueue(): Queue<ScanJobPayload> {
   if (!scanQueue) {
-    scanQueue = new Queue<ScanJobPayload>(QUEUE_NAMES.SCAN, {
-      connection: getRedis(),
-      defaultJobOptions: DEFAULT_JOB_OPTS,
-    });
-    console.log("[queue] scan-queue pronta");
+    try {
+      scanQueue = new Queue<ScanJobPayload>(QUEUE_NAMES.SCAN, {
+        connection: getRedis(),
+        defaultJobOptions: DEFAULT_JOB_OPTS,
+      });
+      console.log("[queue] scan-queue pronta");
+    } catch (err: any) {
+      throw new Error("Redis indisponível — filas desabilitadas. Inicie Redis para usar scan agendado.");
+    }
   }
   return scanQueue;
 }
 
 export function getRouteQueue(): Queue<RouteJobPayload> {
   if (!routeQueue) {
-    routeQueue = new Queue<RouteJobPayload>(QUEUE_NAMES.ROUTE, {
-      connection: getRedis(),
-      defaultJobOptions: DEFAULT_JOB_OPTS,
-    });
-    console.log("[queue] route-queue pronta");
+    try {
+      routeQueue = new Queue<RouteJobPayload>(QUEUE_NAMES.ROUTE, {
+        connection: getRedis(),
+        defaultJobOptions: DEFAULT_JOB_OPTS,
+      });
+      console.log("[queue] route-queue pronta");
+    } catch (err: any) {
+      throw new Error("Redis indisponível — filas desabilitadas. Inicie Redis para usar scan agendado.");
+    }
   }
   return routeQueue;
 }
 
 export function getSocialQueue(): Queue<SocialMonitorJobPayload> {
   if (!socialQueue) {
-    socialQueue = new Queue<SocialMonitorJobPayload>(QUEUE_NAMES.SOCIAL, {
-      connection: getRedis(),
-      defaultJobOptions: DEFAULT_JOB_OPTS,
-    });
-    console.log("[queue] social-monitor-queue pronta");
+    try {
+      socialQueue = new Queue<SocialMonitorJobPayload>(QUEUE_NAMES.SOCIAL, {
+        connection: getRedis(),
+        defaultJobOptions: DEFAULT_JOB_OPTS,
+      });
+      console.log("[queue] social-monitor-queue pronta");
+    } catch (err: any) {
+      throw new Error("Redis indisponível — filas desabilitadas. Inicie Redis para usar scan agendado.");
+    }
   }
   return socialQueue;
 }

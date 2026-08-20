@@ -10,7 +10,13 @@ export async function registerSchedulers(opts?: {
   scanIntervalMs?: number;
   dailyHour?: number;
 }): Promise<void> {
-  const queue = getScanQueue();
+  let queue;
+  try {
+    queue = getScanQueue();
+  } catch {
+    console.warn("[scheduler] Redis indisponível — scan schedulers ignorados");
+    return;
+  }
 
   const intervalMs = opts?.scanIntervalMs ?? 12 * 60 * 60 * 1000; // 12h
   const hour = opts?.dailyHour ?? 15;
@@ -42,7 +48,12 @@ export async function registerSchedulers(opts?: {
 }
 
 export async function unregisterSchedulers(): Promise<void> {
-  const queue = getScanQueue();
+  let queue;
+  try {
+    queue = getScanQueue();
+  } catch {
+    return;
+  }
   for (const id of [REPEAT_DAILY_KEY, REPEAT_INTERVAL_KEY]) {
     try {
       await queue.removeJobScheduler(id);
@@ -55,7 +66,12 @@ export async function unregisterSchedulers(): Promise<void> {
 
 // Utilitário para listar status (usado por /api/status e debug)
 export async function listScheduledJobs() {
-  const queue = getScanQueue();
+  let queue;
+  try {
+    queue = getScanQueue();
+  } catch {
+    return [];
+  }
   const schedulers = await queue.getJobSchedulers();
   return schedulers.map((s) => ({
     id: s.id ?? null,
@@ -74,7 +90,13 @@ export async function listScheduledJobs() {
 export async function registerSocialScheduler(opts?: {
   intervalMs?: number;
 }): Promise<void> {
-  const queue = getSocialQueue();
+  let queue;
+  try {
+    queue = getSocialQueue();
+  } catch {
+    console.warn("[scheduler] Redis indisponível — social scheduler ignorado");
+    return;
+  }
   const intervalMs = opts?.intervalMs ?? 6 * 60 * 60 * 1000; // 6h
 
   // Upsert idempotente: não duplica se já existir e atualiza o intervalo.
@@ -93,7 +115,12 @@ export async function registerSocialScheduler(opts?: {
 }
 
 export async function unregisterSocialScheduler(): Promise<void> {
-  const queue = getSocialQueue();
+  let queue;
+  try {
+    queue = getSocialQueue();
+  } catch {
+    return;
+  }
   try {
     await queue.removeJobScheduler(SOCIAL_SCAN_KEY);
     console.log(`[scheduler] removido ${SOCIAL_SCAN_KEY}`);
@@ -103,7 +130,12 @@ export async function unregisterSocialScheduler(): Promise<void> {
 }
 
 export async function listSocialScheduledJob() {
-  const queue = getSocialQueue();
+  let queue;
+  try {
+    queue = getSocialQueue();
+  } catch {
+    return [];
+  }
   const schedulers = await queue.getJobSchedulers();
   return schedulers.map((s) => ({
     id: (s as any).key ?? null,
