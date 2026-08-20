@@ -18,7 +18,6 @@ export function getRedis(): Redis {
   connection = new IORedis(REDIS_URL, {
     maxRetriesPerRequest: null, // BullMQ exige null
     enableReadyCheck: false,
-    lazyConnect: true, // não conectar imediatamente — evita flood de ECONNREFUSED
     retryStrategy(times) {
       if (times > 5) {
         if (!loggedUnavailable) {
@@ -31,9 +30,6 @@ export function getRedis(): Redis {
       return Math.min(times * 100, 2000);
     },
   });
-
-  // Conectar (lazyConnect: true requer chamada explícita)
-  connection.connect().catch(() => {});
 
   // Silencia erros ECONNREFUSED após desistir de reconectar
   // (erros vêm do TCP layer do Node.js, não só do ioredis)
@@ -57,6 +53,9 @@ export function getRedis(): Redis {
 
   return connection;
 }
+
+// Eagerly start connecting on module load to avoid race condition with isRedisAvailable()
+getRedis();
 
 export async function closeRedis(): Promise<void> {
   if (connection) {

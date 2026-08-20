@@ -299,11 +299,12 @@ export default function App() {
 
   const saveData = async (newData: AppData) => {
     try {
-      await fetch("/api/data", {
+      const response = await fetch("/api/data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newData)
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setData(newData);
     } catch (error) {
       console.error("Failed to save data", error);
@@ -313,11 +314,12 @@ export default function App() {
 
   const saveDataSilent = async (newData: AppData) => {
     try {
-      await fetch("/api/data", {
+      const response = await fetch("/api/data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(newData)
       });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
       setData(newData);
     } catch (error) {
       console.error("Failed to save data", error);
@@ -485,7 +487,6 @@ const deleteComparisonResult = (productId: string, index: number) => {
       return p;
     });
     const newData = { ...data, products: newProducts };
-    setData(newData);
     saveData(newData);
 
     if (selectedProductId === productId) {
@@ -987,7 +988,6 @@ const queued = await response.json();
       });
 
       const newData = { ...data, products: newProducts };
-      setData(newData);
       saveData(newData);
 
       if (results.length > 0) {

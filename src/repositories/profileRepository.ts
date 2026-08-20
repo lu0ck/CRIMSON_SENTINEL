@@ -20,6 +20,13 @@ export const ProfileRepository = {
   saveAll(profiles: Profile[]): void {
     const db = getDb();
     const tx = db.transaction((items: Profile[]) => {
+      const incomingIds = new Set(items.map((p) => p.id));
+      const existing = db.prepare("SELECT id FROM profiles").all() as { id: string }[];
+      for (const row of existing) {
+        if (!incomingIds.has(row.id)) {
+          db.prepare("DELETE FROM profiles WHERE id = ?").run(row.id);
+        }
+      }
       for (const p of items) {
         db.prepare(
           `INSERT INTO profiles (id, name, avatar, email, discord_webhook, telegram_token, telegram_chat_id, gmail_user, gmail_pass, gemini_api_key, lm_studio_url, nvidia_api_key, serper_api_key, tavily_api_key, use_advanced_scraping, refresh_interval)

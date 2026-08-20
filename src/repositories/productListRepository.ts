@@ -20,6 +20,13 @@ export const ProductListRepository = {
   saveAll(lists: ProductList[]): void {
     const db = getDb();
     const tx = db.transaction((items: ProductList[]) => {
+      const incomingIds = new Set(items.map((l) => l.id));
+      const existing = db.prepare("SELECT id FROM product_lists").all() as { id: string }[];
+      for (const row of existing) {
+        if (!incomingIds.has(row.id)) {
+          db.prepare("DELETE FROM product_lists WHERE id = ?").run(row.id);
+        }
+      }
       for (const l of items) {
         db.prepare(
           `INSERT INTO product_lists (id, name, description, profile_id, budget, created_at)
