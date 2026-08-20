@@ -171,6 +171,13 @@ const INVALID_PRODUCT_NAMES = [
   "avaliações", "avaliacoes", "opinião", "opiniao",
   "frete", "entrega", "garantia", "devolução", "devolucao",
   "parcelamento", "à vista", "a vista",
+  // Login/auth texts (OLX, etc)
+  "acesse a sua conta", "acesse sua conta", "entre na sua conta",
+  "criar conta", "criar uma conta", "cadastro", "login", "entrar",
+  "crie sua conta", "acesso à conta", "acesso a conta",
+  "access to this page", "access denied", "page denied",
+  // Generic site names
+  "webmotors", "olx", "mercadolivre", "mercado livre",
 ];
 
 function isProductNameValid(name: string): boolean {

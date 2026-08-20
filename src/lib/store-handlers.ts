@@ -377,14 +377,14 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         if (!text) return 0;
         
         // Remove R$, espaços
-        var clean = text.replace(/R\$\s?/gi, '').trim();
+        var clean = text.replace(/R\\$\\s?/gi, '').trim();
         
         // Verifica notação científica
-        if (/[eE][+-]?\d+/i.test(clean)) return 0;
+        if (/[eE][+-]?\\d+/i.test(clean)) return 0;
         
         // Remove pontos de milhar e troca vírgula por ponto
         // Formato esperado: "1.799,00" ou "1799,00" ou "1799"
-        clean = clean.replace(/\.(?=\d{3})/g, '').replace(',', '.');
+        clean = clean.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
         
         var price = parseFloat(clean);
         return isNaN(price) ? 0 : price;
@@ -432,9 +432,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         
         // Buscar padrões de preço brasileiro no texto
         var patterns = [
-          /R?\$\s*[\d.,]+/gi,
-          /\d{1,3}(?:\.\d{3})*,\d{2}/g,
-          /\d+,\d{2}/g
+          /R?\\$\\s*[\\d.,]+/gi,
+          /\\d{1,3}(?:\\.\\d{3})*,\\d{2}/g,
+          /\\d+,\\d{2}/g
         ];
 
         var allPrices = [];
@@ -511,9 +511,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       var price = 0;
       if (priceEl) {
         var priceText = priceEl.textContent || "";
-        var isSci = /[eE][+-]?\d+/i.test(priceText);
+        var isSci = /[eE][+-]?\\d+/i.test(priceText);
         if (!isSci) {
-          var numbers = priceText.match(/[\d.,]+/g);
+          var numbers = priceText.match(/[\\d.,]+/g);
           if (numbers && numbers.length >= 2) {
             price = parseFloat(numbers.slice(0, -1).join("").replace(/[.,]/g, "")) + parseFloat(numbers[numbers.length - 1]) / 100;
           } else if (numbers) {
@@ -523,13 +523,13 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       if (!(price > 0 && price < 10000000 && Number.isFinite(price))) {
-        var priceMatches = body.match(/R?\$?\s*[\d.,]+/gi) || [];
+        var priceMatches = body.match(/R?\\$?\\s*[\\d.,]+/gi) || [];
         var prices = [];
         for (var i = 0; i < priceMatches.length; i++) {
           var m = priceMatches[i];
-          var isSciMatch = /[eE][+-]?\d+/i.test(m);
+          var isSciMatch = /[eE][+-]?\\d+/i.test(m);
           if (isSciMatch) continue;
-          var num = m.replace(/[^\d.,]/g, "");
+          var num = m.replace(/[^\\d.,]/g, "");
           var parts = num.split(/[.,]/);
           var parsed = 0;
           if (parts.length >= 2) {
@@ -612,9 +612,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       // Função para parsear preço
       function parseBrazilianPrice(text) {
         if (!text) return 0;
-        text = text.replace(/R\$\s?/gi, '').trim();
-        if (/[eE][+-]?\d+/i.test(text)) return 0;
-        text = text.replace(/\.(?=\d{3})/g, '').replace(',', '.');
+        text = text.replace(/R\\$\\s?/gi, '').trim();
+        if (/[eE][+-]?\\d+/i.test(text)) return 0;
+        text = text.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
         var price = parseFloat(text);
         return isNaN(price) ? 0 : price;
       }
@@ -649,7 +649,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
           if (fractionEl && centsEl) {
             var intPart = fractionEl.textContent || "";
             var decPart = centsEl.textContent || "";
-            var fullPrice = intPart.replace(/[^\d]/g, '') + "." + decPart.replace(/[^\d]/g, '');
+            var fullPrice = intPart.replace(/[^\\d]/g, '') + "." + decPart.replace(/[^\\d]/g, '');
             price = parseFloat(fullPrice) || 0;
           } else {
             price = parseBrazilianPrice(text);
@@ -669,9 +669,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 
         // ML usa formato simples: R$ 60,13
         var patterns = [
-          /R\$\s*\d{1,3}(?:\.\d{3})*,\d{2}/g,  // R$ 1.234,56
-          /R\$\s*\d+,\d{2}/g,                    // R$ 60,13
-          /\d{1,3}(?:\.\d{3})*,\d{2}/g           // 1.234,56
+          /R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/g,  // R$ 1.234,56
+          /R\\$\\s*\\d+,\\d{2}/g,                    // R$ 60,13
+          /\\d{1,3}(?:\\.\\d{3})*,\\d{2}/g           // 1.234,56
         ];
 
         var allPrices = [];
@@ -745,9 +745,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       var price = 0;
       if (priceEl) {
         var priceText = priceEl.textContent || "";
-        var isSci = /[eE][+-]?\d+/i.test(priceText);
+        var isSci = /[eE][+-]?\\d+/i.test(priceText);
         if (!isSci) {
-          var numbers = priceText.match(/[\d.,]+/g);
+          var numbers = priceText.match(/[\\d.,]+/g);
           if (numbers && numbers.length >= 2) {
             price = parseFloat(numbers.slice(0, -1).join("").replace(/[.,]/g, "")) + parseFloat(numbers[numbers.length - 1]) / 100;
           } else if (numbers) {
@@ -757,13 +757,13 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       if (!(price > 0 && price < 10000000 && Number.isFinite(price))) {
-        var priceMatches = body.match(/R?\$?\s*[\d.,]+/gi) || [];
+        var priceMatches = body.match(/R?\\$?\\s*[\\d.,]+/gi) || [];
         var prices = [];
         for (var i = 0; i < priceMatches.length; i++) {
           var m = priceMatches[i];
-          var isSciMatch = /[eE][+-]?\d+/i.test(m);
+          var isSciMatch = /[eE][+-]?\\d+/i.test(m);
           if (isSciMatch) continue;
-          var num = m.replace(/[^\d.,]/g, "");
+          var num = m.replace(/[^\\d.,]/g, "");
           var parts = num.split(/[.,]/);
           var parsed = 0;
           if (parts.length >= 2) {
@@ -820,9 +820,9 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       var price = 0;
       if (priceEl) {
         var priceText = priceEl.textContent || "";
-        var isSci = /[eE][+-]?\d+/i.test(priceText);
+        var isSci = /[eE][+-]?\\d+/i.test(priceText);
         if (!isSci) {
-          var numbers = priceText.match(/[\d.,]+/g);
+          var numbers = priceText.match(/[\\d.,]+/g);
           if (numbers && numbers.length >= 2) {
             price = parseFloat(numbers.slice(0, -1).join("").replace(/[.,]/g, "")) + parseFloat(numbers[numbers.length - 1]) / 100;
           } else if (numbers) {
@@ -832,13 +832,13 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       if (!(price > 0 && price < 10000000 && Number.isFinite(price))) {
-        var priceMatches = body.match(/R?\$?\s*[\d.,]+/gi) || [];
+        var priceMatches = body.match(/R?\\$?\\s*[\\d.,]+/gi) || [];
         var prices = [];
         for (var i = 0; i < priceMatches.length; i++) {
           var m = priceMatches[i];
-          var isSciMatch = /[eE][+-]?\d+/i.test(m);
+          var isSciMatch = /[eE][+-]?\\d+/i.test(m);
           if (isSciMatch) continue;
-          var num = m.replace(/[^\d.,]/g, "");
+          var num = m.replace(/[^\\d.,]/g, "");
           var parts = num.split(/[.,]/);
           var parsed = 0;
           if (parts.length >= 2) {
@@ -1114,13 +1114,14 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 
       // --- Extrair nome ---
       var name = "";
+      var siteNames = ["webmotors", "web motors"];
 
       // Tentar JSON-LD
       var ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
       for (var i = 0; i < ldScripts.length; i++) {
         try {
           var ld = JSON.parse(ldScripts[i].textContent);
-          if (ld && ld.name) {
+          if (ld && ld.name && siteNames.indexOf(ld.name.toLowerCase()) === -1) {
             name = ld.name;
             break;
           }
@@ -1132,7 +1133,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         var h1 = document.querySelector("h1");
         if (h1) {
           var h1Text = (h1.textContent || "").trim();
-          if (h1Text.length > 3) name = h1Text;
+          if (h1Text.length > 3 && siteNames.indexOf(h1Text.toLowerCase()) === -1) name = h1Text;
         }
       }
 
@@ -1149,7 +1150,6 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         }
         if (slugParts.length > 0) {
           name = slugParts.join(' ').replace(/-/g, ' ');
-          // Capitalize first letter of each word
           name = name.replace(/\\b\\w/g, function(c) { return c.toUpperCase(); });
         }
       }
@@ -1158,7 +1158,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       if (!name) {
         var docTitle = document.title || "";
         docTitle = docTitle.replace(/\\s*[|–-]\\s*WebMotors.*$/i, '').trim();
-        if (docTitle.length > 3) name = docTitle;
+        if (docTitle.length > 3 && siteNames.indexOf(docTitle.toLowerCase()) === -1) name = docTitle;
       }
 
       // --- Extrair preço ---

@@ -1,5 +1,5 @@
 import { Queue } from "bullmq";
-import { getRedis } from "./connection";
+import { getRedis, isRedisAvailable } from "./connection";
 import type {
   ScanJobPayload,
   RouteJobPayload,
@@ -24,6 +24,7 @@ let routeQueue: Queue<RouteJobPayload> | null = null;
 let socialQueue: Queue<SocialMonitorJobPayload> | null = null;
 
 export function getScanQueue(): Queue<ScanJobPayload> {
+  if (!isRedisAvailable()) throw new Error("Redis indisponível — filas desabilitadas");
   if (!scanQueue) {
     try {
       scanQueue = new Queue<ScanJobPayload>(QUEUE_NAMES.SCAN, {
@@ -39,6 +40,7 @@ export function getScanQueue(): Queue<ScanJobPayload> {
 }
 
 export function getRouteQueue(): Queue<RouteJobPayload> {
+  if (!isRedisAvailable()) throw new Error("Redis indisponível — filas desabilitadas");
   if (!routeQueue) {
     try {
       routeQueue = new Queue<RouteJobPayload>(QUEUE_NAMES.ROUTE, {
@@ -54,6 +56,7 @@ export function getRouteQueue(): Queue<RouteJobPayload> {
 }
 
 export function getSocialQueue(): Queue<SocialMonitorJobPayload> {
+  if (!isRedisAvailable()) throw new Error("Redis indisponível — filas desabilitadas");
   if (!socialQueue) {
     try {
       socialQueue = new Queue<SocialMonitorJobPayload>(QUEUE_NAMES.SOCIAL, {

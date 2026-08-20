@@ -1399,6 +1399,7 @@ const queued = await response.json();
             onClick={() => { playSound('click'); setActiveTab("alerts"); }}
             icon={<Bell size={24} />}
             label="ALERTAS"
+            badge={notificationsCount}
           />
           <NavButton 
             active={activeTab === "social"} 
@@ -2172,20 +2173,25 @@ const queued = await response.json();
   );
 }
 
-function NavButton({ active, onClick, icon, label }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string }) {
+function NavButton({ active, onClick, icon, label, badge }: { active: boolean, onClick: () => void, icon: React.ReactNode, label: string, badge?: number }) {
   return (
     <button 
       onClick={onClick}
       className={cn(
-        "flex flex-col items-center gap-1 transition-all group",
+        "flex flex-col items-center gap-1 transition-all group relative",
         active ? "text-crimson" : "text-crimson/40 hover:text-crimson/70"
       )}
     >
       <div className={cn(
-        "p-2 rounded-lg transition-all",
+        "p-2 rounded-lg transition-all relative",
         active && "bg-crimson/10 shadow-[0_0_15px_rgba(255,0,0,0.3)]"
       )}>
         {icon}
+        {badge !== undefined && badge > 0 && (
+          <span className="absolute -top-1 -right-1 bg-crimson text-white text-[7px] font-bold rounded-full min-w-[14px] h-[14px] flex items-center justify-center px-1 leading-none">
+            {badge > 99 ? "99+" : badge}
+          </span>
+        )}
       </div>
       <span className="text-[8px] font-bold tracking-widest">{label}</span>
     </button>
