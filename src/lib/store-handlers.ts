@@ -307,7 +307,19 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 			}
 		}
 		if (prices.length > 0) {
-			price = Math.max.apply(null, prices);
+			var freqMap: Record<number, number> = {};
+			for (var i = 0; i < prices.length; i++) {
+				freqMap[prices[i]] = (freqMap[prices[i]] || 0) + 1;
+			}
+			var bestPrice = prices[0];
+			var bestFreq = 1;
+			for (var i = 0; i < prices.length; i++) {
+				if ((freqMap[prices[i]] || 0) > bestFreq) {
+					bestFreq = freqMap[prices[i]];
+					bestPrice = prices[i];
+				}
+			}
+			price = bestFreq > 1 ? bestPrice : Math.min.apply(null, prices);
 		}
 	}
 

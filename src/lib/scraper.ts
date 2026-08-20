@@ -312,8 +312,8 @@ export async function advancedScrape(rawUrl: string, options: {
   }
 
   if (!circuitOpen) {
-    // 1. Handler específico da loja (mais rápido)
-    strategies.push({ name: "PLAYWRIGHT_HANDLER", fn: () => scrapeWithPlaywrightStealth(url, options, true) });
+    // 1. Playwright stealth (handler + genérico)
+    strategies.push({ name: "PLAYWRIGHT_STEALTH", fn: () => scrapeWithPlaywrightStealth(url, options) });
 
     // 2. LM Studio (se configurado) - Vision e Text (LOCAL = RÁPIDO)
     if (options.lmStudioUrl) {
@@ -344,7 +344,6 @@ export async function advancedScrape(rawUrl: string, options: {
     // 3a. Fallbacks Playwright (sem IA)
     console.log("[Scraper] Adding basic Playwright fallback strategies");
     strategies.push(
-      { name: "PLAYWRIGHT_STEALTH_BASIC", fn: () => scrapeWithPlaywrightStealth(url, options, false) },
       { name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) }
     );
   }
@@ -365,20 +364,25 @@ export async function advancedScrape(rawUrl: string, options: {
   let bestFallback: ScrapeResult | null = null;
 
 for (const strategy of strategies) {
+    let strategyBrowser: any = null;
     try {
       console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
       
-      // Timeout de 25 segundos por estratégia
+      const strategyPromise = (async () => {
+        const res = await strategy.fn();
+        return res;
+      })();
+
       const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error('Strategy timeout (25s)')), 25000);
+        setTimeout(() => reject(new Error('Strategy timeout (50s)')), 50000);
       });
       
       const result = await Promise.race([
-        strategy.fn(),
+        strategyPromise,
         timeoutPromise
       ]) as ScrapeResult | null;
 
-    if (result && isValidPrice(result.price)) {
+      if (result && isValidPrice(result.price)) {
       result.price = sanitizePrice(result.price);
       result.method = strategy.name;
       result.name = result.name || "";
@@ -709,7 +713,7 @@ const storeHandler = getStoreHandler(url);
 	}
 }
 
-async function scrapeWithPlaywrightStealth(url: string, options: any, useStoreHandler: boolean): Promise<ScrapeResult | null> {
+async function scrapeWithPlaywrightStealth(url: string, options: any): Promise<ScrapeResult | null> {
   const domain = getDomain(url);
   const userAgent = getRandomUserAgent();
   const cookieFile = path.join(COOKIE_DIR, `${domain.replace(/\./g, "_")}.json`);
@@ -823,33 +827,33 @@ await page.waitForTimeout(2000);
 
   let result: Partial<ScrapeResult> = {};
 
-  if (useStoreHandler) {
-    const storeHandler = getStoreHandler(url);
-    if (storeHandler) {
-      console.log("[Playwright] Using store-specific handler for:", domain);
-      try {
-        result = await storeHandler(page);
-        console.log("[Playwright] Handler returned:", JSON.stringify(result));
-        if (!result.name || !result.price || result.price <= 0) {
-          console.log("[Playwright] Handler returned invalid data (name:", result.name, ", price:", result.price, ")");
-          console.log("[Playwright] Returning null to try next strategy");
-          await browser.close();
-          return null;
-        }
-      } catch (e: any) {
-        console.log("[Playwright] Store handler threw error:", e.message || e);
-        await browser.close();
-        return null;
+  // Always try store handler first if available
+  const storeHandler = getStoreHandler(url);
+  if (storeHandler) {
+    console.log("[Playwright] Using store-specific handler for:", domain);
+    try {
+      result = await Promise.race([
+        storeHandler(page),
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Handler timeout (20s)")), 20000))
+      ]);
+      console.log("[Playwright] Handler returned:", JSON.stringify({ name: (result.name || "").substring(0, 50), price: result.price }));
+      if (!result.name || !result.price || result.price <= 0) {
+        console.log("[Playwright] Handler returned invalid data, falling back to generic");
+        result = {};
       }
-    } else {
-      console.log("[Playwright] No store handler for", domain, ", using generic extraction");
+    } catch (e: any) {
+      console.log("[Playwright] Store handler error:", e.message || e);
+      result = {};
     }
+  } else {
+    console.log("[Playwright] No store handler for", domain);
   }
 
-	if (!useStoreHandler && (!result.name || !result.price || result.price <= 0)) {
-		console.log("[Playwright] Using generic extraction");
-		result = await genericPageExtraction(page);
-	}
+  // Generic extraction as fallback if handler didn't get results
+  if (!result.name || !result.price || result.price <= 0) {
+    console.log("[Playwright] Using generic extraction");
+    result = await genericPageExtraction(page);
+  }
 
 	if (!result.name || !result.price || result.price <= 0) {
 		console.log("[Playwright] No valid data extracted");
@@ -949,17 +953,31 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 					}
 				}
 
-				var uniquePrices = [];
-				for (var i = 0; i < allPrices.length; i++) {
-					if (uniquePrices.indexOf(allPrices[i]) === -1) {
-						uniquePrices.push(allPrices[i]);
-					}
+			var uniquePrices = [];
+			for (var i = 0; i < allPrices.length; i++) {
+				if (uniquePrices.indexOf(allPrices[i]) === -1) {
+					uniquePrices.push(allPrices[i]);
 				}
-				uniquePrices.sort(function(a, b) { return a - b; });
+			}
 
-				if (uniquePrices.length > 0) {
-					price = uniquePrices[uniquePrices.length - 1];
+			// Use the most frequently occurring price (not the highest)
+			var freqMap = {};
+			for (var i = 0; i < allPrices.length; i++) {
+				var p = allPrices[i];
+				freqMap[p] = (freqMap[p] || 0) + 1;
+			}
+			var bestFreq = 0;
+			for (var i = 0; i < uniquePrices.length; i++) {
+				if ((freqMap[uniquePrices[i]] || 0) > bestFreq) {
+					bestFreq = freqMap[uniquePrices[i]];
+					price = uniquePrices[i];
 				}
+			}
+			// If no frequency winner, take the lowest (sale price, not "De" price)
+			if (!isValidPrice(price) && uniquePrices.length > 0) {
+				uniquePrices.sort(function(a, b) { return a - b; });
+				price = uniquePrices[0];
+			}
 			}
 
 			price = Math.round(price * 100) / 100;
