@@ -588,8 +588,8 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
   "mercadolivre.com.br": async (page: Page) => {
     console.log("[Handler] Using Mercado Livre handler");
 
-    // Aguardar carregamento completo
-    await page.waitForTimeout(4000);
+    // Aguardar carregamento inicial (reduzido para não estourar o timeout do handler)
+    await page.waitForTimeout(1500);
 
     // Tentar múltiplos seletores
     var selectors = [
@@ -602,7 +602,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 
     for (var i = 0; i < selectors.length; i++) {
       try {
-        await page.waitForSelector(selectors[i], { timeout: 5000 });
+        await page.waitForSelector(selectors[i], { timeout: 2000 });
         console.log("[ML] Found selector: " + selectors[i]);
         break;
       } catch (e) {
@@ -610,11 +610,11 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
     }
 
-    await page.waitForSelector("h1", { timeout: 10000 }).catch(function() {});
+    await page.waitForSelector("h1", { timeout: 5000 }).catch(function() {});
 
 	// Scroll
 	await page.evaluate(`window.scrollTo(0, 500)`);
-	await page.waitForTimeout(2000);
+	await page.waitForTimeout(1000);
 
 	const data = await page.evaluate(`
 	(function() {
@@ -721,8 +721,16 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       var imageEl = document.querySelector('meta[property="og:image"]') || document.querySelector(".ui-pdp-gallery img");
       var available = bodyLower.indexOf("indisponível") === -1 && bodyLower.indexOf("pausadas") === -1;
 
+      // Rejeitar nomes que são apenas o nome do site (ex: "Mercado Libre")
+      var name = nameEl && nameEl.textContent && nameEl.textContent.trim() || "";
+      var siteNames = ["mercado libre", "mercado livre", "mercadolibre"];
+      if (name && siteNames.indexOf(name.toLowerCase().replace(/\\s+/g, " ")) !== -1) {
+        console.log("[ML] Rejecting site name as product name: " + name);
+        name = "";
+      }
+
 	return {
-	name: nameEl && nameEl.textContent && nameEl.textContent.trim() || "",
+	name: name,
 	price: price,
 	currency: "BRL",
 	available: available,
@@ -735,6 +743,108 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 	console.log("[Handler] Mercado Livre extracted: name=\"" + namePreview + "\", price=" + data.price);
     return data;
 },
+
+  "aliexpress.com": async (page: Page) => {
+    console.log("[Handler] Using AliExpress handler");
+
+    // Aguardar conteúdo da página
+    await page.waitForSelector("h1, meta[property='og:title']", { timeout: 10000 }).catch(function() {});
+    await page.waitForTimeout(1500);
+
+    const data = await page.evaluate(`
+    (function() {
+      var body = document.body.innerText;
+      var bodyLower = body.toLowerCase();
+
+      function parseBrazilianPrice(text) {
+        if (!text) return 0;
+        text = text.replace(/R\\$\\s?/gi, '').trim();
+        if (/[eE][+-]?\\d+/i.test(text)) return 0;
+        text = text.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
+        var price = parseFloat(text);
+        return isNaN(price) ? 0 : price;
+      }
+
+      function isValidPrice(p) {
+        return p >= 1 && p <= 100000 && Number.isFinite(p);
+      }
+
+      // --- Extrair nome (rejeitar nome do site) ---
+      var siteNames = ["aliexpress", "aliexpress.com"];
+      function isSiteName(n) {
+        if (!n) return true;
+        return siteNames.indexOf(n.toLowerCase().replace(/\\s+/g, " ")) !== -1;
+      }
+
+      var name = "";
+
+      // Tentar h1 primeiro
+      var h1 = document.querySelector("h1");
+      if (h1) {
+        var h1Text = (h1.textContent || "").trim();
+        if (!isSiteName(h1Text) && h1Text.length > 2) name = h1Text;
+      }
+
+      // Fallback: meta og:title
+      if (!name) {
+        var ogTitle = document.querySelector('meta[property="og:title"]');
+        var ogText = ogTitle ? (ogTitle.getAttribute("content") || "").trim() : "";
+        ogText = ogText.replace(/\\s*[|\\-]\\s*AliExpress.*$/i, "").trim();
+        if (!isSiteName(ogText) && ogText.length > 2) name = ogText;
+      }
+
+      // --- Extrair preço ---
+      var price = 0;
+
+      // 1. meta[itemprop="price"]
+      var metaPrice = document.querySelector('meta[itemprop="price"]');
+      if (metaPrice) {
+        var p = parseFloat(metaPrice.getAttribute("content") || "0");
+        if (isValidPrice(p)) price = p;
+      }
+
+      // 2. .product-price-value
+      if (!isValidPrice(price)) {
+        var priceEl = document.querySelector(".product-price-value");
+        if (priceEl) {
+          var parsed = parseBrazilianPrice(priceEl.textContent || "");
+          if (isValidPrice(parsed)) price = parsed;
+        }
+      }
+
+      // 3. Fallback: regex no body
+      if (!isValidPrice(price)) {
+        var matches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
+        var prices = [];
+        for (var i = 0; i < matches.length; i++) {
+          var parsedBody = parseBrazilianPrice(matches[i]);
+          if (isValidPrice(parsedBody)) prices.push(parsedBody);
+        }
+        if (prices.length > 0) {
+          prices.sort(function(a, b) { return a - b; });
+          price = prices[0];
+        }
+      }
+
+      price = Math.round(price * 100) / 100;
+
+      var imageEl = document.querySelector('meta[property="og:image"]');
+      var available = bodyLower.indexOf("indisponível") === -1 && bodyLower.indexOf("esgotado") === -1;
+
+      return {
+        name: name,
+        price: price,
+        currency: "BRL",
+        available: available,
+        imageUrl: imageEl && imageEl.getAttribute("content") || undefined
+      };
+    })()
+    `) as ScrapeResult;
+
+    const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
+    console.log("[Handler] AliExpress extracted: name=\"" + namePreview + "\", price=" + data.price);
+    return data;
+  },
 
 
   "magazineluiza.com.br": async (page: Page) => {
@@ -1268,6 +1378,8 @@ export function getStoreHandler(url: string): ((page: Page) => Promise<Partial<S
       'amazon.br': 'amazon.com.br',
       'mercadolivre.com.br': 'mercadolivre.com.br',
       'ml.com.br': 'mercadolivre.com.br',
+      'aliexpress.com': 'aliexpress.com',
+      'pt.aliexpress.com': 'aliexpress.com',
       'olx.com.br': 'olx.com.br',
       'webmotors.com.br': 'webmotors.com.br',
     };

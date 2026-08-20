@@ -131,7 +131,14 @@ function isPriceRealistic(price: number, productName?: string): boolean {
           nameLower.includes('3090') || nameLower.includes('3080')) {
         return price >= 3000;
       }
-      return price >= 500;
+      // Placas antigas/baratas (RX 580, GTX 1050, etc) — preço mínimo menor
+      if (nameLower.includes('580') || nameLower.includes('570') || nameLower.includes('590') ||
+          nameLower.includes('1050') || nameLower.includes('1060') || nameLower.includes('1070') ||
+          nameLower.includes('1650') || nameLower.includes('1660') || nameLower.includes('rx 5') ||
+          nameLower.includes('rx 6') || nameLower.includes('arc a')) {
+        return price >= 100;
+      }
+      return price >= 300;
     }
 
     // Storage (SSD, HD, Memória) deve ter preço mínimo razoável
@@ -178,6 +185,7 @@ const INVALID_PRODUCT_NAMES = [
   "access to this page", "access denied", "page denied",
   // Generic site names
   "webmotors", "olx", "mercadolivre", "mercado livre",
+  "mercado libre", "mercadolibre",
   // WebMotors homepage/search phrases
   "encontre o carro que você precisa", "encontre o carro que voce precisa",
   "compre carros novos e usados", "encontre seu carro ideal",
@@ -839,7 +847,7 @@ await page.waitForTimeout(2000);
     try {
       result = await Promise.race([
         storeHandler(page),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Handler timeout (20s)")), 20000))
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Handler timeout (30s)")), 30000))
       ]);
       console.log("[Playwright] Handler returned:", JSON.stringify({ name: (result.name || "").substring(0, 50), price: result.price }));
       if (!result.name || !result.price || result.price <= 0) {

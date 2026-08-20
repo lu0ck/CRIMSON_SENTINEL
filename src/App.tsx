@@ -166,6 +166,7 @@ export default function App() {
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [scrapeProgress, setScrapeProgress] = useState({ percent: 0, currentEngine: "", strategiesTried: [] as string[] });
   const [scrapeResults, setScrapeResults] = useState<{ url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number }[]>([]);
+  const [showNotifPanel, setShowNotifPanel] = useState(false);
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [comparingProduct, setComparingProduct] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -1428,6 +1429,13 @@ const queued = await response.json();
           />
           <div className="mt-auto flex flex-col gap-4">
             <NavButton 
+              active={showNotifPanel}
+              onClick={() => { playSound('click'); setShowNotifPanel(!showNotifPanel); }}
+              icon={<Bell size={24} />}
+              label="LOGS"
+              badge={scrapeResults.length}
+            />
+            <NavButton 
               active={false} 
               onClick={() => { playSound('click'); setActiveProfileId(null); }}
               icon={<User size={24} />}
@@ -1436,64 +1444,108 @@ const queued = await response.json();
           </div>
         </nav>
 
-        {/* Main Content Area */}
-        <main className="flex-1 overflow-y-auto p-8 relative">
-          {/* Scrape Results Notification Bar */}
-          {scrapeResults.length > 0 && (
+        {/* Notification Panel - Slide out from left */}
+        <AnimatePresence>
+          {showNotifPanel && (
             <motion.div
-              initial={{ opacity: 0, y: -20 }}
-              animate={{ opacity: 1, y: 0 }}
-              exit={{ opacity: 0, y: -20 }}
-              className="mb-6 border border-crimson/30 bg-black/60 backdrop-blur-sm rounded-lg overflow-hidden"
+              initial={{ x: -400, opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: -400, opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="w-[420px] border-r border-crimson/30 bg-black/90 backdrop-blur-md flex flex-col z-20 relative overflow-hidden"
             >
-              <div className="flex items-center justify-between px-4 py-2 border-b border-crimson/20 bg-crimson/5">
+              <div className="flex items-center justify-between px-4 py-3 border-b border-crimson/30 bg-crimson/5">
                 <div className="flex items-center gap-2">
-                  <Activity size={14} className="text-crimson" />
+                  <Bell size={16} className="text-crimson" />
                   <span className="text-xs font-mono font-bold text-crimson tracking-widest">
-                    SCRAPE RESULTS ({scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK)
+                    SCRAPE LOG ({scrapeResults.length})
                   </span>
                 </div>
                 <button
-                  onClick={() => setScrapeResults([])}
+                  onClick={() => setShowNotifPanel(false)}
                   className="text-crimson/40 hover:text-crimson transition-colors"
                 >
-                  <X size={14} />
+                  <X size={16} />
                 </button>
               </div>
-              <div className="max-h-48 overflow-y-auto">
-                {scrapeResults.map((r, idx) => {
-                  const shortUrl = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').substring(0, 60);
-                  return (
-                    <div key={idx} className={cn(
-                      "flex items-center gap-3 px-4 py-2 border-b border-crimson/10 last:border-0",
-                      r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
-                    )}>
-                      <span className={cn(
-                        "w-2 h-2 rounded-full flex-shrink-0",
-                        r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
-                      )} />
-                      <div className="flex-1 min-w-0">
-                        <div className="text-[10px] font-mono text-crimson/60 truncate" title={r.url}>
-                          {shortUrl}
+
+              {scrapeResults.length === 0 ? (
+                <div className="flex-1 flex items-center justify-center">
+                  <div className="text-center">
+                    <Bell size={32} className="text-crimson/20 mx-auto mb-2" />
+                    <p className="text-xs font-mono text-crimson/30">NO SCRAPE OPERATIONS YET</p>
+                    <p className="text-[10px] font-mono text-crimson/20 mt-1">Results appear here after scraping</p>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex-1 overflow-y-auto">
+                  {scrapeResults.map((r, idx) => {
+                    const shortUrl = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0] + r.url.split('/').slice(1, 3).join('/').substring(0, 50);
+                    const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
+                    return (
+                      <div key={idx} className={cn(
+                        "border-b border-crimson/10 last:border-0",
+                        r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
+                      )}>
+                        <div className="flex items-center gap-3 px-4 py-3">
+                          <span className={cn(
+                            "w-2.5 h-2.5 rounded-full flex-shrink-0",
+                            r.success ? "bg-green-500 shadow-[0_0_8px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_8px_rgba(255,0,0,0.5)]"
+                          )} />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
+                              {r.method && (
+                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
+                                  {r.method}
+                                </span>
+                              )}
+                            </div>
+                            {r.success ? (
+                              <>
+                                <div className="text-xs font-mono text-white/80 truncate">
+                                  {r.name || "UNKNOWN"}
+                                </div>
+                                <div className="flex items-center gap-3 mt-1">
+                                  <span className="text-sm font-mono font-bold text-green-400">
+                                    R$ {r.price?.toFixed(2)}
+                                  </span>
+                                </div>
+                              </>
+                            ) : (
+                              <div className="text-xs font-mono text-red-400">
+                                {r.error || "Unknown error"}
+                              </div>
+                            )}
+                          </div>
                         </div>
-                        {r.success ? (
-                          <div className="text-xs font-mono text-green-400">
-                            {r.name?.substring(0, 40)} — <span className="text-green-300">R$ {r.price?.toFixed(2)}</span>
-                            {r.method && <span className="text-crimson/40 ml-2">({r.method})</span>}
+                        <div className="px-4 pb-2">
+                          <div className="text-[9px] font-mono text-crimson/30 truncate" title={r.url}>
+                            {shortUrl}
                           </div>
-                        ) : (
-                          <div className="text-xs font-mono text-red-400">
-                            FAILED: {r.error?.substring(0, 60)}
-                          </div>
-                        )}
+                        </div>
                       </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {scrapeResults.length > 0 && (
+                <div className="px-4 py-2 border-t border-crimson/20">
+                  <button
+                    onClick={() => { setScrapeResults([]); playSound('click'); }}
+                    className="w-full text-[10px] font-mono text-crimson/40 hover:text-crimson transition-colors py-1"
+                  >
+                    CLEAR LOG
+                  </button>
+                </div>
+              )}
             </motion.div>
           )}
+        </AnimatePresence>
 
+        {/* Main Content Area */}
+        <main className="flex-1 overflow-y-auto p-8 relative">
           <AnimatePresence mode="wait">
             {activeTab === "dashboard" && (
               <motion.div 
