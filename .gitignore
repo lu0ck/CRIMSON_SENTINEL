@@ -22,3 +22,5 @@ dump.rdb
 python_instagram/.venv/
 # WhatsApp Web session
 .wwebjs_auth/
+python_instagram/__pycache__/
+python_instagram/session.json
