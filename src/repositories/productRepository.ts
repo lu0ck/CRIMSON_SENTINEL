@@ -81,6 +81,15 @@ export const ProductRepository = {
   saveAll(products: Product[]): void {
     const db = getDb();
     const tx = db.transaction((items: Product[]) => {
+      // Deletar produtos que não estão mais na lista (preserva remoteId)
+      const incomingIds = new Set(items.map((p) => p.id));
+      const existing = db.prepare("SELECT id FROM products").all() as { id: string }[];
+      for (const row of existing) {
+        if (!incomingIds.has(row.id)) {
+          db.prepare("DELETE FROM price_history WHERE product_id = ?").run(row.id);
+          db.prepare("DELETE FROM products WHERE id = ?").run(row.id);
+        }
+      }
       for (const p of items) this.save(p);
     });
     tx(products);

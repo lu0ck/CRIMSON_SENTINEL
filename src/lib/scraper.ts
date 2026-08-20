@@ -182,6 +182,10 @@ function isProductNameValid(name: string): boolean {
       return false;
     }
   }
+  // Rejeitar nomes que são preços (ex: "R$ 210.000", "R$8.500")
+  if (/^r\$?\s*[\d.,]+$/.test(lower)) {
+    return false;
+  }
   // Rejeitar nomes muito curtos ou genéricos
   if (lower.split(" ").length < 2 && !/\d/.test(lower)) {
     return false;
@@ -269,8 +273,9 @@ export async function advancedScrape(rawUrl: string, options: {
       console.log(`[Scraper] Cache hit (${Math.round(cacheAge/1000)}s old): ${url.substring(0, 60)}...`);
       const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as ScrapeResult;
       
-      // Validar cache: deve ter preço E nome válidos
-      if (cached && cached.price && cached.price > 0 && cached.name && cached.name.length > 5) {
+      // Validar cache: deve ter preço E nome válidos E realistas
+      if (cached && cached.price && cached.price > 0 && cached.name && cached.name.length > 5
+          && isProductNameValid(cached.name) && isPriceRealistic(cached.price, cached.name)) {
         console.log(`[Scraper] Using cached data: "${cached.name?.substring(0, 30)}" - R$ ${cached.price}`);
         return cached;
       } else {

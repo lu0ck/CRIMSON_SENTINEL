@@ -253,19 +253,67 @@ app.post("/api/scrape", async (req, res) => {
 app.post("/api/compare", async (req, res) => {
   const { productName, profileId } = req.body;
   try {
-    const queue = getScanQueue();
+    const { isRedisAvailable } = await import("./src/queue/connection.ts");
+
+    if (isRedisAvailable()) {
+      const queue = getScanQueue();
+      const jobKey = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const job = await queue.add("compare", {
+        type: "compare",
+        productName,
+        profileId,
+        jobKey,
+      });
+      safeLog(`[compare] enfileirado job ${job.id} para "${productName}"`);
+      res.json({ jobId: job.id, jobKey, status: "queued" });
+      return;
+    }
+
+    // Fallback: comparação direta via Gemini Search (sem Redis)
+    safeLog(`[compare] Redis offline, executando comparação direta para "${productName}"`);
+    const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
+    const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
     const jobKey = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const job = await queue.add("compare", {
-      type: "compare",
-      productName,
-      profileId,
-      jobKey,
+
+    if (!finalApiKey) {
+      res.status(400).json({ error: "Configure a API key do Gemini nas configurações do perfil para usar comparação de mercado." });
+      return;
+    }
+
+    const { GoogleGenAI, Type } = await import("@google/genai");
+    const ai = new GoogleGenAI({ apiKey: finalApiKey });
+    const response = await ai.models.generateContent({
+      model: "gemini-3.6-flash",
+      contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
+      config: {
+        systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
+        FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
+        PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
+        PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
+        Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.`,
+        tools: [{ googleSearch: {} }],
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.ARRAY,
+          items: {
+            type: Type.OBJECT,
+            properties: {
+              site: { type: Type.STRING },
+              price: { type: Type.NUMBER },
+              url: { type: Type.STRING },
+            },
+            required: ["site", "price", "url"],
+          },
+        },
+      },
     });
-    safeLog(`[compare] enfileirado job ${job.id} para "${productName}"`);
-    res.json({ jobId: job.id, jobKey, status: "queued" });
+    const text = response.text || "[]";
+    const results = JSON.parse(text);
+    safeLog(`[compare] comparação direta OK: ${results.length} resultados para "${productName}"`);
+    res.json({ jobId: null, jobKey, status: "direct", returnvalue: { jobKey, results } });
   } catch (error: any) {
-    safeLog("[compare] erro ao enfileirar: " + error.message);
-    res.status(500).json({ error: error.message || "Failed to enqueue compare" });
+    safeLog("[compare] erro: " + error.message);
+    res.status(500).json({ error: error.message || "Failed to compare" });
   }
 });
 

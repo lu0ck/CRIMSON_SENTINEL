@@ -945,12 +945,19 @@ const queued = await response.json();
       }
 
       const queued = await response.json();
-      if (!queued.jobId) throw new Error(queued.error || "Comparison queueing failed");
-
-      // FASE 4: aguarda o worker concluir a comparação via polling
-      const jobResult = await pollJob(queued.jobId, controller.signal, 2000, 590_000);
-      const results = jobResult?.results || [];
-      console.log("MARKET SCAN RESULTS ACQUIRED:", results);
+      
+      let results: any[] = [];
+      if (queued.status === "direct" && queued.returnvalue) {
+        // Comparaçao direta (Redis offline)
+        results = queued.returnvalue.results || [];
+        console.log("MARKET SCAN RESULTS ACQUIRED (direct):", results);
+      } else {
+        if (!queued.jobId) throw new Error(queued.error || "Comparison queueing failed");
+        // FASE 4: aguarda o worker concluir a comparação via polling
+        const jobResult = await pollJob(queued.jobId, controller.signal, 2000, 590_000);
+        results = jobResult?.results || [];
+        console.log("MARKET SCAN RESULTS ACQUIRED:", results);
+      }
 
       setSelectedProductId(currentId => {
         if (currentId === product.id) {
