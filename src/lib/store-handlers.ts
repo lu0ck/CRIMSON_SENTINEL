@@ -747,9 +747,10 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
   "aliexpress.com": async (page: Page) => {
     console.log("[Handler] Using AliExpress handler");
 
-    // Aguardar conteúdo da página
     await page.waitForSelector("h1, meta[property='og:title']", { timeout: 10000 }).catch(function() {});
-    await page.waitForTimeout(1500);
+    await page.waitForTimeout(3000);
+    await page.evaluate(`window.scrollTo(0, 400)`);
+    await page.waitForTimeout(2000);
 
     const data = await page.evaluate(`
     (function() {
@@ -769,7 +770,6 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         return p >= 1 && p <= 100000 && Number.isFinite(p);
       }
 
-      // --- Extrair nome (rejeitar nome do site) ---
       var siteNames = ["aliexpress", "aliexpress.com"];
       function isSiteName(n) {
         if (!n) return true;
@@ -777,15 +777,11 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       var name = "";
-
-      // Tentar h1 primeiro
       var h1 = document.querySelector("h1");
       if (h1) {
         var h1Text = (h1.textContent || "").trim();
         if (!isSiteName(h1Text) && h1Text.length > 2) name = h1Text;
       }
-
-      // Fallback: meta og:title
       if (!name) {
         var ogTitle = document.querySelector('meta[property="og:title"]');
         var ogText = ogTitle ? (ogTitle.getAttribute("content") || "").trim() : "";
@@ -793,36 +789,37 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         if (!isSiteName(ogText) && ogText.length > 2) name = ogText;
       }
 
-      // --- Extrair preço ---
+      // --- Extrair preço BRL ---
       var price = 0;
 
-      // 1. meta[itemprop="price"]
-      var metaPrice = document.querySelector('meta[itemprop="price"]');
-      if (metaPrice) {
-        var p = parseFloat(metaPrice.getAttribute("content") || "0");
-        if (isValidPrice(p)) price = p;
+      // Prioridade 1: regex R$ no body (mais confiável no AliExpress BR)
+      var rMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
+      var rPrices = [];
+      for (var i = 0; i < rMatches.length; i++) {
+        var parsed = parseBrazilianPrice(rMatches[i]);
+        if (isValidPrice(parsed) && parsed >= 5) rPrices.push(parsed);
+      }
+      if (rPrices.length > 0) {
+        rPrices.sort(function(a, b) { return a - b; });
+        price = rPrices[0];
       }
 
-      // 2. .product-price-value
+      // Prioridade 2: meta[itemprop="price"] (mas ignorar se < 10 — provavelmente CNY)
       if (!isValidPrice(price)) {
-        var priceEl = document.querySelector(".product-price-value");
+        var metaPrice = document.querySelector('meta[itemprop="price"]');
+        if (metaPrice) {
+          var p = parseFloat(metaPrice.getAttribute("content") || "0");
+          if (p >= 10 && isValidPrice(p)) price = p;
+        }
+      }
+
+      // Prioridade 3: .product-price-value
+      if (!isValidPrice(price)) {
+        var priceEl = document.querySelector(".product-price-value, [class*='product-price']");
         if (priceEl) {
-          var parsed = parseBrazilianPrice(priceEl.textContent || "");
-          if (isValidPrice(parsed)) price = parsed;
-        }
-      }
-
-      // 3. Fallback: regex no body
-      if (!isValidPrice(price)) {
-        var matches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
-        var prices = [];
-        for (var i = 0; i < matches.length; i++) {
-          var parsedBody = parseBrazilianPrice(matches[i]);
-          if (isValidPrice(parsedBody)) prices.push(parsedBody);
-        }
-        if (prices.length > 0) {
-          prices.sort(function(a, b) { return a - b; });
-          price = prices[0];
+          var text = priceEl.textContent || "";
+          var parsed2 = parseBrazilianPrice(text);
+          if (isValidPrice(parsed2) && parsed2 >= 5) price = parsed2;
         }
       }
 

@@ -1223,8 +1223,22 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeR
   }
 }
 
-async function scrapeWithGemini(url: string, contextText: string, apiKey?: string): Promise<ScrapeResult> {
-  if (!apiKey) throw new Error("GEMINI_API_KEY is required for fallback scraping.");
+function isGeminiRateLimitError(error: any): boolean {
+  if (!error) return false;
+  const message = String(error.message || "");
+  return (
+    error.status === 429 ||
+    error.code === 429 ||
+    message.includes("429") ||
+    message.includes("RESOURCE_EXHAUSTED")
+  );
+}
+
+async function scrapeWithGemini(url: string, contextText: string, apiKey?: string): Promise<ScrapeResult | null> {
+  if (!apiKey) {
+    console.warn("[Gemini] No API key configured, skipping");
+    return null;
+  }
 
   const ai = new GoogleGenAI({ apiKey });
 
@@ -1244,27 +1258,48 @@ CRITICAL PRICE RULES:
 Return ONLY valid JSON, no explanation.`
     : `Extract product info from this URL: ${url}. Return JSON: {name, price (number), currency ("BRL"), available (boolean), imageUrl}.`;
 
-  const response = await ai.models.generateContent({
-    model: "gemini-3.6-flash",
-    contents: prompt,
-    config: {
-      tools: contextText ? [] : [{ urlContext: {} }],
-      responseMimeType: "application/json",
-      responseSchema: {
-        type: Type.OBJECT,
-        properties: {
-          name: { type: Type.STRING },
-          price: { type: Type.NUMBER },
-          currency: { type: Type.STRING },
-          available: { type: Type.BOOLEAN },
-          imageUrl: { type: Type.STRING },
-        },
-        required: ["name", "price", "currency", "available"],
-      },
-    },
-  });
+  const MAX_ATTEMPTS = 2;
 
-  const result = JSON.parse(response.text || "{}");
-  console.log(`[Gemini] Extracted: name="${result.name?.substring(0, 50)}", price=${result.price}`);
-  return result as ScrapeResult;
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    try {
+      const response = await ai.models.generateContent({
+        model: "gemini-3.6-flash",
+        contents: prompt,
+        config: {
+          tools: contextText ? [] : [{ urlContext: {} }],
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              name: { type: Type.STRING },
+              price: { type: Type.NUMBER },
+              currency: { type: Type.STRING },
+              available: { type: Type.BOOLEAN },
+              imageUrl: { type: Type.STRING },
+            },
+            required: ["name", "price", "currency", "available"],
+          },
+        },
+      });
+
+      const result = JSON.parse(response.text || "{}");
+      console.log(`[Gemini] Extracted: name="${result.name?.substring(0, 50)}", price=${result.price}`);
+      return result as ScrapeResult;
+    } catch (error: any) {
+      if (isGeminiRateLimitError(error)) {
+        if (attempt < MAX_ATTEMPTS) {
+          console.warn("[Gemini] ⚠️ Quota 429 - retrying in 3s...");
+          await new Promise((resolve) => setTimeout(resolve, 3000));
+          continue;
+        }
+        console.error("[Gemini] ✗ Quota 429 exhausted - skipping Gemini");
+        console.error("[Gemini] Gemini API quota exceeded (429). Try again later or use another strategy.");
+        return null;
+      }
+      console.error("[Gemini] Error:", error.message || error);
+      return null;
+    }
+  }
+
+  return null;
 }

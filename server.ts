@@ -282,33 +282,59 @@ app.post("/api/compare", async (req, res) => {
 
     const { GoogleGenAI, Type } = await import("@google/genai");
     const ai = new GoogleGenAI({ apiKey: finalApiKey });
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
-      config: {
-        systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
-        FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
-        PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
-        PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
-        Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.`,
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.ARRAY,
-          items: {
-            type: Type.OBJECT,
-            properties: {
-              site: { type: Type.STRING },
-              price: { type: Type.NUMBER },
-              url: { type: Type.STRING },
+    
+    let lastError: any = null;
+    let results: any[] = [];
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      try {
+        const response = await ai.models.generateContent({
+          model: "gemini-3.6-flash",
+          contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
+          config: {
+            systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
+            FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
+            PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
+            PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
+            Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.`,
+            tools: [{ googleSearch: {} }],
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  site: { type: Type.STRING },
+                  price: { type: Type.NUMBER },
+                  url: { type: Type.STRING },
+                },
+                required: ["site", "price", "url"],
+              },
             },
-            required: ["site", "price", "url"],
           },
-        },
-      },
-    });
-    const text = response.text || "[]";
-    const results = JSON.parse(text);
+        });
+        const text = response.text || "[]";
+        results = JSON.parse(text);
+        lastError = null;
+        break;
+      } catch (geminiErr: any) {
+        lastError = geminiErr;
+        const is429 = geminiErr?.status === 429 || geminiErr?.code === 429 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("RESOURCE_EXHAUSTED");
+        if (is429 && attempt < 2) {
+          safeLog(`[compare] ⚠️ Gemini 429 — retrying in 3s (attempt ${attempt}/2)...`);
+          await new Promise(r => setTimeout(r, 3000));
+        } else {
+          break;
+        }
+      }
+    }
+    if (lastError) {
+      const is429 = lastError?.status === 429 || lastError?.code === 429 || String(lastError?.message || "").includes("429");
+      if (is429) {
+        safeLog("[compare] ✗ Gemini quota 429 exhausted — compare indisponível");
+        return res.status(429).json({ error: "Gemini API quota exceeded (429). Try again later." });
+      }
+      throw lastError;
+    }
     safeLog(`[compare] comparação direta OK: ${results.length} resultados para "${productName}"`);
     res.json({ jobId: null, jobKey, status: "direct", returnvalue: { jobKey, results } });
   } catch (error: any) {
@@ -390,21 +416,77 @@ app.get("/api/status", async (req, res) => {
       return res.status(400).json({ error: "productName e currentPrice são obrigatórios" });
     }
     try {
-      const queue = getScanQueue();
-      const job = await queue.add("analyze", {
-        type: "analyze",
-        productName,
-        currentPrice,
-        currency: currency ?? "BRL",
-        profileId,
-        lowestPrice,
-        lowestPriceDate,
-      });
-      safeLog(`[analyze] enfileirado job ${job.id} para "${productName}"`);
-      res.json({ jobId: job.id, status: "queued" });
+      const { isRedisAvailable } = await import("./src/queue/connection.ts");
+      if (isRedisAvailable()) {
+        const queue = getScanQueue();
+        const job = await queue.add("analyze", {
+          type: "analyze",
+          productName,
+          currentPrice,
+          currency: currency ?? "BRL",
+          profileId,
+          lowestPrice,
+          lowestPriceDate,
+        });
+        safeLog(`[analyze] enfileirado job ${job.id} para "${productName}"`);
+        return res.json({ jobId: job.id, status: "queued" });
+      }
+
+      // Fallback: análise direta via Gemini (sem Redis)
+      safeLog(`[analyze] Redis offline, executando análise direta para "${productName}"`);
+      const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
+      const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
+      if (!finalApiKey) {
+        return res.status(400).json({ error: "Configure a API key do Gemini nas configurações do perfil." });
+      }
+
+      const cur = currency || "BRL";
+      const prompt = `Você é um assistente ajudando um amigo a decidir se vale a pena comprar um produto de tecnologia.
+
+Produto: "${productName}"
+Preço Atual: ${cur} ${currentPrice}
+${lowestPrice ? `Menor Preço Registrado: ${cur} ${lowestPrice} (em ${lowestPriceDate})` : "Sem histórico de preços anteriores."}
+
+Responda de forma SIMPLES e DIRETA. NÃO use termos técnicos de bolsa de valores.
+
+**Formato de resposta:**
+VALE A PENA? [Sim/Não/Talvez] - uma frase explicando por quê
+PREÇO JUSTO: ${cur} X.XXX - quanto você pagaria nesse produto
+QUANDO COMPRAR: [Agora/Esperar] - se deve comprar agora ou esperar promoção
+DICA: Uma frase com conselho prático
+${lowestPrice && currentPrice > lowestPrice * 1.1 ? `ATENÇÃO: O preço já foi ${cur} ${lowestPrice}. Se esperar, pode baixar de novo.` : ""}
+Fale de forma natural.`;
+
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: finalApiKey });
+
+      let analysis = "";
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model: "gemini-3.6-flash",
+            contents: prompt,
+          });
+          analysis = response.text || "";
+          break;
+        } catch (geminiErr: any) {
+          const is429 = geminiErr?.status === 429 || String(geminiErr?.message || "").includes("429");
+          if (is429 && attempt < 2) {
+            safeLog(`[analyze] ⚠️ Gemini 429 — retrying in 3s...`);
+            await new Promise(r => setTimeout(r, 3000));
+          } else if (is429) {
+            return res.status(429).json({ error: "Gemini API quota exceeded (429). Try again later." });
+          } else {
+            throw geminiErr;
+          }
+        }
+      }
+
+      safeLog(`[analyze] análise direta OK para "${productName}"`);
+      res.json({ jobId: null, status: "direct", analysis });
     } catch (error: any) {
-      safeLog("[analyze] erro ao enfileirar: " + error.message);
-      res.status(500).json({ error: error.message || "Failed to enqueue analyze" });
+      safeLog("[analyze] erro: " + error.message);
+      res.status(500).json({ error: error.message || "Failed to analyze" });
     }
   });
 
