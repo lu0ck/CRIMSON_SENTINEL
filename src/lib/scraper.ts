@@ -946,7 +946,7 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 				uniquePrices.sort(function(a, b) { return a - b; });
 
 				if (uniquePrices.length > 0) {
-					price = uniquePrices[0];
+					price = uniquePrices[uniquePrices.length - 1];
 				}
 			}
 

@@ -207,6 +207,63 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 (function() {
 	var body = document.body.innerText;
 
+	// 1. Tentar JSON-LD (dados estruturados — mais confiável)
+	var ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+	for (var i = 0; i < ldScripts.length; i++) {
+		try {
+			var ld = JSON.parse(ldScripts[i].textContent);
+			if (ld && ld['@type'] === 'Product' && ld.offers) {
+				var offers = ld.offers;
+				if (offers['@type'] === 'AggregateOffer' && offers.lowPrice) {
+					var p = parseFloat(offers.lowPrice);
+					if (p > 10 && p < 10000000) {
+						var nameEl = document.querySelector("h1") || document.querySelector("title");
+						var imageEl = document.querySelector('meta[property="og:image"]');
+						return {
+							name: nameEl && nameEl.textContent && nameEl.textContent.trim() || "",
+							price: Math.round(p * 100) / 100,
+							currency: offers.priceCurrency || "BRL",
+							available: true,
+							imageUrl: imageEl && imageEl.getAttribute("content") || undefined
+						};
+					}
+				}
+				if (offers['@type'] === 'Offer' && offers.price) {
+					var p = parseFloat(offers.price);
+					if (p > 10 && p < 10000000) {
+						var nameEl = document.querySelector("h1") || document.querySelector("title");
+						var imageEl = document.querySelector('meta[property="og:image"]');
+						return {
+							name: nameEl && nameEl.textContent && nameEl.textContent.trim() || "",
+							price: Math.round(p * 100) / 100,
+							currency: offers.priceCurrency || "BRL",
+							available: offers.availability !== "https://schema.org/OutOfStock",
+							imageUrl: imageEl && imageEl.getAttribute("content") || undefined
+						};
+					}
+				}
+			}
+		} catch(e) {}
+	}
+
+	// 2. Tentar meta tag itemprop="price"
+	var metaPrice = document.querySelector('meta[itemprop="price"]');
+	if (metaPrice) {
+		var p = parseFloat(metaPrice.getAttribute("content") || "0");
+		if (p > 10 && p < 10000000) {
+			var nameEl = document.querySelector("h1") || document.querySelector("title");
+			var imageEl = document.querySelector('meta[property="og:image"]');
+			return {
+				name: nameEl && nameEl.textContent && nameEl.textContent.trim() || "",
+				price: Math.round(p * 100) / 100,
+				currency: "BRL",
+				available: true,
+				imageUrl: imageEl && imageEl.getAttribute("content") || undefined
+			};
+		}
+	}
+
+	// 3. Fallback: CSS selectors + regex
 	var priceEl =
 		document.querySelector(".product-price .value") ||
 		document.querySelector("#blocoValores .value") ||
@@ -229,7 +286,8 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 		}
 	}
 
-	if (!(price > 0 && price < 10000000 && Number.isFinite(price))) {
+	// Se preço do CSS selector é inválido (< 10 ou > 10M), usar regex no body
+	if (!(price > 10 && price < 10000000 && Number.isFinite(price))) {
 		var priceMatches = body.match(/R?\\$?\\s*[\\d.,]+/gi) || [];
 		var prices = [];
 		for (var i = 0; i < priceMatches.length; i++) {
@@ -244,12 +302,12 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 			} else {
 				parsed = parseFloat(num) || 0;
 			}
-			if (parsed > 0 && parsed < 10000000 && Number.isFinite(parsed)) {
+			if (parsed > 10 && parsed < 10000000 && Number.isFinite(parsed)) {
 				prices.push(parsed);
 			}
 		}
 		if (prices.length > 0) {
-			price = Math.min.apply(null, prices);
+			price = Math.max.apply(null, prices);
 		}
 	}
 
