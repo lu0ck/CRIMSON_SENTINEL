@@ -178,6 +178,11 @@ const INVALID_PRODUCT_NAMES = [
   "access to this page", "access denied", "page denied",
   // Generic site names
   "webmotors", "olx", "mercadolivre", "mercado livre",
+  // WebMotors homepage/search phrases
+  "encontre o carro que você precisa", "encontre o carro que voce precisa",
+  "compre carros novos e usados", "encontre seu carro ideal",
+  // AliExpress generic
+  "aliexpress", "alibaba",
 ];
 
 function isProductNameValid(name: string): boolean {

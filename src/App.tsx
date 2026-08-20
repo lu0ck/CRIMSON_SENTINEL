@@ -165,6 +165,7 @@ export default function App() {
   const [isComparing, setIsComparing] = useState(false);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [scrapeProgress, setScrapeProgress] = useState({ percent: 0, currentEngine: "", strategiesTried: [] as string[] });
+  const [scrapeResults, setScrapeResults] = useState<{ url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number }[]>([]);
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [comparingProduct, setComparingProduct] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -390,12 +391,18 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  // Auto-dismiss scrape results after 30 seconds
+  useEffect(() => {
+    if (scrapeResults.length === 0) return;
+    const timer = setTimeout(() => setScrapeResults([]), 30000);
+    return () => clearTimeout(timer);
+  }, [scrapeResults]);
+
   const STRATEGIES = [
-    { name: "PLAYWRIGHT_HANDLER", label: "Playwright Handler", estMs: 8000 },
-    { name: "PLAYWRIGHT_STEALTH_BASIC", label: "Playwright Stealth", estMs: 25000 },
+    { name: "PLAYWRIGHT_STEALTH", label: "Playwright Stealth", estMs: 30000 },
     { name: "PLAYWRIGHT_BASIC", label: "Playwright Basic", estMs: 25000 },
     { name: "FETCH_FALLBACK", label: "Fetch Fallback", estMs: 5000 },
-    { name: "GEMINI_FALLBACK", label: "Gemini AI", estMs: 10000 },
+    { name: "GEMINI_FALLBACK", label: "Gemini AI", estMs: 15000 },
   ];
 
   // Simulate scrape progress based on elapsed time
@@ -749,6 +756,7 @@ const deleteComparisonResult = (productId: string, index: number) => {
     
     let successCount = 0;
     let failCount = 0;
+    const batchResults: typeof scrapeResults = [];
 
     try {
       const concurrencyLimit = 5; // Increased concurrency
@@ -815,6 +823,7 @@ const queued = await response.json();
       } else if (saveResult.action === "updated") {
         console.log(`Product price updated: ${product.name}`);
       }
+      batchResults.push({ url, success: true, name: info.name, price: info.price, method: info.method, timestamp: Date.now() });
       return product;
     }
     if (!queued.jobId) throw new Error(queued.error || "Scrape queueing failed");
@@ -858,6 +867,7 @@ const queued = await response.json();
       console.log(`Product price updated: ${product.name}`);
     }
     
+    batchResults.push({ url, success: true, name: info?.name, price: info?.price, method: info?.method, timestamp: Date.now() });
     return product;
     } catch (error: any) {
       clearTimeout(timeoutId);
@@ -867,11 +877,13 @@ const queued = await response.json();
       } else if (error.name === 'AbortError') {
         console.error(`Scrape timed out for ${url}`);
         addToast(`TIMEOUT: ${url.substring(0, 30)}...`, "error");
+        batchResults.push({ url, success: false, error: "Timeout (60s)", timestamp: Date.now() });
       } else {
         console.error(`Failed to scrape ${url}:`, error);
         const errorMsg = error.message || "Falha no scraping";
         const errorDetails = error.details || error.fullError || error.stack || "Sem detalhes";
         addToast(`ERRO: ${errorMsg}`, "error", errorDetails);
+        batchResults.push({ url, success: false, error: errorMsg, timestamp: Date.now() });
       }
       failCount++;
       return null;
@@ -891,6 +903,7 @@ const queued = await response.json();
       if (!controller.signal.aborted) {
         setNewUrls([""]);
         setIsAddingProduct(false);
+        setScrapeResults(batchResults);
         setSystemMessage(`SEQUENCE COMPLETE: ${successCount} ACQUIRED, ${failCount} FAILED`);
         if (successCount > 0) addToast(`${successCount} TARGETS LOGGED TO ARCHIVE`, "success");
         if (failCount > 0) addToast(`${failCount} TARGETS FAILED TO RESOLVE`, "error");
@@ -1425,6 +1438,62 @@ const queued = await response.json();
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto p-8 relative">
+          {/* Scrape Results Notification Bar */}
+          {scrapeResults.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: -20 }}
+              animate={{ opacity: 1, y: 0 }}
+              exit={{ opacity: 0, y: -20 }}
+              className="mb-6 border border-crimson/30 bg-black/60 backdrop-blur-sm rounded-lg overflow-hidden"
+            >
+              <div className="flex items-center justify-between px-4 py-2 border-b border-crimson/20 bg-crimson/5">
+                <div className="flex items-center gap-2">
+                  <Activity size={14} className="text-crimson" />
+                  <span className="text-xs font-mono font-bold text-crimson tracking-widest">
+                    SCRAPE RESULTS ({scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK)
+                  </span>
+                </div>
+                <button
+                  onClick={() => setScrapeResults([])}
+                  className="text-crimson/40 hover:text-crimson transition-colors"
+                >
+                  <X size={14} />
+                </button>
+              </div>
+              <div className="max-h-48 overflow-y-auto">
+                {scrapeResults.map((r, idx) => {
+                  const shortUrl = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').substring(0, 60);
+                  return (
+                    <div key={idx} className={cn(
+                      "flex items-center gap-3 px-4 py-2 border-b border-crimson/10 last:border-0",
+                      r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
+                    )}>
+                      <span className={cn(
+                        "w-2 h-2 rounded-full flex-shrink-0",
+                        r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
+                      )} />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-[10px] font-mono text-crimson/60 truncate" title={r.url}>
+                          {shortUrl}
+                        </div>
+                        {r.success ? (
+                          <div className="text-xs font-mono text-green-400">
+                            {r.name?.substring(0, 40)} — <span className="text-green-300">R$ {r.price?.toFixed(2)}</span>
+                            {r.method && <span className="text-crimson/40 ml-2">({r.method})</span>}
+                          </div>
+                        ) : (
+                          <div className="text-xs font-mono text-red-400">
+                            FAILED: {r.error?.substring(0, 60)}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </motion.div>
+          )}
+
           <AnimatePresence mode="wait">
             {activeTab === "dashboard" && (
               <motion.div 

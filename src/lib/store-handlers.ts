@@ -1101,6 +1101,13 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
   "webmotors.com.br": async (page: Page) => {
     console.log("[Handler] Using WebMotors handler");
 
+    const urlPath = new URL(page.url()).pathname;
+    const isHomepage = urlPath === "/" || urlPath === "" || urlPath.split("/").filter(Boolean).length < 2;
+    if (isHomepage) {
+      console.log("[Handler] WebMotors: URL is homepage, not a product page");
+      return { name: "", price: 0, currency: "BRL", available: false };
+    }
+
     await page.waitForTimeout(6000);
 
     await page.evaluate(`window.scrollTo(0, 800)`);
