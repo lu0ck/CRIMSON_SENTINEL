@@ -103,19 +103,25 @@ export function isScientificNotation(text: string): boolean {
 }
 
 function isPriceRealistic(price: number, productName?: string): boolean {
-  // Preços devem estar entre R$ 10 e R$ 100.000
+  // Preços devem estar entre R$ 10 e R$ 5.000.000
   if (price < 10 || price > 5000000) {
     return false;
   }
 
-  // Verificar se nome contém indicadores de categorias de produtos
   if (productName) {
     const nameLower = productName.toLowerCase();
+
+    // Cap geral para produtos que NÃO são veículos/imóveis
+    const expensiveKeywords = ['carro', 'veículo', 'veiculo', 'automóvel', 'automovel', 'moto', 'barco', 'embarcação', 'imóvel', 'imovel', 'apartamento', 'casa', 'terreno', 'veleiro', 'ian', 'ia'];
+    const isExpensive = expensiveKeywords.some(k => nameLower.includes(k));
+    if (!isExpensive && price > 50000) {
+      return false;
+    }
 
     // Placas-mãe devem ter preço mínimo de R$ 200
     if (nameLower.includes('placa mae') || nameLower.includes('placa-mãe') || 
         nameLower.includes('motherboard') || nameLower.includes('placa mãe')) {
-      return price >= 200;
+      return price >= 200 && price <= 15000;
     }
 
     // Placas de vídeo e processadores premium devem ter preço mínimo maior
@@ -129,16 +135,16 @@ function isPriceRealistic(price: number, productName?: string): boolean {
           nameLower.includes('4070') || nameLower.includes('4070 ti') ||
           nameLower.includes('7800') || nameLower.includes('6950') ||
           nameLower.includes('3090') || nameLower.includes('3080')) {
-        return price >= 3000;
+        return price >= 3000 && price <= 30000;
       }
       // Placas antigas/baratas (RX 580, GTX 1050, etc) — preço mínimo menor
       if (nameLower.includes('580') || nameLower.includes('570') || nameLower.includes('590') ||
           nameLower.includes('1050') || nameLower.includes('1060') || nameLower.includes('1070') ||
           nameLower.includes('1650') || nameLower.includes('1660') || nameLower.includes('rx 5') ||
           nameLower.includes('rx 6') || nameLower.includes('arc a')) {
-        return price >= 100;
+        return price >= 100 && price <= 20000;
       }
-      return price >= 300;
+      return price >= 300 && price <= 30000;
     }
 
     // Storage (SSD, HD, Memória) deve ter preço mínimo razoável
@@ -146,19 +152,32 @@ function isPriceRealistic(price: number, productName?: string): boolean {
         nameLower.includes('memória') || nameLower.includes('memoria') ||
         nameLower.includes('pendrive') || nameLower.includes('ddr') ||
         nameLower.includes('ram')) {
-      return price >= 50;
+      return price >= 50 && price <= 10000;
     }
 
     // Monitores e TVs devem ter preço mínimo
     if (nameLower.includes('monitor') || nameLower.includes('tv ') ||
         nameLower.includes('televisão')) {
-      return price >= 150;
+      return price >= 150 && price <= 30000;
     }
 
     // Periféricos (teclado, mouse, headset) devem ter preço mínimo
     if (nameLower.includes('teclado') || nameLower.includes('mouse') ||
         nameLower.includes('headset') || nameLower.includes('fone')) {
-      return price >= 20;
+      return price >= 20 && price <= 5000;
+    }
+
+    // Roupas, acessórios, banho — não pode custar mais que R$ 5000
+    if (nameLower.includes('cueca') || nameLower.includes('calça') || nameLower.includes('camisa') ||
+        nameLower.includes('bermuda') || nameLower.includes('kit ') || nameLower.includes('algodão') ||
+        nameLower.includes('roupa') || nameLower.includes('vestido')) {
+      return price >= 10 && price <= 5000;
+    }
+
+    // Celulares e tablets
+    if (nameLower.includes('celular') || nameLower.includes('iphone') || nameLower.includes('samsung') ||
+        nameLower.includes('xiaomi') || nameLower.includes('ipad') || nameLower.includes('tablet')) {
+      return price >= 100 && price <= 15000;
     }
   }
 
@@ -387,7 +406,7 @@ for (const strategy of strategies) {
       })();
 
       const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error('Strategy timeout (50s)')), 50000);
+        setTimeout(() => reject(new Error('Strategy timeout (90s)')), 90000);
       });
       
       const result = await Promise.race([
@@ -795,7 +814,7 @@ await page.route("**/*.{woff,woff2,ttf,otf}", function(route) { route.abort(); }
     console.log("[Playwright] Navigating to URL...");
     const isAliExpress = domain.includes("aliexpress");
     const response = await page.goto(url, {
-      waitUntil: isAliExpress ? "networkidle" : "domcontentloaded",
+      waitUntil: "domcontentloaded",
       timeout: isAliExpress ? 60000 : 45000,
     });
 
@@ -851,7 +870,7 @@ await page.waitForTimeout(2000);
     try {
       result = await Promise.race([
         storeHandler(page),
-        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Handler timeout (30s)")), 30000))
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Handler timeout (60s)")), 60000))
       ]);
       console.log("[Playwright] Handler returned:", JSON.stringify({ name: (result.name || "").substring(0, 50), price: result.price }));
       if (!result.name || !result.price || result.price <= 0) {

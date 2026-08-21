@@ -347,7 +347,8 @@ app.post("/api/compare", async (req, res) => {
           max_tokens: 800,
           temperature: 0,
         });
-        const text = response.choices[0]?.message?.content || "[]";
+        const rawText = response.choices[0]?.message?.content || "[]";
+        const text = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
         const jsonMatch = text.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           results = JSON.parse(jsonMatch[0]);

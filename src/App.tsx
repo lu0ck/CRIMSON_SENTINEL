@@ -797,7 +797,7 @@ const deleteComparisonResult = (productId: string, index: number) => {
     const batchResults: typeof scrapeResults = [];
 
     try {
-      const concurrencyLimit = 5; // Increased concurrency
+      const concurrencyLimit = 2;
       
       for (let i = 0; i < urls.length; i += concurrencyLimit) {
         if (controller.signal.aborted) break;
