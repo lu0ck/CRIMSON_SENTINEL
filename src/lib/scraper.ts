@@ -915,7 +915,7 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 			}
 
 			function isValidPrice(p) {
-				return p >= 10 && p <= 100000 && Number.isFinite(p);
+				return p >= 10 && p <= 5000000 && Number.isFinite(p);
 			}
 
 			var priceSelectors = [
@@ -973,23 +973,52 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 				}
 			}
 
-			// Use the most frequently occurring price (not the highest)
-			var freqMap = {};
-			for (var i = 0; i < allPrices.length; i++) {
-				var p = allPrices[i];
-				freqMap[p] = (freqMap[p] || 0) + 1;
-			}
-			var bestFreq = 0;
-			for (var i = 0; i < uniquePrices.length; i++) {
-				if ((freqMap[uniquePrices[i]] || 0) > bestFreq) {
-					bestFreq = freqMap[uniquePrices[i]];
-					price = uniquePrices[i];
+			// Prefer "Por R$" prices (current sale price) over "De R$" prices (old price)
+			var porPrices = [];
+			var bodyLines = body.split(/\n/);
+			for (var i = 0; i < bodyLines.length; i++) {
+				var line = bodyLines[i];
+				if (/\bpor\b/i.test(line) && /\$/.test(line)) {
+					var parsed = parseBrazilianPrice(line);
+					if (isValidPrice(parsed)) {
+						porPrices.push(parsed);
+					}
 				}
 			}
-			// If no frequency winner, take the lowest (sale price, not "De" price)
-			if (!isValidPrice(price) && uniquePrices.length > 0) {
-				uniquePrices.sort(function(a, b) { return a - b; });
-				price = uniquePrices[0];
+			if (porPrices.length > 0) {
+				// Take the most frequent "Por" price, or the lowest
+				var porFreqMap = {};
+				for (var i = 0; i < porPrices.length; i++) {
+					porFreqMap[porPrices[i]] = (porFreqMap[porPrices[i]] || 0) + 1;
+				}
+				var bestPorPrice = porPrices[0];
+				var bestPorFreq = 1;
+				for (var i = 0; i < porPrices.length; i++) {
+					if ((porFreqMap[porPrices[i]] || 0) > bestPorFreq) {
+						bestPorFreq = porFreqMap[porPrices[i]];
+						bestPorPrice = porPrices[i];
+					}
+				}
+				price = bestPorFreq > 1 ? bestPorPrice : Math.min.apply(null, porPrices);
+			} else {
+				// Fallback: Use the most frequently occurring price (not the highest)
+				var freqMap = {};
+				for (var i = 0; i < allPrices.length; i++) {
+					var p = allPrices[i];
+					freqMap[p] = (freqMap[p] || 0) + 1;
+				}
+				var bestFreq = 0;
+				for (var i = 0; i < uniquePrices.length; i++) {
+					if ((freqMap[uniquePrices[i]] || 0) > bestFreq) {
+						bestFreq = freqMap[uniquePrices[i]];
+						price = uniquePrices[i];
+					}
+				}
+				// If no frequency winner, take the lowest (sale price, not "De" price)
+				if (!isValidPrice(price) && uniquePrices.length > 0) {
+					uniquePrices.sort(function(a, b) { return a - b; });
+					price = uniquePrices[0];
+				}
 			}
 			}
 

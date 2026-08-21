@@ -307,19 +307,45 @@ export const storeHandlers: Record<string, (page: Page) => Promise<Partial<Scrap
 			}
 		}
 		if (prices.length > 0) {
-			var freqMap: Record<number, number> = {};
-			for (var i = 0; i < prices.length; i++) {
-				freqMap[prices[i]] = (freqMap[prices[i]] || 0) + 1;
-			}
-			var bestPrice = prices[0];
-			var bestFreq = 1;
-			for (var i = 0; i < prices.length; i++) {
-				if ((freqMap[prices[i]] || 0) > bestFreq) {
-					bestFreq = freqMap[prices[i]];
-					bestPrice = prices[i];
+			// Prefer "Por R$" prices (current sale price) over "De R$" (old price)
+			var porPrices = [];
+			var bodyLines = body.split(/\n/);
+			for (var i = 0; i < bodyLines.length; i++) {
+				var line = bodyLines[i];
+				if (/\bpor\b/i.test(line) && /\$/.test(line)) {
+					var linePrices = line.match(/R?\\$?\\s*[\\d.,]+/gi) || [];
+					for (var j = 0; j < linePrices.length; j++) {
+						var lp = linePrices[j].replace(/[^\\d.,]/g, "");
+						var lpParts = lp.split(/[.,]/);
+						var lpParsed = 0;
+						if (lpParts.length >= 2) {
+							lpParsed = parseFloat(lpParts.slice(0, -1).join("")) + parseFloat(lpParts[lpParts.length - 1]) / 100;
+						} else {
+							lpParsed = parseFloat(lp) || 0;
+						}
+						if (lpParsed > 10 && lpParsed < 10000000 && Number.isFinite(lpParsed)) {
+							porPrices.push(lpParsed);
+						}
+					}
 				}
 			}
-			price = bestFreq > 1 ? bestPrice : Math.min.apply(null, prices);
+			if (porPrices.length > 0) {
+				price = Math.min.apply(null, porPrices);
+			} else {
+				var freqMap = {};
+				for (var i = 0; i < prices.length; i++) {
+					freqMap[prices[i]] = (freqMap[prices[i]] || 0) + 1;
+				}
+				var bestPrice = prices[0];
+				var bestFreq = 1;
+				for (var i = 0; i < prices.length; i++) {
+					if ((freqMap[prices[i]] || 0) > bestFreq) {
+						bestFreq = freqMap[prices[i]];
+						bestPrice = prices[i];
+					}
+				}
+				price = bestFreq > 1 ? bestPrice : Math.min.apply(null, prices);
+			}
 		}
 	}
 

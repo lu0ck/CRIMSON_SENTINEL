@@ -273,68 +273,98 @@ app.post("/api/compare", async (req, res) => {
     safeLog(`[compare] Redis offline, executando comparação direta para "${productName}"`);
     const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
     const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
+    const nvidiaApiKey = profile?.nvidiaApiKey;
     const jobKey = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 
-    if (!finalApiKey) {
-      res.status(400).json({ error: "Configure a API key do Gemini nas configurações do perfil para usar comparação de mercado." });
-      return;
-    }
-
-    const { GoogleGenAI, Type } = await import("@google/genai");
-    const ai = new GoogleGenAI({ apiKey: finalApiKey });
-    
-    let lastError: any = null;
+    // 1. Try Gemini first
     let results: any[] = [];
-    for (let attempt = 1; attempt <= 2; attempt++) {
-      try {
-        const response = await ai.models.generateContent({
-          model: "gemini-3.6-flash",
-          contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
-          config: {
-            systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
-            FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
-            PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
-            PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
-            Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.`,
-            tools: [{ googleSearch: {} }],
-            responseMimeType: "application/json",
-            responseSchema: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  site: { type: Type.STRING },
-                  price: { type: Type.NUMBER },
-                  url: { type: Type.STRING },
+    let geminiFailed = false;
+    if (finalApiKey) {
+      const { GoogleGenAI, Type } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: finalApiKey });
+      
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        try {
+          const response = await ai.models.generateContent({
+            model: "gemini-3.6-flash",
+            contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
+            config: {
+              systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
+              FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
+              PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
+              PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
+              Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.`,
+              tools: [{ googleSearch: {} }],
+              responseMimeType: "application/json",
+              responseSchema: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    site: { type: Type.STRING },
+                    price: { type: Type.NUMBER },
+                    url: { type: Type.STRING },
+                  },
+                  required: ["site", "price", "url"],
                 },
-                required: ["site", "price", "url"],
               },
             },
-          },
-        });
-        const text = response.text || "[]";
-        results = JSON.parse(text);
-        lastError = null;
-        break;
-      } catch (geminiErr: any) {
-        lastError = geminiErr;
-        const is429 = geminiErr?.status === 429 || geminiErr?.code === 429 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("RESOURCE_EXHAUSTED");
-        if (is429 && attempt < 2) {
-          safeLog(`[compare] ⚠️ Gemini 429 — retrying in 3s (attempt ${attempt}/2)...`);
-          await new Promise(r => setTimeout(r, 3000));
-        } else {
+          });
+          const text = response.text || "[]";
+          results = JSON.parse(text);
           break;
+        } catch (geminiErr: any) {
+          const is429 = geminiErr?.status === 429 || geminiErr?.code === 429 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("RESOURCE_EXHAUSTED");
+          if (is429 && attempt < 2) {
+            safeLog(`[compare] ⚠️ Gemini 429 — retrying in 3s (attempt ${attempt}/2)...`);
+            await new Promise(r => setTimeout(r, 3000));
+          } else if (is429) {
+            safeLog("[compare] ⚠️ Gemini 429 — trying NVIDIA fallback...");
+            geminiFailed = true;
+          } else {
+            throw geminiErr;
+          }
         }
       }
     }
-    if (lastError) {
-      const is429 = lastError?.status === 429 || lastError?.code === 429 || String(lastError?.message || "").includes("429");
-      if (is429) {
-        safeLog("[compare] ✗ Gemini quota 429 exhausted — compare indisponível");
-        return res.status(429).json({ error: "Gemini API quota exceeded (429). Try again later." });
+
+    // 2. NVIDIA fallback when Gemini unavailable or 429
+    if (geminiFailed && nvidiaApiKey && results.length === 0) {
+      try {
+        safeLog("[compare] Trying NVIDIA NIM fallback...");
+        const OpenAI = (await import("openai")).default;
+        const client = new OpenAI({
+          baseURL: "https://integrate.api.nvidia.com/v1",
+          apiKey: nvidiaApiKey,
+        });
+        const response = await client.chat.completions.create({
+          model: "meta/llama-3.1-8b-instruct",
+          messages: [
+            { role: "system", content: "Você é o SENTINEL, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
+            { role: "user", content: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras. JSON:` },
+          ],
+          max_tokens: 800,
+          temperature: 0,
+        });
+        const text = response.choices[0]?.message?.content || "[]";
+        const jsonMatch = text.match(/\[[\s\S]*\]/);
+        if (jsonMatch) {
+          results = JSON.parse(jsonMatch[0]);
+          safeLog(`[compare] NVIDIA fallback OK: ${results.length} resultados`);
+        }
+      } catch (nvidiaErr: any) {
+        safeLog(`[compare] NVIDIA fallback falhou: ${nvidiaErr.message}`);
       }
-      throw lastError;
     }
+
+    // 3. Final: if nothing worked, return 429
+    if (results.length === 0 && geminiFailed) {
+      return res.status(429).json({ error: "APIs de comparação indisponíveis (Gemini quota + NVIDIA). Tente novamente mais tarde." });
+    }
+    if (!finalApiKey && !nvidiaApiKey) {
+      return res.status(400).json({ error: "Configure a API key do Gemini ou NVIDIA nas configurações do perfil para usar comparação de mercado." });
+    }
+
     safeLog(`[compare] comparação direta OK: ${results.length} resultados para "${productName}"`);
     res.json({ jobId: null, jobKey, status: "direct", returnvalue: { jobKey, results } });
   } catch (error: any) {
@@ -436,16 +466,23 @@ app.get("/api/status", async (req, res) => {
       safeLog(`[analyze] Redis offline, executando análise direta para "${productName}"`);
       const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
       const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
-      if (!finalApiKey) {
-        return res.status(400).json({ error: "Configure a API key do Gemini nas configurações do perfil." });
+      const nvidiaApiKey = profile?.nvidiaApiKey;
+      if (!finalApiKey && !nvidiaApiKey) {
+        return res.status(400).json({ error: "Configure a API key do Gemini ou NVIDIA nas configurações do perfil." });
       }
 
       const cur = currency || "BRL";
+      const hasMultiplePrices = lowestPrice && lowestPriceDate && currentPrice !== lowestPrice;
       const prompt = `Você é um assistente ajudando um amigo a decidir se vale a pena comprar um produto de tecnologia.
 
 Produto: "${productName}"
 Preço Atual: ${cur} ${currentPrice}
-${lowestPrice ? `Menor Preço Registrado: ${cur} ${lowestPrice} (em ${lowestPriceDate})` : "Sem histórico de preços anteriores."}
+${lowestPrice && lowestPriceDate ? `Referência histórica: ${cur} ${lowestPrice} (registrado em ${lowestPriceDate})` : "Sem dados históricos de preços."}
+
+REGRAS IMPORTANTES:
+- Se só temos 1 registro de preço, NÃO afirme que é "menor preço registrado" ou "maior preço". Diga apenas "único preço registrado".
+- Só faça comparações de preço quando houver dados históricos suficientes (2+ registros).
+- NUNCA invente dados. Se não souber algo, diga que não há informação suficiente.
 
 Responda de forma SIMPLES e DIRETA. NÃO use termos técnicos de bolsa de valores.
 
@@ -454,32 +491,67 @@ VALE A PENA? [Sim/Não/Talvez] - uma frase explicando por quê
 PREÇO JUSTO: ${cur} X.XXX - quanto você pagaria nesse produto
 QUANDO COMPRAR: [Agora/Esperar] - se deve comprar agora ou esperar promoção
 DICA: Uma frase com conselho prático
-${lowestPrice && currentPrice > lowestPrice * 1.1 ? `ATENÇÃO: O preço já foi ${cur} ${lowestPrice}. Se esperar, pode baixar de novo.` : ""}
-Fale de forma natural.`;
+${hasMultiplePrices && currentPrice > lowestPrice * 1.1 ? `ATENÇÃO: O preço já foi ${cur} ${lowestPrice}. Se esperar, pode baixar de novo.` : ""}
+Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
       const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: finalApiKey });
+      const ai = finalApiKey ? new GoogleGenAI({ apiKey: finalApiKey }) : null;
 
       let analysis = "";
-      for (let attempt = 1; attempt <= 2; attempt++) {
-        try {
-          const response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
-            contents: prompt,
-          });
-          analysis = response.text || "";
-          break;
-        } catch (geminiErr: any) {
-          const is429 = geminiErr?.status === 429 || String(geminiErr?.message || "").includes("429");
-          if (is429 && attempt < 2) {
-            safeLog(`[analyze] ⚠️ Gemini 429 — retrying in 3s...`);
-            await new Promise(r => setTimeout(r, 3000));
-          } else if (is429) {
-            return res.status(429).json({ error: "Gemini API quota exceeded (429). Try again later." });
-          } else {
-            throw geminiErr;
+      let geminiFailed = false;
+
+      // 1. Try Gemini
+      if (ai) {
+        for (let attempt = 1; attempt <= 2; attempt++) {
+          try {
+            const response = await ai.models.generateContent({
+              model: "gemini-3.6-flash",
+              contents: prompt,
+            });
+            analysis = response.text || "";
+            break;
+          } catch (geminiErr: any) {
+            const is429 = geminiErr?.status === 429 || String(geminiErr?.message || "").includes("429");
+            if (is429 && attempt < 2) {
+              safeLog(`[analyze] ⚠️ Gemini 429 — retrying in 3s...`);
+              await new Promise(r => setTimeout(r, 3000));
+            } else if (is429) {
+              safeLog("[analyze] ⚠️ Gemini 429 — trying NVIDIA fallback...");
+              geminiFailed = true;
+            } else {
+              throw geminiErr;
+            }
           }
         }
+      }
+
+      // 2. NVIDIA fallback
+      if (!analysis && nvidiaApiKey) {
+        try {
+          safeLog("[analyze] Trying NVIDIA NIM fallback...");
+          const OpenAI = (await import("openai")).default;
+          const client = new OpenAI({
+            baseURL: "https://integrate.api.nvidia.com/v1",
+            apiKey: nvidiaApiKey,
+          });
+          const response = await client.chat.completions.create({
+            model: "meta/llama-3.1-8b-instruct",
+            messages: [{ role: "user", content: prompt }],
+            max_tokens: 500,
+            temperature: 0,
+          });
+          analysis = response.choices[0]?.message?.content || "";
+          if (analysis) safeLog("[analyze] NVIDIA fallback OK");
+        } catch (nvidiaErr: any) {
+          safeLog(`[analyze] NVIDIA fallback falhou: ${nvidiaErr.message}`);
+        }
+      }
+
+      if (!analysis && geminiFailed) {
+        return res.status(429).json({ error: "APIs de análise indisponíveis (Gemini + NVIDIA). Tente novamente mais tarde." });
+      }
+      if (!analysis) {
+        return res.status(500).json({ error: "Falha na análise. Verifique as API keys configuradas." });
       }
 
       safeLog(`[analyze] análise direta OK para "${productName}"`);

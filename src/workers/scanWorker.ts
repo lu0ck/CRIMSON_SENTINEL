@@ -371,11 +371,17 @@ async function handleAnalyze(job: Job<ScanJobPayload & { type: "analyze" }>) {
   const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
   const cur = currency || "BRL";
+  const hasMultiplePrices = lowestPrice && lowestPriceDate && currentPrice !== lowestPrice;
   const prompt = `Você é um assistente ajudando um amigo a decidir se vale a pena comprar um produto de tecnologia.
 
 Produto: "${productName}"
 Preço Atual: ${cur} ${currentPrice}
-${lowestPrice ? `Menor Preço Registrado: ${cur} ${lowestPrice} (em ${lowestPriceDate})` : "Sem histórico de preços anteriores."}
+${lowestPrice && lowestPriceDate ? `Referência histórica: ${cur} ${lowestPrice} (registrado em ${lowestPriceDate})` : "Sem dados históricos de preços."}
+
+REGRAS IMPORTANTES:
+- Se só temos 1 registro de preço, NÃO afirme que é "menor preço registrado" ou "maior preço". Diga apenas "único preço registrado".
+- Só faça comparações de preço quando houver dados históricos suficientes (2+ registros).
+- NUNCA invente dados. Se não souber algo, diga que não há informação suficiente.
 
 Responda de forma SIMPLES e DIRETA, como amigo conversando. NÃO use termos técnicos de bolsa de valores.
 
@@ -389,7 +395,7 @@ QUANDO COMPRAR: [Agora/Esperar] - se deve comprar agora ou esperar promoção
 
 DICA: Uma frase com conselho prático
 
-${lowestPrice && currentPrice > lowestPrice * 1.1 ? `ATENÇÃO: O preço já foi ${cur} ${lowestPrice}. Se esperar, pode baixar de novo.` : ""}
+${hasMultiplePrices && currentPrice > lowestPrice * 1.1 ? `ATENÇÃO: O preço já foi ${cur} ${lowestPrice}. Se esperar, pode baixar de novo.` : ""}
 
 Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
