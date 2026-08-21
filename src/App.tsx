@@ -169,7 +169,7 @@ export default function App() {
   const [scrapeProgress, setScrapeProgress] = useState({ percent: 0, currentEngine: "", strategiesTried: [] as string[] });
   const [scrapeResults, setScrapeResults] = useState<{ url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number }[]>([]);
   const [showScrapeLogDropdown, setShowScrapeLogDropdown] = useState(false);
-  const [showNotifPanel, setShowNotifPanel] = useState(false);
+
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [comparingProduct, setComparingProduct] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
@@ -406,13 +406,6 @@ export default function App() {
     }, 60000);
     return () => clearInterval(interval);
   }, []);
-
-  // Auto-dismiss scrape results after 60 seconds
-  useEffect(() => {
-    if (scrapeResults.length === 0) return;
-    const timer = setTimeout(() => setScrapeResults([]), 60000);
-    return () => clearTimeout(timer);
-  }, [scrapeResults]);
 
   const STRATEGIES = [
     { name: "PLAYWRIGHT_STEALTH", label: "Playwright Stealth", estMs: 30000 },
@@ -948,7 +941,7 @@ const queued = await response.json();
       if (!controller.signal.aborted) {
         setNewUrls([""]);
         setIsAddingProduct(false);
-        setScrapeResults(batchResults);
+        setScrapeResults(prev => [...prev, ...batchResults]);
         setSystemMessage(`SEQUENCE COMPLETE: ${successCount} ACQUIRED, ${failCount} FAILED`);
         if (successCount > 0) addToast(`${successCount} TARGETS LOGGED TO ARCHIVE`, "success");
         if (failCount > 0) addToast(`${failCount} TARGETS FAILED TO RESOLVE`, "error");
@@ -1379,82 +1372,86 @@ const queued = await response.json();
         </div>
         
         <div className="flex items-center gap-8 font-mono text-xs">
-          {scrapeResults.length > 0 && (
-            <>
-              <div
-                data-scrape-log
-                data-scrape-log-container
-                className="flex flex-col items-end cursor-pointer group relative"
-                onClick={() => setShowScrapeLogDropdown(!showScrapeLogDropdown)}
-              >
-                <span className="text-crimson/50">SCRAPE LOG</span>
-                <div className="flex items-center gap-1.5">
-                  <Activity size={12} className="text-crimson" />
-                  <span className="text-white group-hover:text-crimson transition-colors">
-                    {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
+          <div
+            data-scrape-log
+            data-scrape-log-container
+            className="flex flex-col items-end cursor-pointer group relative"
+            onClick={() => setShowScrapeLogDropdown(!showScrapeLogDropdown)}
+          >
+            <span className="text-crimson/50">SCRAPE LOG</span>
+            <div className="flex items-center gap-1.5">
+              <Activity size={12} className="text-crimson" />
+              <span className="text-white group-hover:text-crimson transition-colors">
+                {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
+              </span>
+            </div>
+            {showScrapeLogDropdown && (
+              <div data-scrape-log-container className="absolute top-full right-0 mt-2 w-[420px] max-h-[50vh] overflow-y-auto border border-crimson/30 bg-black/95 backdrop-blur-md z-[60] rounded shadow-lg shadow-crimson/10">
+                <div className="flex items-center justify-between px-3 py-2 border-b border-crimson/20 bg-crimson/5 sticky top-0">
+                  <span className="text-[10px] font-mono font-bold text-crimson tracking-widest">
+                    SCRAPE LOG — {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
                   </span>
+                  <div className="flex items-center gap-2">
+                    {scrapeResults.length > 0 && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); setScrapeResults([]); setShowScrapeLogDropdown(false); }}
+                        className="text-crimson/40 hover:text-crimson transition-colors text-[10px] font-mono"
+                      >
+                        CLEAR
+                      </button>
+                    )}
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setShowScrapeLogDropdown(false); }}
+                      className="text-crimson/40 hover:text-crimson transition-colors"
+                    >
+                      <X size={12} />
+                    </button>
+                  </div>
                 </div>
-                {showScrapeLogDropdown && (
-                  <div data-scrape-log-container className="absolute top-full right-0 mt-2 w-[420px] max-h-[50vh] overflow-y-auto border border-crimson/30 bg-black/95 backdrop-blur-md z-[60] rounded shadow-lg shadow-crimson/10">
-                    <div className="flex items-center justify-between px-3 py-2 border-b border-crimson/20 bg-crimson/5 sticky top-0">
-                      <span className="text-[10px] font-mono font-bold text-crimson tracking-widest">
-                        SCRAPE LOG — {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
-                      </span>
-                      <div className="flex items-center gap-2">
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setScrapeResults([]); setShowScrapeLogDropdown(false); }}
-                          className="text-crimson/40 hover:text-crimson transition-colors text-[10px] font-mono"
-                        >
-                          CLEAR
-                        </button>
-                        <button
-                          onClick={(e) => { e.stopPropagation(); setShowScrapeLogDropdown(false); }}
-                          className="text-crimson/40 hover:text-crimson transition-colors"
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    </div>
-                    {scrapeResults.map((r, idx) => {
-                      const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
-                      return (
-                        <div key={idx} className={cn(
-                          "flex items-start gap-3 px-3 py-2 border-b border-crimson/10 last:border-0",
-                          r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
-                        )}>
-                          <span className={cn(
-                            "w-2 h-2 rounded-full flex-shrink-0 mt-1.5",
-                            r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
-                          )} />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-0.5">
-                              <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
-                              {r.method && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
-                                  {r.method}
-                                </span>
-                              )}
-                            </div>
-                            {r.success ? (
-                              <div className="text-xs font-mono">
-                                <span className="text-white/80">{r.name?.substring(0, 60) || "UNKNOWN"}</span>
-                                <span className="text-green-400 font-bold ml-2">R$ {r.price?.toFixed(2)}</span>
-                              </div>
-                            ) : (
-                              <div className="text-xs font-mono text-red-400 break-words">
-                                {r.error || "Unknown error"}
-                              </div>
+                {scrapeResults.length === 0 ? (
+                  <div className="px-3 py-6 text-center">
+                    <p className="text-[10px] font-mono text-crimson/30">NO SCRAPE RESULTS YET</p>
+                  </div>
+                ) : (
+                  scrapeResults.map((r, idx) => {
+                    const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
+                    return (
+                      <div key={idx} className={cn(
+                        "flex items-start gap-3 px-3 py-2 border-b border-crimson/10 last:border-0",
+                        r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
+                      )}>
+                        <span className={cn(
+                          "w-2 h-2 rounded-full flex-shrink-0 mt-1.5",
+                          r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
+                        )} />
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 mb-0.5">
+                            <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
+                            {r.method && (
+                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
+                                {r.method}
+                              </span>
                             )}
                           </div>
+                          {r.success ? (
+                            <div className="text-xs font-mono">
+                              <span className="text-white/80">{r.name?.substring(0, 60) || "UNKNOWN"}</span>
+                              <span className="text-green-400 font-bold ml-2">R$ {r.price?.toFixed(2)}</span>
+                            </div>
+                          ) : (
+                            <div className="text-xs font-mono text-red-400 break-words">
+                              {r.error || "Unknown error"}
+                            </div>
+                          )}
                         </div>
-                      );
-                    })}
-                  </div>
+                      </div>
+                    );
+                  })
                 )}
               </div>
-              <div className="h-8 w-[1px] bg-crimson/30" />
-            </>
-          )}
+            )}
+          </div>
+          <div className="h-8 w-[1px] bg-crimson/30" />
           <div className="flex flex-col items-end">
             <span className="text-crimson/50">OPERADOR</span>
             <span className="text-white">{activeProfile?.name.toUpperCase()}</span>
@@ -1549,13 +1546,6 @@ const queued = await response.json();
           />
           <div className="mt-auto flex flex-col gap-4">
             <NavButton 
-              active={showNotifPanel}
-              onClick={() => { playSound('click'); setShowNotifPanel(!showNotifPanel); }}
-              icon={<Bell size={24} />}
-              label="LOGS"
-              badge={notificationsCount}
-            />
-            <NavButton 
               active={false} 
               onClick={() => { playSound('click'); setActiveProfileId(null); }}
               icon={<User size={24} />}
@@ -1563,50 +1553,6 @@ const queued = await response.json();
             />
           </div>
         </nav>
-
-        {/* Notification Panel - Slide out from left */}
-        <AnimatePresence>
-          {showNotifPanel && (
-            <motion.div
-              initial={{ x: -400, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: -400, opacity: 0 }}
-              transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="w-[420px] border-r border-crimson/30 bg-black/90 backdrop-blur-md flex flex-col z-20 relative overflow-hidden"
-            >
-              <div className="flex items-center justify-between px-4 py-3 border-b border-crimson/30 bg-crimson/5">
-                <div className="flex items-center gap-2">
-                  <Bell size={16} className="text-crimson" />
-                  <span className="text-xs font-mono font-bold text-crimson tracking-widest">
-                    NOTIFICATION LOG
-                  </span>
-                </div>
-                <button
-                  onClick={() => setShowNotifPanel(false)}
-                  className="text-crimson/40 hover:text-crimson transition-colors"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-
-              {notificationsCount === 0 ? (
-                <div className="flex-1 flex items-center justify-center">
-                  <div className="text-center">
-                    <Bell size={32} className="text-crimson/20 mx-auto mb-2" />
-                    <p className="text-xs font-mono text-crimson/30">NO NOTIFICATIONS YET</p>
-                    <p className="text-[10px] font-mono text-crimson/20 mt-1">Alerts appear here when triggered</p>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 overflow-y-auto">
-                  <div className="px-4 py-3 border-b border-crimson/10">
-                    <p className="text-[10px] font-mono text-crimson/50">{notificationsCount} notification(s) configured</p>
-                  </div>
-                </div>
-              )}
-            </motion.div>
-          )}
-        </AnimatePresence>
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto relative">

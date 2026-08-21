@@ -728,8 +728,9 @@ const storeHandler = getStoreHandler(url);
 
 async function scrapeWithPlaywrightStealth(url: string, options: any): Promise<ScrapeResult | null> {
   const domain = getDomain(url);
+  const cookieDomain = domain.includes("aliexpress") ? "aliexpress.com" : domain;
   const userAgent = getRandomUserAgent();
-  const cookieFile = path.join(COOKIE_DIR, `${domain.replace(/\./g, "_")}.json`);
+  const cookieFile = path.join(COOKIE_DIR, `${cookieDomain.replace(/\./g, "_")}.json`);
 
   console.log(`[Playwright] UA: ${userAgent.substring(0, 50)}...`);
   console.log(`[Playwright] Domain: ${domain}`);
@@ -783,16 +784,19 @@ async function scrapeWithPlaywrightStealth(url: string, options: any): Promise<S
 
     const page = await context.newPage();
 
-await page.route("**/*.{png,jpg,jpeg,gif,webp,svg}", function(route) { route.abort(); });
-		await page.route("**/*.{woff,woff2,ttf,otf}", function(route) { route.abort(); });
+await page.route("**/*.{woff,woff2,ttf,otf}", function(route) { route.abort(); });
 		await page.route("**/analytics/**", function(route) { route.abort(); });
 		await page.route("**/tracking/**", function(route) { route.abort(); });
 		await page.route("**/ads/**", function(route) { route.abort(); });
+    if (!domain.includes("aliexpress")) {
+      await page.route("**/*.{png,jpg,jpeg,gif,webp,svg}", function(route) { route.abort(); });
+    }
 
     console.log("[Playwright] Navigating to URL...");
+    const isAliExpress = domain.includes("aliexpress");
     const response = await page.goto(url, {
-      waitUntil: "domcontentloaded",
-      timeout: 45000,
+      waitUntil: isAliExpress ? "networkidle" : "domcontentloaded",
+      timeout: isAliExpress ? 60000 : 45000,
     });
 
     if (response?.status() === 403) {

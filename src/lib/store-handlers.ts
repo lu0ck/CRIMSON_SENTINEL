@@ -817,10 +817,10 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
   "aliexpress.com": async (page: Page) => {
     console.log("[Handler] Using AliExpress handler");
 
-    await page.waitForSelector("h1, meta[property='og:title']", { timeout: 10000 }).catch(function() {});
-    await page.waitForTimeout(3000);
+    await page.waitForSelector("h1, meta[property='og:title']", { timeout: 15000 }).catch(function() {});
+    await page.waitForTimeout(5000);
     await page.evaluate(`window.scrollTo(0, 400)`);
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
 
     const data = await page.evaluate(`
     (function() {
