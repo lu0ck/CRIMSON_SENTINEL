@@ -632,7 +632,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       function isValidPrice(p) {
-        return p >= 10 && p <= 100000 && Number.isFinite(p);
+        return p >= 10 && p <= 5000000 && Number.isFinite(p);
       }
 
       // Mercado Livre mostra preço de forma simples: "R$ 60,13" ou "60,13"
@@ -643,10 +643,36 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         ".ui-pdp-price .andes-money-amount",
         ".andes-money-amount",
         "[class*='price'] .andes-money-amount__fraction",
-        ".price-tag .andes-money-amount__fraction"
+        ".price-tag .andes-money-amount__fraction",
+        "[class*='price'] .andes-money-amount",
+        ".poly-price .andes-money-amount__fraction",
+        ".poly-price .andes-money-amount",
+        "[data-testid='price'] .andes-money-amount__fraction",
+        "[data-testid='price'] .andes-money-amount",
+        ".ui-pdp-price__second-line .andes-money-amount__fraction",
+        ".ui-pdp-price__second-line .andes-money-amount"
       ];
 
       var price = 0;
+
+      // Estratégia 0: JSON-LD para preço
+      var ldScripts4 = document.querySelectorAll('script[type="application/ld+json"]');
+      for (var n = 0; n < ldScripts4.length; n++) {
+        try {
+          var ld3 = JSON.parse(ldScripts4[n].textContent);
+          if (ld3 && ld3.offers) {
+            var ldOffer = ld3.offers;
+            if (ld3.offers['@type'] === 'AggregateOffer' && ld3.offers.lowPrice) {
+              var ldPrice = parseFloat(ld3.offers.lowPrice);
+              if (ldPrice >= 10 && ldPrice <= 100000 && Number.isFinite(ldPrice)) { price = ldPrice; break; }
+            }
+            if (ldOffer.price) {
+              var ldPrice2 = parseFloat(ldOffer.price);
+              if (ldPrice2 >= 10 && ldPrice2 <= 100000 && Number.isFinite(ldPrice2)) { price = ldPrice2; break; }
+            }
+          }
+        } catch(e) {}
+      }
 
       for (var i = 0; i < priceSelectors.length; i++) {
         var el = document.querySelector(priceSelectors[i]);
@@ -729,6 +755,24 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         name = "";
       }
 
+      // Tentar JSON-LD para nome se ainda não tem
+      if (!name) {
+        var ldScripts3 = document.querySelectorAll('script[type="application/ld+json"]');
+        for (var n = 0; n < ldScripts3.length; n++) {
+          try {
+            var ld2 = JSON.parse(ldScripts3[n].textContent);
+            if (ld2 && ld2.name && typeof ld2.name === 'string' && ld2.name.length > 3) {
+              var ldName = ld2.name;
+              var isLdSiteName = false;
+              for (var si = 0; si < siteNames.length; si++) {
+                if (ldName.toLowerCase().indexOf(siteNames[si]) !== -1) { isLdSiteName = true; break; }
+              }
+              if (!isLdSiteName) { name = ldName; break; }
+            }
+          } catch(e) {}
+        }
+      }
+
 	return {
 	name: name,
 	price: price,
@@ -792,6 +836,29 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       // --- Extrair preço BRL ---
       var price = 0;
 
+      // Prioridade 0: extrair BRL do URL params (pdp_npi contém preço BRL)
+      try {
+        var urlStr = window.location.href;
+        var npiMatch = urlStr.match(/pdp_npi=([^&]+)/);
+        if (npiMatch) {
+          var npiDecoded = decodeURIComponent(npiMatch[1]);
+          // Padrão: ...BRL!88.88!25.08... (primeiro é "de", segundo é "por")
+          var brlMatches = npiDecoded.match(/BRL[!%21]([\\d.]+)/g) || [];
+          var npiPrices = [];
+          for (var n = 0; n < brlMatches.length; n++) {
+            var numStr = brlMatches[n].replace(/BRL[!%21]/, '');
+            var npiPrice = parseFloat(numStr);
+            if (npiPrice >= 5 && npiPrice <= 100000 && Number.isFinite(npiPrice)) {
+              npiPrices.push(npiPrice);
+            }
+          }
+          if (npiPrices.length > 0) {
+            npiPrices.sort(function(a, b) { return a - b; });
+            price = npiPrices[0];
+          }
+        }
+      } catch(e) {}
+
       // Prioridade 1: regex R$ no body (mais confiável no AliExpress BR)
       var rMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
       var rPrices = [];
@@ -804,12 +871,26 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         price = rPrices[0];
       }
 
+      // Prioridade 1b: regex BRL no body
+      if (!isValidPrice(price)) {
+        var brlMatches2 = body.match(/BRL\\s*[\\d.,]+/g) || [];
+        var brlPrices = [];
+        for (var j = 0; j < brlMatches2.length; j++) {
+          var parsed2 = parseBrazilianPrice(brlMatches2[j].replace(/BRL/g, 'R$'));
+          if (isValidPrice(parsed2) && parsed2 >= 5) brlPrices.push(parsed2);
+        }
+        if (brlPrices.length > 0) {
+          brlPrices.sort(function(a, b) { return a - b; });
+          price = brlPrices[0];
+        }
+      }
+
       // Prioridade 2: meta[itemprop="price"] (mas ignorar se < 10 — provavelmente CNY)
       if (!isValidPrice(price)) {
         var metaPrice = document.querySelector('meta[itemprop="price"]');
         if (metaPrice) {
           var p = parseFloat(metaPrice.getAttribute("content") || "0");
-          if (p >= 10 && isValidPrice(p)) price = p;
+          if (p >= 30 && isValidPrice(p)) price = p;
         }
       }
 
@@ -1092,7 +1173,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       }
 
       function isValidPrice(p) {
-        return p >= 10 && p <= 100000 && Number.isFinite(p);
+        return p >= 10 && p <= 5000000 && Number.isFinite(p);
       }
 
       // --- Extrair nome ---
@@ -1180,7 +1261,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
           }
         }
         if (prices.length > 0) {
-          prices.sort(function(a, b) { return a - b; });
+          prices.sort(function(a, b) { return b - a; });
           price = prices[0];
         }
       }

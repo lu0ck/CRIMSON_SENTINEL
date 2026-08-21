@@ -392,10 +392,10 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
-  // Auto-dismiss scrape results after 30 seconds
+  // Auto-dismiss scrape results after 60 seconds
   useEffect(() => {
     if (scrapeResults.length === 0) return;
-    const timer = setTimeout(() => setScrapeResults([]), 30000);
+    const timer = setTimeout(() => setScrapeResults([]), 60000);
     return () => clearTimeout(timer);
   }, [scrapeResults]);
 
@@ -1393,6 +1393,60 @@ const queued = await response.json();
         </div>
       </header>
 
+      {/* Fixed Scrape Results Bar - Always visible at top when results exist */}
+      {scrapeResults.length > 0 && (
+        <div className="fixed top-16 left-20 right-0 z-[50] border-b border-crimson/30 bg-black/95 backdrop-blur-md max-h-[40vh] overflow-y-auto">
+          <div className="flex items-center justify-between px-4 py-2 border-b border-crimson/20 bg-crimson/5 sticky top-0">
+            <div className="flex items-center gap-2">
+              <Activity size={14} className="text-crimson" />
+              <span className="text-xs font-mono font-bold text-crimson tracking-widest">
+                SCRAPE LOG — {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
+              </span>
+            </div>
+            <button
+              onClick={() => setScrapeResults([])}
+              className="text-crimson/40 hover:text-crimson transition-colors text-[10px] font-mono"
+            >
+              CLEAR
+            </button>
+          </div>
+          {scrapeResults.map((r, idx) => {
+            const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
+            return (
+              <div key={idx} className={cn(
+                "flex items-start gap-3 px-4 py-2 border-b border-crimson/10 last:border-0",
+                r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
+              )}>
+                <span className={cn(
+                  "w-2 h-2 rounded-full flex-shrink-0 mt-1.5",
+                  r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
+                )} />
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-0.5">
+                    <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
+                    {r.method && (
+                      <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
+                        {r.method}
+                      </span>
+                    )}
+                  </div>
+                  {r.success ? (
+                    <div className="text-xs font-mono">
+                      <span className="text-white/80">{r.name?.substring(0, 60) || "UNKNOWN"}</span>
+                      <span className="text-green-400 font-bold ml-2">R$ {r.price?.toFixed(2)}</span>
+                    </div>
+                  ) : (
+                    <div className="text-xs font-mono text-red-400 break-words">
+                      {r.error || "Unknown error"}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar HUD */}
         <nav className="w-20 border-r border-crimson/30 flex flex-col items-center py-8 gap-8 bg-black/20 z-10 relative">
@@ -1562,62 +1616,6 @@ const queued = await response.json();
 
         {/* Main Content Area */}
         <main className="flex-1 overflow-y-auto relative">
-          {/* Persistent Scrape Results Bar - TOP of screen */}
-          {scrapeResults.length > 0 && (
-            <div className="sticky top-0 z-30 border-b border-crimson/30 bg-black/95 backdrop-blur-md">
-              <div className="flex items-center justify-between px-4 py-2 border-b border-crimson/20 bg-crimson/5">
-                <div className="flex items-center gap-2">
-                  <Activity size={14} className="text-crimson" />
-                  <span className="text-xs font-mono font-bold text-crimson tracking-widest">
-                    SCRAPE LOG — {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
-                  </span>
-                </div>
-                <button
-                  onClick={() => setScrapeResults([])}
-                  className="text-crimson/40 hover:text-crimson transition-colors text-[10px] font-mono"
-                >
-                  CLEAR
-                </button>
-              </div>
-              <div className="max-h-52 overflow-y-auto">
-                {scrapeResults.map((r, idx) => {
-                  const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
-                  return (
-                    <div key={idx} className={cn(
-                      "flex items-start gap-3 px-4 py-2 border-b border-crimson/10 last:border-0",
-                      r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
-                    )}>
-                      <span className={cn(
-                        "w-2 h-2 rounded-full flex-shrink-0 mt-1.5",
-                        r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
-                      )} />
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2 mb-0.5">
-                          <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
-                          {r.method && (
-                            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
-                              {r.method}
-                            </span>
-                          )}
-                        </div>
-                        {r.success ? (
-                          <div className="text-xs font-mono">
-                            <span className="text-white/80">{r.name?.substring(0, 50) || "UNKNOWN"}</span>
-                            <span className="text-green-400 font-bold ml-2">R$ {r.price?.toFixed(2)}</span>
-                          </div>
-                        ) : (
-                          <div className="text-xs font-mono text-red-400 break-words">
-                            {r.error || "Unknown error"}
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
           <div className="p-8">
           <AnimatePresence mode="wait">
             {activeTab === "dashboard" && (
@@ -2433,11 +2431,15 @@ function ProductRow({ product, onDelete, onCompare, onClick, isComparing }: { pr
           <img 
             src={product.imageUrl} 
             alt={product.name} 
-            className="w-full h-full object-contain mix-blend-screen" 
+            width={64}
+            height={64}
+            loading="lazy"
+            className="w-full h-full object-contain" 
             referrerPolicy="no-referrer" 
             onError={(e) => {
-              const keywords = product.name.split(' ').slice(0, 2).join(' ');
-              (e.target as HTMLImageElement).src = `https://placehold.co/400x400/000000/ff0000?text=${encodeURIComponent(keywords)}`;
+              const img = e.target as HTMLImageElement;
+              img.onerror = null;
+              img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="64" height="64" viewBox="0 0 64 64"><rect fill="%230a0a0a" width="64" height="64"/><text fill="%23ff0000" font-family="monospace" font-size="10" x="32" y="32" text-anchor="middle" dominant-baseline="middle">' + product.name.split(' ').slice(0, 2).join(' ') + '</text></svg>')}`;
             }}
           />
         ) : (
@@ -2697,11 +2699,15 @@ function ProductDetailModal({
                   <img 
                     src={product.imageUrl} 
                     alt={product.name} 
-                    className="w-full h-full object-contain mix-blend-screen" 
+                    width={160}
+                    height={160}
+                    loading="lazy"
+                    className="w-full h-full object-contain" 
                     referrerPolicy="no-referrer" 
                     onError={(e) => {
-                      const keywords = product.name.split(' ').slice(0, 2).join(' ');
-                      (e.target as HTMLImageElement).src = `https://placehold.co/400x400/000000/ff0000?text=${encodeURIComponent(keywords)}`;
+                      const img = e.target as HTMLImageElement;
+                      img.onerror = null;
+                      img.src = `data:image/svg+xml,${encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="160" height="160" viewBox="0 0 160 160"><rect fill="%230a0a0a" width="160" height="160"/><text fill="%23ff0000" font-family="monospace" font-size="14" x="80" y="80" text-anchor="middle" dominant-baseline="middle">' + product.name.split(' ').slice(0, 3).join(' ') + '</text></svg>')}`;
                     }}
                   />
                 ) : (

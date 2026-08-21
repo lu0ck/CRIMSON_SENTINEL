@@ -104,7 +104,7 @@ export function isScientificNotation(text: string): boolean {
 
 function isPriceRealistic(price: number, productName?: string): boolean {
   // Preços devem estar entre R$ 10 e R$ 100.000
-  if (price < 10 || price > 100000) {
+  if (price < 10 || price > 5000000) {
     return false;
   }
 
