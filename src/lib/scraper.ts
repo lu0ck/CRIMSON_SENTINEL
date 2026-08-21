@@ -124,11 +124,19 @@ function isPriceRealistic(price: number, productName?: string): boolean {
       return price >= 200 && price <= 15000;
     }
 
-    // Placas de vídeo e processadores premium devem ter preço mínimo maior
+    // Placas de vídeo e processadores — preço mínimo maior
     if (nameLower.includes('rtx') || nameLower.includes('radeon') ||
         nameLower.includes('ryzen') || nameLower.includes('intel') ||
         nameLower.includes('placa de video') || nameLower.includes('placa de vídeo') ||
         nameLower.includes('processador') || nameLower.includes('gpu')) {
+      // Xeons antigos, CPUs server e processadores antigos são baratos (AliExpress/OLX)
+      if (nameLower.includes('xeon') || nameLower.includes('e5-') || nameLower.includes('e3-') ||
+          nameLower.includes('opteron') || nameLower.includes('epyc') ||
+          nameLower.includes('i3-') || nameLower.includes('i5-2') || nameLower.includes('i5-3') ||
+          nameLower.includes('i7-2') || nameLower.includes('i7-3') || nameLower.includes('pentium') ||
+          nameLower.includes('celeron')) {
+        return price >= 30 && price <= 30000;
+      }
       // Placas de vídeo de alta gama (RX 9070, RTX 4080, etc) devem ter preço mínimo maior
       if (nameLower.includes('9070') || nameLower.includes('4080') ||
           nameLower.includes('4090') || nameLower.includes('7900') ||

@@ -312,7 +312,22 @@ app.post("/api/compare", async (req, res) => {
             },
           });
           const text = response.text || "[]";
-          results = JSON.parse(text);
+          const parsed = JSON.parse(text);
+          const TRUSTED = ['mercadolivre','mercadolivre.com.br','amzn','amazon.com.br','magazineluiza','magalu',
+            'kabum','terabyteshop','terabyte','pichau','casasbahia','casas bahia','pontofrio','extra','americanas',
+            'shopee','aliexpress','renner','centauro','submarino','americanas.com.br'];
+          results = parsed.filter((r: any) => {
+            if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
+            try {
+              const host = new URL(r.url).hostname.toLowerCase();
+              return TRUSTED.some(t => host.includes(t));
+            } catch {
+              return false;
+            }
+          });
+          if (results.length < parsed.length) {
+            safeLog(`[compare] Gemini: ${results.length}/${parsed.length} resultados válidos (links inválidos removidos)`);
+          }
           break;
         } catch (geminiErr: any) {
           const isRetryable = geminiErr?.status === 429 || geminiErr?.status === 503 || geminiErr?.code === 429 || geminiErr?.code === 503 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("RESOURCE_EXHAUSTED") || String(geminiErr?.message || "").includes("503") || String(geminiErr?.message || "").includes("UNAVAILABLE");
@@ -351,8 +366,20 @@ app.post("/api/compare", async (req, res) => {
         const text = rawText.replace(/```json\s*/g, '').replace(/```\s*/g, '').trim();
         const jsonMatch = text.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
-          results = JSON.parse(jsonMatch[0]);
-          safeLog(`[compare] NVIDIA fallback OK: ${results.length} resultados`);
+          const parsed = JSON.parse(jsonMatch[0]);
+          const TRUSTED = ['mercadolivre','mercadolivre.com.br','amzn','amazon.com.br','magazineluiza','magalu',
+            'kabum','terabyteshop','terabyte','pichau','casasbahia','casas bahia','pontofrio','extra','americanas',
+            'shopee','aliexpress','renner','centauro','submarino','americanas.com.br'];
+          results = parsed.filter((r: any) => {
+            if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
+            try {
+              const host = new URL(r.url).hostname.toLowerCase();
+              return TRUSTED.some(t => host.includes(t));
+            } catch {
+              return false;
+            }
+          });
+          safeLog(`[compare] NVIDIA fallback: ${results.length}/${parsed.length} resultados válidos`);
         }
       } catch (nvidiaErr: any) {
         safeLog(`[compare] NVIDIA fallback falhou: ${nvidiaErr.message}`);
