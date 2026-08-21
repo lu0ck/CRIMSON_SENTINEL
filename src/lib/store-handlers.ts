@@ -880,24 +880,26 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
           }
           if (npiPrices.length > 0) {
             npiPrices.sort(function(a, b) { return a - b; });
-            price = npiPrices[0];
+            price = npiPrices.length >= 2 ? npiPrices[1] : npiPrices[0];
           }
         }
       } catch(e) {}
 
-      // Prioridade 1: regex R$ no body (mais confiável no AliExpress BR)
-      var rMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
-      var rPrices = [];
-      for (var i = 0; i < rMatches.length; i++) {
-        var parsed = parseBrazilianPrice(rMatches[i]);
-        if (isValidPrice(parsed) && parsed >= 5) rPrices.push(parsed);
-      }
-      if (rPrices.length > 0) {
-        rPrices.sort(function(a, b) { return a - b; });
-        price = rPrices[0];
+      // Prioridade 1: regex R$ no body — SOBRESCREVE apenas se P0 não achou preço válido
+      if (!isValidPrice(price)) {
+        var rMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
+        var rPrices = [];
+        for (var i = 0; i < rMatches.length; i++) {
+          var parsed = parseBrazilianPrice(rMatches[i]);
+          if (isValidPrice(parsed) && parsed >= 10) rPrices.push(parsed);
+        }
+        if (rPrices.length > 0) {
+          rPrices.sort(function(a, b) { return a - b; });
+          price = rPrices[Math.floor(rPrices.length / 2)];
+        }
       }
 
-      // Prioridade 1b: regex BRL no body
+      // Prioridade 1b: regex BRL no body — só se P0 e P1 não acharam
       if (!isValidPrice(price)) {
         var brlMatches2 = body.match(/BRL\\s*[\\d.,]+/g) || [];
         var brlPrices = [];

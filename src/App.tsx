@@ -41,7 +41,9 @@ import {
   Eye,
   EyeOff,
   MapPin,
-  Radio
+  Radio,
+  Copy,
+  Check
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId } from "./lib/url";
@@ -807,7 +809,7 @@ const deleteComparisonResult = (productId: string, index: number) => {
         
         const results = await Promise.all(chunk.map(async (url) => {
           const individualController = new AbortController();
-          const timeoutId = setTimeout(() => individualController.abort(), 60000); // 60s timeout per target
+          const timeoutId = setTimeout(() => individualController.abort(), 120000); // 120s timeout per target
           
           try {
             const response = await fetch("/api/scrape", {
@@ -915,7 +917,7 @@ const queued = await response.json();
       } else if (error.name === 'AbortError') {
         console.error(`Scrape timed out for ${url}`);
         addToast(`TIMEOUT: ${url.substring(0, 30)}...`, "error");
-        batchResults.push({ url, success: false, error: "Timeout (60s)", timestamp: Date.now() });
+        batchResults.push({ url, success: false, error: "Timeout (120s)", timestamp: Date.now() });
       } else {
         console.error(`Failed to scrape ${url}:`, error);
         const errorMsg = error.message || "Falha no scraping";
@@ -1414,38 +1416,7 @@ const queued = await response.json();
                   </div>
                 ) : (
                   scrapeResults.map((r, idx) => {
-                    const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
-                    return (
-                      <div key={idx} className={cn(
-                        "flex items-start gap-3 px-3 py-2 border-b border-crimson/10 last:border-0",
-                        r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
-                      )}>
-                        <span className={cn(
-                          "w-2 h-2 rounded-full flex-shrink-0 mt-1.5",
-                          r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
-                        )} />
-                        <div className="flex-1 min-w-0">
-                          <div className="flex items-center gap-2 mb-0.5">
-                            <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
-                            {r.method && (
-                              <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
-                                {r.method}
-                              </span>
-                            )}
-                          </div>
-                          {r.success ? (
-                            <div className="text-xs font-mono">
-                              <span className="text-white/80">{r.name?.substring(0, 60) || "UNKNOWN"}</span>
-                              <span className="text-green-400 font-bold ml-2">R$ {r.price?.toFixed(2)}</span>
-                            </div>
-                          ) : (
-                            <div className="text-xs font-mono text-red-400 break-words">
-                              {r.error || "Unknown error"}
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    );
+                    return <ScrapeLogEntry key={idx} r={r} />;
                   })
                 )}
               </div>
@@ -2341,6 +2312,57 @@ const queued = await response.json();
           <span>LOC: CACHY_OS_NODE_01</span>
         </div>
       </footer>
+    </div>
+  );
+}
+
+function ScrapeLogEntry({ r }: { r: { url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number } }) {
+  const [copied, setCopied] = useState(false);
+  const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
+  const copyText = r.success
+    ? `[OK] ${hostname} | ${r.name || "UNKNOWN"} | R$ ${r.price?.toFixed(2)} | ${r.method || "N/A"} | ${r.url}`
+    : `[FAIL] ${hostname} | ${r.error || "Unknown error"} | ${r.url}`;
+  return (
+    <div className={cn(
+      "flex items-start gap-3 px-3 py-2 border-b border-crimson/10 last:border-0 group/entry",
+      r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
+    )}>
+      <span className={cn(
+        "w-2 h-2 rounded-full flex-shrink-0 mt-1.5",
+        r.success ? "bg-green-500 shadow-[0_0_6px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_6px_rgba(255,0,0,0.5)]"
+      )} />
+      <div className="flex-1 min-w-0">
+        <div className="flex items-center gap-2 mb-0.5">
+          <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
+          {r.method && (
+            <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
+              {r.method}
+            </span>
+          )}
+        </div>
+        {r.success ? (
+          <div className="text-xs font-mono">
+            <span className="text-white/80">{r.name?.substring(0, 60) || "UNKNOWN"}</span>
+            <span className="text-green-400 font-bold ml-2">R$ {r.price?.toFixed(2)}</span>
+          </div>
+        ) : (
+          <div className="text-xs font-mono text-red-400 break-words">
+            {r.error || "Unknown error"}
+          </div>
+        )}
+      </div>
+      <button
+        onClick={(e) => {
+          e.stopPropagation();
+          navigator.clipboard.writeText(copyText);
+          setCopied(true);
+          setTimeout(() => setCopied(false), 1500);
+        }}
+        className="flex-shrink-0 mt-1 text-crimson/30 hover:text-crimson transition-colors opacity-0 group-hover/entry:opacity-100"
+        title="COPY TO CLIPBOARD"
+      >
+        {copied ? <Check size={12} className="text-green-500" /> : <Copy size={12} />}
+      </button>
     </div>
   );
 }
