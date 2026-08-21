@@ -57,6 +57,8 @@ declare global {
       closeWindow: () => void;
       maximizeWindow: () => void;
       minimizeWindow: () => void;
+      getAutoStart: () => Promise<boolean>;
+      setAutoStart: (enabled: boolean) => void;
     };
   }
 }
@@ -241,6 +243,7 @@ export default function App() {
   const [lmStudioStatus, setLmStudioStatus] = useState<{ connected: boolean; model: string | null }>({ connected: false, model: null });
   const [apiStatus, setApiStatus] = useState<{ gemini: boolean; serper: boolean; nvidia: boolean }>({ gemini: false, serper: false, nvidia: false });
   const [nextScanMinutes, setNextScanMinutes] = useState<number>(0);
+  const [autoStart, setAutoStart] = useState(false);
   const [alertSent, setAlertSent] = useState(false);
   const [notificationsCount, setNotificationsCount] = useState(0);
 
@@ -287,6 +290,10 @@ export default function App() {
 		const id = Math.random().toString(36).substr(2, 9);
 		setToasts(prev => [...prev, { id, message, type, details }]);
 		playSound(type === 'success' ? 'success' : type === 'error' ? 'error' : 'notify');
+		const autoRemove = type === 'error' ? 15000 : type === 'success' ? 5000 : 8000;
+		setTimeout(() => {
+			setToasts(prev => prev.filter(t => t.id !== id));
+		}, autoRemove);
 	};
 
 	const removeToast = (id: string) => {
@@ -376,6 +383,13 @@ export default function App() {
     loadNotificationsCount();
   }, [activeTab]);
 
+  // Load auto-start setting on mount
+  useEffect(() => {
+    if (window.electronAPI?.getAutoStart) {
+      window.electronAPI.getAutoStart().then(setAutoStart);
+    }
+  }, []);
+
   // Check system status on load and every hour
   useEffect(() => {
     if (activeProfileId) {
@@ -452,7 +466,7 @@ export default function App() {
     if (!showScrapeLogDropdown) return;
     const handler = (e: MouseEvent) => {
       const target = e.target as HTMLElement;
-      if (!target.closest('[data-scrape-log]')) {
+      if (!target.closest('[data-scrape-log-container]')) {
         setShowScrapeLogDropdown(false);
       }
     };
@@ -1369,6 +1383,7 @@ const queued = await response.json();
             <>
               <div
                 data-scrape-log
+                data-scrape-log-container
                 className="flex flex-col items-end cursor-pointer group relative"
                 onClick={() => setShowScrapeLogDropdown(!showScrapeLogDropdown)}
               >
@@ -1380,7 +1395,7 @@ const queued = await response.json();
                   </span>
                 </div>
                 {showScrapeLogDropdown && (
-                  <div className="absolute top-full right-0 mt-2 w-[420px] max-h-[50vh] overflow-y-auto border border-crimson/30 bg-black/95 backdrop-blur-md z-[60] rounded shadow-lg shadow-crimson/10">
+                  <div data-scrape-log-container className="absolute top-full right-0 mt-2 w-[420px] max-h-[50vh] overflow-y-auto border border-crimson/30 bg-black/95 backdrop-blur-md z-[60] rounded shadow-lg shadow-crimson/10">
                     <div className="flex items-center justify-between px-3 py-2 border-b border-crimson/20 bg-crimson/5 sticky top-0">
                       <span className="text-[10px] font-mono font-bold text-crimson tracking-widest">
                         SCRAPE LOG — {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
@@ -1563,7 +1578,7 @@ const queued = await response.json();
                 <div className="flex items-center gap-2">
                   <Bell size={16} className="text-crimson" />
                   <span className="text-xs font-mono font-bold text-crimson tracking-widest">
-                    SCRAPE LOG ({scrapeResults.length})
+                    NOTIFICATION LOG
                   </span>
                 </div>
                 <button
@@ -1574,75 +1589,19 @@ const queued = await response.json();
                 </button>
               </div>
 
-              {scrapeResults.length === 0 ? (
+              {notificationsCount === 0 ? (
                 <div className="flex-1 flex items-center justify-center">
                   <div className="text-center">
                     <Bell size={32} className="text-crimson/20 mx-auto mb-2" />
-                    <p className="text-xs font-mono text-crimson/30">NO SCRAPE OPERATIONS YET</p>
-                    <p className="text-[10px] font-mono text-crimson/20 mt-1">Results appear here after scraping</p>
+                    <p className="text-xs font-mono text-crimson/30">NO NOTIFICATIONS YET</p>
+                    <p className="text-[10px] font-mono text-crimson/20 mt-1">Alerts appear here when triggered</p>
                   </div>
                 </div>
               ) : (
                 <div className="flex-1 overflow-y-auto">
-                  {scrapeResults.map((r, idx) => {
-                    const shortUrl = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0] + r.url.split('/').slice(1, 3).join('/').substring(0, 50);
-                    const hostname = r.url.replace(/^https?:\/\//, '').replace(/www\./, '').split('/')[0];
-                    return (
-                      <div key={idx} className={cn(
-                        "border-b border-crimson/10 last:border-0",
-                        r.success ? "hover:bg-green-500/5" : "hover:bg-red-500/5"
-                      )}>
-                        <div className="flex items-center gap-3 px-4 py-3">
-                          <span className={cn(
-                            "w-2.5 h-2.5 rounded-full flex-shrink-0",
-                            r.success ? "bg-green-500 shadow-[0_0_8px_rgba(0,255,0,0.5)]" : "bg-red-500 shadow-[0_0_8px_rgba(255,0,0,0.5)]"
-                          )} />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-2 mb-1">
-                              <span className="text-[10px] font-mono font-bold text-crimson/70 uppercase">{hostname}</span>
-                              {r.method && (
-                                <span className="text-[9px] font-mono px-1.5 py-0.5 rounded bg-crimson/10 text-crimson/60">
-                                  {r.method}
-                                </span>
-                              )}
-                            </div>
-                            {r.success ? (
-                              <>
-                                <div className="text-xs font-mono text-white/80 truncate">
-                                  {r.name || "UNKNOWN"}
-                                </div>
-                                <div className="flex items-center gap-3 mt-1">
-                                  <span className="text-sm font-mono font-bold text-green-400">
-                                    R$ {r.price?.toFixed(2)}
-                                  </span>
-                                </div>
-                              </>
-                            ) : (
-                              <div className="text-xs font-mono text-red-400">
-                                {r.error || "Unknown error"}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                        <div className="px-4 pb-2">
-                          <div className="text-[9px] font-mono text-crimson/30 truncate" title={r.url}>
-                            {shortUrl}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-
-              {scrapeResults.length > 0 && (
-                <div className="px-4 py-2 border-t border-crimson/20">
-                  <button
-                    onClick={() => { setScrapeResults([]); playSound('click'); }}
-                    className="w-full text-[10px] font-mono text-crimson/40 hover:text-crimson transition-colors py-1"
-                  >
-                    CLEAR LOG
-                  </button>
+                  <div className="px-4 py-3 border-b border-crimson/10">
+                    <p className="text-[10px] font-mono text-crimson/50">{notificationsCount} notification(s) configured</p>
+                  </div>
                 </div>
               )}
             </motion.div>
@@ -2050,6 +2009,45 @@ const queued = await response.json();
                   <option value="24">24 HOURS</option>
                 </select>
               </div>
+            </ConfigSection>
+
+            <ConfigSection title="SYSTEM">
+              <div className="flex items-center justify-between p-4 border border-crimson/20 bg-crimson/5">
+                <div className="flex items-center gap-4">
+                  <Radio className="text-crimson" size={20} />
+                  <div className="flex flex-col">
+                    <span className="text-xs font-mono">INICIAR COM O SISTEMA</span>
+                    <span className="text-[8px] font-mono text-crimson/50 uppercase">ABRIR AO LIGAR O PC</span>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    const newVal = !autoStart;
+                    setAutoStart(newVal);
+                    window.electronAPI?.setAutoStart(newVal);
+                  }}
+                  className={cn(
+                    "w-12 h-6 border transition-all relative",
+                    autoStart ? "border-crimson bg-crimson/20" : "border-crimson/30 bg-black"
+                  )}
+                >
+                  <div className={cn(
+                    "absolute top-1 w-4 h-4 transition-all",
+                    autoStart ? "right-1 bg-crimson" : "left-1 bg-crimson/30"
+                  )} />
+                </button>
+              </div>
+              {isElectron && (
+                <div className="p-4 border border-crimson/20 bg-crimson/5 mt-2">
+                  <div className="flex items-center gap-4">
+                    <Activity className="text-crimson" size={20} />
+                    <div className="flex flex-col">
+                      <span className="text-xs font-mono">MODO BACKGROUND</span>
+                      <span className="text-[8px] font-mono text-crimson/50 uppercase">APP RODA NO TRAY MESMO FECHANDO A JANELA</span>
+                    </div>
+                  </div>
+                </div>
+              )}
             </ConfigSection>
 
 <button onClick={() => { saveData(data); addToast("CONFIGURATION SAVED", "success"); }} className="hud-button w-full py-4 text-sm">SAVE CONFIGURATION</button>
@@ -3073,10 +3071,13 @@ function InputGroup({ label, placeholder, value, onChange, type = "text", onTest
 }
 
 function ToastWithTimer({ toast, onClose, onCopy }: { toast: { id: string, message: string, type: 'success' | 'error' | 'info', details?: string }, onClose: () => void, onCopy: () => void }) {
-  const [timeLeft, setTimeLeft] = useState(5);
+  const duration = toast.type === 'error' ? 15 : toast.type === 'success' ? 5 : 8;
+  const [timeLeft, setTimeLeft] = useState(duration);
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isPaused, setIsPaused] = useState(false);
 
   useEffect(() => {
+    if (isPaused) return;
     const timer = setInterval(() => {
       setTimeLeft(prev => {
         if (prev <= 1) {
@@ -3087,15 +3088,16 @@ function ToastWithTimer({ toast, onClose, onCopy }: { toast: { id: string, messa
         return prev - 1;
       });
     }, 1000);
-
     return () => clearInterval(timer);
-  }, [onClose]);
+  }, [onClose, isPaused]);
 
   return (
     <motion.div
       initial={{ opacity: 0, x: 100, filter: 'blur(10px)' }}
       animate={{ opacity: 1, x: 0, filter: 'blur(0px)' }}
       exit={{ opacity: 0, x: 100, filter: 'blur(10px)' }}
+      onMouseEnter={() => setIsPaused(true)}
+      onMouseLeave={() => setIsPaused(false)}
       className={cn(
         "hud-border bg-black/95 backdrop-blur-md min-w-[300px] max-w-[500px] pointer-events-auto",
         toast.type === 'success' ? 'border-green-500/50' : toast.type === 'error' ? 'border-red-500/50' : 'border-crimson/50'
@@ -3105,8 +3107,8 @@ function ToastWithTimer({ toast, onClose, onCopy }: { toast: { id: string, messa
       <div className="h-1 w-full bg-crimson/10 overflow-hidden">
         <motion.div
           initial={{ width: "100%" }}
-          animate={{ width: "0%" }}
-          transition={{ duration: 5, ease: "linear" }}
+          animate={{ width: isPaused ? undefined : "0%" }}
+          transition={{ duration: duration, ease: "linear" }}
           className={cn(
             "h-full",
             toast.type === 'success' ? 'bg-green-500' : toast.type === 'error' ? 'bg-red-500' : 'bg-crimson'

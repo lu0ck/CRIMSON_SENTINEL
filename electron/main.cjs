@@ -1,10 +1,13 @@
-const { app, BrowserWindow, ipcMain } = require('electron');
+const { app, BrowserWindow, ipcMain, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const isDev = require('electron-is-dev');
 const { fork } = require('child_process');
+const fs = require('fs');
 
 let mainWindow;
 let serverProcess;
+let tray = null;
+let isQuitting = false;
 
 const safeLog = (msg) => {
   try {
@@ -20,9 +23,16 @@ const safeLog = (msg) => {
   }
 };
 
+function getTrayIcon() {
+  const iconPath = path.join(app.getAppPath(), 'public', 'icon.png');
+  if (fs.existsSync(iconPath)) {
+    return nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 });
+  }
+  // Fallback: generate a simple 16x16 red circle icon
+  return nativeImage.createEmpty();
+}
+
 function startServer() {
-  const fs = require('fs');
-  // Start the Express server as a background process
   const serverPath = path.join(app.getAppPath(), 'server.ts');
   const tsxPath = path.join(app.getAppPath(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
   
@@ -69,8 +79,28 @@ function startServer() {
   });
 }
 
+function createTray() {
+  const icon = getTrayIcon();
+  tray = new Tray(icon);
+  tray.setToolTip('Crimson Sentinel');
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Abrir', click: () => { if (mainWindow) { mainWindow.show(); mainWindow.focus(); } } },
+    { type: 'separator' },
+    { label: 'Sair', click: () => { isQuitting = true; app.quit(); } }
+  ]);
+
+  tray.setContextMenu(contextMenu);
+
+  tray.on('double-click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
+
 function createWindow() {
-  const fs = require('fs');
   const iconPath = path.join(app.getAppPath(), 'public', 'icon.png');
   const iconSvgPath = path.join(app.getAppPath(), 'public', 'icon.svg');
   const icon = fs.existsSync(iconPath) ? iconPath : (fs.existsSync(iconSvgPath) ? iconSvgPath : undefined);
@@ -107,6 +137,14 @@ function createWindow() {
 
   loadURL();
 
+  // Close button = minimize to tray (keep running in background)
+  mainWindow.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      mainWindow.hide();
+    }
+  });
+
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
@@ -114,7 +152,7 @@ function createWindow() {
 
 // IPC Handlers for window controls
 ipcMain.on('window-close', () => {
-  if (mainWindow) mainWindow.close();
+  if (mainWindow) mainWindow.hide();
 });
 
 ipcMain.on('window-maximize', () => {
@@ -131,20 +169,36 @@ ipcMain.on('window-minimize', () => {
   if (mainWindow) mainWindow.minimize();
 });
 
+// Auto-start on login
+ipcMain.handle('get-auto-start', () => {
+  return app.getLoginItemSettings().openAtLogin;
+});
+
+ipcMain.on('set-auto-start', (event, enabled) => {
+  app.setLoginItemSettings({
+    openAtLogin: enabled,
+    path: app.getPath('exe'),
+  });
+  safeLog(`[auto-start] set to ${enabled}`);
+});
+
 app.on('ready', () => {
   startServer();
   createWindow();
+  createTray();
 });
 
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') {
-    if (serverProcess) serverProcess.kill();
-    app.quit();
-  }
+  // Don't quit on window close — keep running in tray
 });
 
 app.on('activate', () => {
   if (mainWindow === null) {
     createWindow();
   }
+});
+
+app.on('before-quit', () => {
+  isQuitting = true;
+  if (serverProcess) serverProcess.kill();
 });

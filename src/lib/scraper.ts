@@ -975,10 +975,10 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 
 			// Prefer "Por R$" prices (current sale price) over "De R$" prices (old price)
 			var porPrices = [];
-			var bodyLines = body.split(/\n/);
+			var bodyLines = body.split(/\\n/);
 			for (var i = 0; i < bodyLines.length; i++) {
 				var line = bodyLines[i];
-				if (/\bpor\b/i.test(line) && /\$/.test(line)) {
+				if (/\\bpor\\b/i.test(line) && /\\$/.test(line)) {
 					var parsed = parseBrazilianPrice(line);
 					if (isValidPrice(parsed)) {
 						porPrices.push(parsed);

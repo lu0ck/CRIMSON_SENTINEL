@@ -240,6 +240,7 @@ app.post("/api/scrape", async (req, res) => {
       geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
     });
     safeLog(`[scrape] scraping direto OK via ${result.method} para ${url}`);
+    updateLastScanTimestamp();
     res.json({ jobId: null, status: "direct", result });
   } catch (error: any) {
     safeLog("[scrape] erro: " + error.message);
@@ -314,12 +315,12 @@ app.post("/api/compare", async (req, res) => {
           results = JSON.parse(text);
           break;
         } catch (geminiErr: any) {
-          const is429 = geminiErr?.status === 429 || geminiErr?.code === 429 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("RESOURCE_EXHAUSTED");
-          if (is429 && attempt < 2) {
-            safeLog(`[compare] ⚠️ Gemini 429 — retrying in 3s (attempt ${attempt}/2)...`);
+          const isRetryable = geminiErr?.status === 429 || geminiErr?.status === 503 || geminiErr?.code === 429 || geminiErr?.code === 503 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("RESOURCE_EXHAUSTED") || String(geminiErr?.message || "").includes("503") || String(geminiErr?.message || "").includes("UNAVAILABLE");
+          if (isRetryable && attempt < 2) {
+            safeLog(`[compare] ⚠️ Gemini indisponível — retrying in 3s (attempt ${attempt}/2)...`);
             await new Promise(r => setTimeout(r, 3000));
-          } else if (is429) {
-            safeLog("[compare] ⚠️ Gemini 429 — trying NVIDIA fallback...");
+          } else if (isRetryable) {
+            safeLog("[compare] ⚠️ Gemini indisponível — trying NVIDIA fallback...");
             geminiFailed = true;
           } else {
             throw geminiErr;
@@ -511,12 +512,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
             analysis = response.text || "";
             break;
           } catch (geminiErr: any) {
-            const is429 = geminiErr?.status === 429 || String(geminiErr?.message || "").includes("429");
-            if (is429 && attempt < 2) {
-              safeLog(`[analyze] ⚠️ Gemini 429 — retrying in 3s...`);
+            const isRetryable = geminiErr?.status === 429 || geminiErr?.status === 503 || String(geminiErr?.message || "").includes("429") || String(geminiErr?.message || "").includes("503") || String(geminiErr?.message || "").includes("UNAVAILABLE");
+            if (isRetryable && attempt < 2) {
+              safeLog(`[analyze] ⚠️ Gemini indisponível — retrying in 3s...`);
               await new Promise(r => setTimeout(r, 3000));
-            } else if (is429) {
-              safeLog("[analyze] ⚠️ Gemini 429 — trying NVIDIA fallback...");
+            } else if (isRetryable) {
+              safeLog("[analyze] ⚠️ Gemini indisponível — trying NVIDIA fallback...");
               geminiFailed = true;
             } else {
               throw geminiErr;
@@ -547,11 +548,29 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         }
       }
 
-      if (!analysis && geminiFailed) {
-        return res.status(429).json({ error: "APIs de análise indisponíveis (Gemini + NVIDIA). Tente novamente mais tarde." });
-      }
+      // 3. Local fallback: generate basic analysis from price data when all APIs fail
       if (!analysis) {
-        return res.status(500).json({ error: "Falha na análise. Verifique as API keys configuradas." });
+        const hasHistory = lowestPrice && lowestPriceDate;
+        const priceDiff = hasHistory ? currentPrice - lowestPrice! : 0;
+        const pctAboveLow = hasHistory && lowestPrice! > 0 ? Math.round((priceDiff / lowestPrice!) * 100) : 0;
+
+        analysis = `### Análise Local (APIs indisponíveis)\n\n`;
+        if (hasHistory) {
+          if (pctAboveLow <= 5) {
+            analysis += `**VALE A PENA?** Sim - preço próximo ao menor registrado (${cur} ${lowestPrice} em ${lowestPriceDate}).\n\n`;
+          } else if (pctAboveLow <= 20) {
+            analysis += `**VALE A PENA?** Talvez - preço ${pctAboveLow}% acima do menor registrado (${cur} ${lowestPrice} em ${lowestPriceDate}). Pode valer a pena esperar.\n\n`;
+          } else {
+            analysis += `**VALE A PENA?** Não - preço ${pctAboveLow}% acima do menor registrado. Aguarde promoção.\n\n`;
+          }
+          analysis += `**PREÇO JUSTO:** ${cur} ${lowestPrice}\n\n`;
+        } else {
+          analysis += `**VALE A PENA?** Sem dados suficientes para determinar.\n\n`;
+          analysis += `**PREÇO ATUAL:** ${cur} ${currentPrice} (único registro)\n\n`;
+        }
+        analysis += `**QUANDO COMPRAR:** Aguardar consulta automática quando APIs estiverem disponíveis.\n\n`;
+        analysis += `> ⚠️ Análise gerada localmente sem IA. Configure Gemini ou NVIDIA para análises completas.`;
+        safeLog(`[analyze] Usando fallback local para "${productName}"`);
       }
 
       safeLog(`[analyze] análise direta OK para "${productName}"`);
@@ -1466,6 +1485,9 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
     // C3 — auto-start Instagram microservice
     startInstagramService();
+
+    // Catch-up: if scan was missed while PC was off, run immediately
+    checkAndRunCatchupScan();
   });
 }
 
@@ -1551,6 +1573,62 @@ function restartInstagramService() {
   stopInstagramService();
   // Aguarda um instante para garantir que a porta foi liberada
   setTimeout(() => startInstagramService(), 1000);
+}
+
+// Catch-up scan: check if a scan was missed while PC was off
+async function checkAndRunCatchupScan() {
+  try {
+    const lastScanStr = SettingsRepository.get('last_scan_timestamp');
+    if (!lastScanStr) {
+      SettingsRepository.set('last_scan_timestamp', new Date().toISOString());
+      return;
+    }
+    const lastScan = new Date(lastScanStr).getTime();
+    const now = Date.now();
+    const elapsed = now - lastScan;
+    const profiles = AppDataRepository.getAll().profiles;
+    if (profiles.length === 0) return;
+    const refreshHours = Number(profiles[0].refreshInterval || '12');
+    const intervalMs = refreshHours * 60 * 60 * 1000;
+    if (elapsed > intervalMs) {
+      safeLog(`[catchup] Scan overdue by ${Math.round((elapsed - intervalMs) / 60000)}min — running now`);
+      const products = AppDataRepository.getAll().products;
+      const urls = products.map((p: any) => p.url).filter(Boolean);
+      if (urls.length === 0) return;
+      safeLog(`[catchup] Scanning ${urls.length} products...`);
+      for (const url of urls) {
+        try {
+          const { advancedScrape } = await import('./src/lib/scraper.ts');
+          const result = await advancedScrape(url, { geminiApiKey: profiles[0]?.geminiApiKey, nvidiaApiKey: profiles[0]?.nvidiaApiKey });
+          if (result && result.price > 0) {
+            const existing = products.find((p: any) => p.url === url || p.id === generateProductId(url));
+            if (existing) {
+              const prevPrice = existing.currentPrice;
+              existing.currentPrice = result.price;
+              existing.previousPrice = prevPrice;
+              existing.lastUpdated = new Date().toISOString();
+              existing.lastScrapeMethod = result.method;
+              existing.name = result.name || existing.name;
+              if (!existing.priceHistory) existing.priceHistory = [];
+              existing.priceHistory.push({ date: new Date().toISOString(), price: result.price });
+            }
+          }
+        } catch (e: any) {
+          safeLog(`[catchup] Failed to scrape ${url}: ${e.message}`);
+        }
+      }
+      AppDataRepository.saveAll(AppDataRepository.getAll());
+      SettingsRepository.set('last_scan_timestamp', new Date().toISOString());
+      safeLog(`[catchup] Scan complete`);
+    }
+  } catch (e: any) {
+    safeLog(`[catchup] Error: ${e.message}`);
+  }
+}
+
+// Update last_scan_timestamp after each scrape session completes
+function updateLastScanTimestamp() {
+  SettingsRepository.set('last_scan_timestamp', new Date().toISOString());
 }
 
 startServer();
