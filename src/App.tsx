@@ -247,6 +247,7 @@ export default function App() {
   const [nextScanMinutes, setNextScanMinutes] = useState<number>(0);
   const [autoStart, setAutoStart] = useState(false);
   const [alertSent, setAlertSent] = useState(false);
+  const [redisAlertSent, setRedisAlertSent] = useState(false);
   const [notificationsCount, setNotificationsCount] = useState(0);
 
   const loadNotificationsCount = async () => {
@@ -281,6 +282,15 @@ export default function App() {
         // Reset alert flag when we're past the scan time
         if (status.nextScanMinutes > 600) {
           setAlertSent(false);
+        }
+
+        // SEM Redis os workers BullMQ não rodam (scans, rotas, social ficam parados)
+        if (status.redis && !status.redis.connected && !redisAlertSent) {
+          addToast("ATENÇÃO: Redis offline — filas BullMQ paradas. Scans, rotas e monitoramento social não serão processados.", "error");
+          setRedisAlertSent(true);
+        }
+        if (status.redis && status.redis.connected) {
+          setRedisAlertSent(false);
         }
       }
     } catch (e) {

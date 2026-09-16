@@ -97,13 +97,27 @@ export const ProductRepository = {
 
   syncPriceHistory(productId: string, history: { date: string; price: number }[]): void {
     const db = getDb();
-    db.prepare("DELETE FROM price_history WHERE product_id = ?").run(productId);
+    // Incremental (FASE 13 — auditoria): antes fazia DELETE de todo o histórico +
+    // reinsert em cada save(), reescrevendo todas as linhas a cada scan. Agora só
+    // insere pontos ausentes (chave price|date), dentro de transação.
     const stmt = db.prepare(
       "INSERT INTO price_history (product_id, price, date) VALUES (?, ?, ?)"
     );
-    for (const h of history) {
-      stmt.run(productId, h.price, h.date);
-    }
+    const tx = db.transaction((points: { date: string; price: number }[]) => {
+      const existing = new Set<string>();
+      const rows = db
+        .prepare("SELECT price, date FROM price_history WHERE product_id = ?")
+        .all(productId) as { price: number; date: string }[];
+      for (const r of rows) existing.add(`${r.price}|${r.date}`);
+      for (const h of points) {
+        const key = `${h.price}|${h.date}`;
+        if (!existing.has(key)) {
+          existing.add(key);
+          stmt.run(productId, h.price, h.date);
+        }
+      }
+    });
+    tx(history);
   },
 
   delete(id: string): void {

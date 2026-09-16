@@ -62,7 +62,7 @@ npm run pm2:start           # 5 processos: api, scan-worker(4), route-worker, so
 npm run pm2:logs            # acompanhe os logs
 ```
 
-A UI fica em **http://localhost:3000**.
+A UI fica em **http://localhost:3001**.
 
 > Sem PM2: `npm run dev` (API) + `npm run worker:scan`, `worker:route`, `worker:social` em terminais separados.
 
@@ -105,8 +105,8 @@ A UI fica em **http://localhost:3000**.
 npm run lint               # typecheck (tsc --noEmit)
 docker compose ps          # Redis saudável
 pm2 ls                     # 5 processos online, scan-worker 4/4
-curl -s localhost:3000/api/status
-curl -s "localhost:3000/api/jobs/scan-queue/<JOB_ID>"
+curl -s localhost:3001/api/status
+curl -s "localhost:3001/api/jobs/scan-queue/<JOB_ID>"
 ```
 
 Teste de estresse de 24h: `bash scripts/stress-test-24h.sh` (gera `RELATORIO_TESTE_24H.md`).

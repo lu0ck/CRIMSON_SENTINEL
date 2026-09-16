@@ -1,6 +1,7 @@
 import type { Establishment } from "../types";
 import { PromotionRepository } from "../repositories/promotionRepository";
 import { EstablishmentRepository } from "../repositories/establishmentRepository";
+import { AI_MODELS } from "./aiModels";
 
 // ---------------------------------------------------------------------------
 // FASE 8 — parsing de texto social (WhatsApp/Instagram) em promoções.
@@ -200,7 +201,7 @@ export async function parsePromosFromTextWithAI(
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: AI_MODELS.TEXT,
         contents: buildSocialParsePrompt(text),
         config: { responseMimeType: "application/json" },
       });

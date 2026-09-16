@@ -22,6 +22,7 @@ import {
   Upload,
   Globe,
   ExternalLink,
+  Merge,
 } from "lucide-react";
 import type {
   Establishment,
@@ -349,6 +350,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       setLoading(false);
     }
     loadInsights();
+    loadDupPairs();
   };
 
   const loadLocation = async () => {
@@ -367,6 +369,12 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
   useEffect(() => {
     loadAll();
     loadLocation();
+    loadLocalScanSettings();
+    loadLocalScanStatus();
+    const t = setInterval(() => {
+      loadLocalScanStatus();
+    }, 60_000);
+    return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -476,7 +484,99 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
     }
   };
 
+  // FASE 13 — dedup: sugere pares duplicados e mescla (reponta dados do removido)
+  const [dupPairs, setDupPairs] = useState<{
+    keepId: string; keepName: string; removeId: string; removeName: string;
+    matchType: string; reason: string;
+  }[]>([]);
+  const [dupLoading, setDupLoading] = useState(false);
+  const [mergingDupId, setMergingDupId] = useState<string | null>(null);
+
+  const loadDupPairs = async () => {
+    setDupLoading(true);
+    try {
+      const data = await apiJson("/api/establishments/duplicates");
+      setDupPairs(data.pairs ?? []);
+    } catch {
+      // endpoint indisponível — mantém vazio
+    } finally {
+      setDupLoading(false);
+    }
+  };
+
+  const mergePair = async (keepId: string, removeId: string, removeName: string) => {
+    if (!window.confirm(`Mesclar "${removeName.toUpperCase()}" em "${keepId}"? Obs/promoções/paradas serão repontadas e o duplicado excluído.`)) return;
+    setMergingDupId(removeId);
+    try {
+      const r = await apiJson("/api/establishments/merge", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ keepId, removeId }),
+      });
+      playSound("success");
+      toast(
+        `MESCLADO: ${r.repointedObservations} obs, ${r.repointedPromotions} promo, ${r.repointedStops} paradas repontadas`,
+        "success",
+        r.dedupedPromotions + r.dedupedObservations > 0
+          ? `${r.dedupedPromotions} promoções e ${r.dedupedObservations} obs exatas deduplicadas`
+          : undefined
+      );
+      loadAll();
+      loadDupPairs();
+    } catch (err: any) {
+      toast("FALHA AO MESCLAR", "error", String(err?.message || err));
+    } finally {
+      setMergingDupId(null);
+    }
+  };
+
   const [scanningEstId, setScanningEstId] = useState<string | null>(null);
+  const [localScanIntervalMs, setLocalScanIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
+  const [nextLocalPriceScanMinutes, setNextLocalPriceScanMinutes] = useState<number | null>(null);
+  const [savingLocalInterval, setSavingLocalInterval] = useState(false);
+
+  const loadLocalScanSettings = async () => {
+    try {
+      const data = await apiJson("/api/local-price-scan/settings");
+      setLocalScanIntervalMs(data.intervalMs ?? 6 * 60 * 60 * 1000);
+    } catch {
+      // settings indisponíveis — mantém default
+    }
+  };
+
+  const loadLocalScanStatus = async () => {
+    try {
+      const data = await apiJson("/api/status");
+      setNextLocalPriceScanMinutes(data.nextLocalPriceScanMinutes ?? null);
+    } catch {
+      setNextLocalPriceScanMinutes(null);
+    }
+  };
+
+  const fmtNextScan = (mins: number | null) => {
+    if (mins === null) return "SEM AGENDAMENTO";
+    if (mins <= 0) return "AGORA";
+    if (mins >= 1440) return `EM ${Math.round(mins / 1440)} DIAS`;
+    if (mins >= 60) return `EM ${Math.floor(mins / 60)}H ${mins % 60}MIN`;
+    return `EM ${mins} MIN`;
+  };
+
+  const updateLocalInterval = async (ms: number) => {
+    setSavingLocalInterval(true);
+    try {
+      await apiJson("/api/local-price-scan/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ intervalMs: ms }),
+      });
+      setLocalScanIntervalMs(ms);
+      toast(`SCAN LOCAL A CADA ${Math.round(ms / 60000)} MIN`, "success");
+    } catch (err: any) {
+      toast("FALHA AO SALVAR AGENDAMENTO", "error", String(err?.message || err));
+    } finally {
+      setSavingLocalInterval(false);
+    }
+  };
 
   const scanEstablishmentPrices = async (id: string) => {
     try {
@@ -1405,12 +1505,32 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       <section>
         <div className="flex items-center justify-between">
           <SectionTitle icon={<Store size={16} />}>ESTABELECIMENTOS ({establishments.length})</SectionTitle>
-          <button
-            onClick={() => { playSound("click"); setShowEstForm(!showEstForm); }}
-            className="hud-button flex items-center gap-2"
-          >
-            <Plus size={16} /> ADICIONAR
-          </button>
+          <div className="flex items-center gap-3">
+            {nextLocalPriceScanMinutes !== null && (
+              <div className="flex items-center gap-1.5 text-[10px] font-mono text-crimson/50">
+                <Clock size={12} />
+                <span>PRÓXIMO SCAN {fmtNextScan(nextLocalPriceScanMinutes)}</span>
+              </div>
+            )}
+            <select
+              className="hud-input w-auto! text-[10px] py-1 px-2"
+              value={localScanIntervalMs}
+              disabled={savingLocalInterval}
+              onChange={(e) => updateLocalInterval(Number(e.target.value))}
+              title="Frequência do scan automático de preços locais"
+            >
+              <option value={60 * 60 * 1000}>SCAN A CADA 1H</option>
+              <option value={6 * 60 * 60 * 1000}>SCAN A CADA 6H</option>
+              <option value={12 * 60 * 60 * 1000}>SCAN A CADA 12H</option>
+              <option value={24 * 60 * 60 * 1000}>SCAN A CADA 24H</option>
+            </select>
+            <button
+              onClick={() => { playSound("click"); setShowEstForm(!showEstForm); }}
+              className="hud-button flex items-center gap-2"
+            >
+              <Plus size={16} /> ADICIONAR
+            </button>
+          </div>
         </div>
 
         <AnimatePresence>
@@ -1532,6 +1652,49 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
             </div>
           )}
         </div>
+
+        <AnimatePresence>
+          {dupPairs.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="mt-4 hud-border border-amber-500/20 bg-amber-500/5 p-4"
+            >
+              <div className="flex items-center justify-between mb-3">
+                <span className="font-mono text-[10px] text-amber-500/80 tracking-widest">
+                  <Merge size={12} className="inline mr-1" />
+                  DUPLICADOS SUSPEITOS ({dupPairs.length}) — MESCLAR TRANSFERE DADOS PARA O SOBREVIVENTE
+                </span>
+                {dupLoading && <Loader2 size={12} className="animate-spin text-amber-500/60" />}
+              </div>
+              <div className="flex flex-col gap-2">
+                {dupPairs.map((p) => (
+                  <div key={p.keepId + p.removeId} className="flex items-center gap-3 bg-black/30 border border-crimson/10 px-3 py-2">
+                    <div className="flex-1 min-w-0 flex flex-col gap-0.5">
+                      <span className="text-[10px] font-mono truncate">
+                        <span className="text-amber-400">{p.removeName.toUpperCase()}</span>
+                        <span className="text-crimson/40"> → </span>
+                        <span className="text-green-500">{p.keepName.toUpperCase()}</span>
+                      </span>
+                      <span className="text-[9px] font-mono text-crimson/40">
+                        {p.reason.toUpperCase()} • MATCH: {p.matchType.toUpperCase()} • REMOVE: #{p.removeId.slice(0, 8)}
+                      </span>
+                    </div>
+                    <button
+                      onClick={() => mergePair(p.keepId, p.removeId, p.removeName)}
+                      disabled={mergingDupId === p.removeId}
+                      className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1.5 shrink-0 disabled:opacity-50"
+                    >
+                      {mergingDupId === p.removeId ? <Loader2 size={12} className="animate-spin" /> : <Merge size={12} />}
+                      {mergingDupId === p.removeId ? "MESCLANDO..." : "MESCLAR"}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </section>
 
       {/* ===== PROMOÇÕES ===== */}

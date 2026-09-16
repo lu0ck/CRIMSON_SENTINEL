@@ -226,6 +226,7 @@ INSERT OR IGNORE INTO user_settings (key, value) VALUES
   ('notifications_enabled', 'true'),        -- FASE 6: master switch de alertas
   ('notification_cooldown_hours', '24'),     -- FASE 6: não re-alerta mesmo alvo neste intervalo
   ('social_scan_interval_ms', '21600000'),   -- FASE 9: scan social recorrente (6h)
+  ('local_price_scan_interval_ms', '21600000'), -- FASE 12: scan de preços locais recorrente (6h)
   ('user_lat', NULL),                       -- FASE 4: latitude do usuário (geocoded)
   ('user_lng', NULL),                       -- FASE 4: longitude do usuário
   ('user_address', NULL),                   -- FASE 4: endereço formatado

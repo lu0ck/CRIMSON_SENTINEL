@@ -17,7 +17,7 @@ import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
 import { normalizeProductUrl, generateProductId } from "./src/lib/url.ts";
 import { getScanQueue, getRouteQueue, getSocialQueue } from "./src/queue/queues.ts";
-import { registerSchedulers, registerSocialScheduler, unregisterSocialScheduler, listSocialScheduledJob } from "./src/queue/schedulers.ts";
+import { registerSchedulers, registerSocialScheduler, registerLocalPriceScanScheduler, unregisterSocialScheduler, listSocialScheduledJob } from "./src/queue/schedulers.ts";
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
@@ -33,6 +33,9 @@ import {
   alertActivePromotion,
 } from "./src/lib/notify.ts";
 import { buildLocalInsights, summarizeInsights } from "./src/lib/localInsights.ts";
+import { isTrustedHost } from "./src/lib/trustedDomains.ts";
+import { AI_MODELS } from "./src/lib/aiModels.ts";
+import { isInstagramEnabled } from "./src/lib/instagramEnabled.ts";
 import {
   buildEcommerceEntities,
   buildLocalEntities,
@@ -55,7 +58,25 @@ async function startServer() {
   console.log("=".repeat(80));
   
   const app = express();
-  const PORT = 3000;
+  const PORT = Number(process.env.PORT) || 3001;
+  // Segurança (FASE 13): painel é local/desktop — por padrão só a própria máquina.
+  // BIND_HOST permite expor deliberadamente (ex: 0.0.0.0 para acesso LAN).
+  const BIND_HOST = process.env.BIND_HOST || "127.0.0.1";
+
+  // DNS rebinding: qualquer Host fora do allowlist recebe 403 antes das rotas.
+  // Mesmo com bind 127.0.0.1, um domínio malicioso resolvendo para localhost
+  // conseguiria ler /api/data (segredos dos perfis) se não checássemos o Host.
+  const ALLOWED_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+  if (BIND_HOST !== "0.0.0.0" && BIND_HOST !== "::") {
+    ALLOWED_HOSTS.add(BIND_HOST.toLowerCase());
+  }
+  app.use((req, res, next) => {
+    const host = (req.headers.host || "").split(":")[0].toLowerCase();
+    if (!ALLOWED_HOSTS.has(host)) {
+      return res.status(403).json({ error: "Host não permitido" });
+    }
+    next();
+  });
 
   app.use(express.json());
 
@@ -287,7 +308,7 @@ app.post("/api/compare", async (req, res) => {
       for (let attempt = 1; attempt <= 2; attempt++) {
         try {
           const response = await ai.models.generateContent({
-            model: "gemini-3.6-flash",
+            model: AI_MODELS.TEXT,
             contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
             config: {
               systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
@@ -313,14 +334,11 @@ app.post("/api/compare", async (req, res) => {
           });
           const text = response.text || "[]";
           const parsed = JSON.parse(text);
-          const TRUSTED = ['mercadolivre','mercadolivre.com.br','amzn','amazon.com.br','magazineluiza','magalu',
-            'kabum','terabyteshop','terabyte','pichau','casasbahia','casas bahia','pontofrio','extra','americanas',
-            'shopee','aliexpress','renner','centauro','submarino','americanas.com.br'];
           results = parsed.filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
             try {
               const host = new URL(r.url).hostname.toLowerCase();
-              return TRUSTED.some(t => host.includes(t));
+              return isTrustedHost(host);
             } catch {
               return false;
             }
@@ -367,14 +385,11 @@ app.post("/api/compare", async (req, res) => {
         const jsonMatch = text.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          const TRUSTED = ['mercadolivre','mercadolivre.com.br','amzn','amazon.com.br','magazineluiza','magalu',
-            'kabum','terabyteshop','terabyte','pichau','casasbahia','casas bahia','pontofrio','extra','americanas',
-            'shopee','aliexpress','renner','centauro','submarino','americanas.com.br'];
           results = parsed.filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
             try {
               const host = new URL(r.url).hostname.toLowerCase();
-              return TRUSTED.some(t => host.includes(t));
+              return isTrustedHost(host);
             } catch {
               return false;
             }
@@ -409,13 +424,21 @@ app.get("/api/status", async (req, res) => {
   const profile = ProfileRepository.getById(profileId);
 
   const status = {
+    redis: { connected: false },
     lmStudio: { connected: false, model: null as string | null },
     gemini: { available: false },
     serper: { available: false },
     nvidia: { available: false },
     nextScanMinutes: 0,
-    nextSocialScanMinutes: 0 as number | null
+    nextSocialScanMinutes: 0 as number | null,
+    nextLocalPriceScanMinutes: 0 as number | null
   };
+
+  // Redis (BullMQ) e worker online no processo do servidor
+  try {
+    const { isRedisAvailable } = await import("./src/queue/connection.ts");
+    status.redis.connected = isRedisAvailable();
+  } catch {}
 
   // Test LM Studio connection
   if (profile?.lmStudioUrl) {
@@ -461,6 +484,18 @@ app.get("/api/status", async (req, res) => {
     }
   } catch {
     status.nextSocialScanMinutes = null;
+  }
+
+  // FASE 12: próximo scan de preços locais (scheduler na scan-queue)
+  try {
+    const local = await getScanQueue().getJobScheduler("local-price-scan-cron");
+    if (local?.next) {
+      status.nextLocalPriceScanMinutes = Math.max(0, Math.round((local.next - Date.now()) / 60000));
+    } else {
+      status.nextLocalPriceScanMinutes = null;
+    }
+  } catch {
+    status.nextLocalPriceScanMinutes = null;
   }
 
   res.json(status);
@@ -534,7 +569,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             const response = await ai.models.generateContent({
-              model: "gemini-3.6-flash",
+              model: AI_MODELS.TEXT,
               contents: prompt,
             });
             analysis = response.text || "";
@@ -778,6 +813,32 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     try {
       EstablishmentRepository.delete(req.params.id);
       res.json({ status: "ok" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // FASE 13 — dedup de estabelecimentos: sugere pares duplicados (nome/OSM/WhatsApp)
+  app.get("/api/establishments/duplicates", (_req, res) => {
+    try {
+      const pairs = EstablishmentRepository.findDuplicatePairs();
+      res.json({ count: pairs.length, pairs });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // Mescla um duplicado no sobrevivente: reponta observações/promoções/paradas,
+  // remove o duplicado e limpa duplicatas exatas resultantes do alvo.
+  app.post("/api/establishments/merge", (req, res) => {
+    try {
+      const { keepId, removeId } = req.body || {};
+      if (!keepId || !removeId) {
+        return res.status(400).json({ error: "keepId e removeId são obrigatórios" });
+      }
+      const result = EstablishmentRepository.merge(keepId, [removeId]);
+      safeLog(`[estabelecimentos] mesclado ${removeId} → ${keepId}: +${result.repointedObservations} obs, +${result.repointedPromotions} promo, +${result.repointedStops} paradas, ${result.deleted} removido`);
+      res.json({ status: "ok", ...result });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -1133,9 +1194,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
   // C3 — endpoints Instagram Stories via microserviço Python (instagrapi)
   app.get("/api/social/instagram/health", async (_req, res) => {
+    if (!isInstagramEnabled()) {
+      return res.json({ enabled: false, ok: false, sessionLoaded: false });
+    }
     const hasCredentials = !!SettingsRepository.get("ig_username");
     if (!hasCredentials) {
-      return res.json({ enabled: false, ok: false, sessionLoaded: false });
+      return res.json({ enabled: true, ok: false, sessionLoaded: false });
     }
     try {
       const { instagramServiceHealth } = await import("./src/social/instagramClient.ts");
@@ -1147,7 +1211,35 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // Toggle Instagram em runtime (user_settings.instagram_enabled) — sem .env.
+  app.get("/api/social/instagram/toggle", (_req, res) => {
+    try {
+      res.json({ enabled: isInstagramEnabled() });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/social/instagram/toggle", (req, res) => {
+    try {
+      const { enabled } = req.body || {};
+      SettingsRepository.set("instagram_enabled", enabled ? "true" : "false");
+      safeLog(`[instagram] ${enabled ? "ativado" : "desativado"} via painel`);
+      if (enabled) {
+        startInstagramService().catch((e: any) => safeLog(`[instagram] falha ao iniciar serviço: ${e.message}`));
+      } else {
+        stopInstagramService();
+      }
+      res.json({ enabled: !!enabled });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   app.post("/api/social/instagram/login", async (_req, res) => {
+    if (!isInstagramEnabled()) {
+      return res.status(403).json({ error: "Instagram desativado. Ative-o no painel social primeiro." });
+    }
     const hasCredentials = !!SettingsRepository.get("ig_username");
     if (!hasCredentials) {
       return res.status(400).json({ error: "Configure usuário e senha primeiro" });
@@ -1169,6 +1261,9 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   });
 
   app.post("/api/social/instagram/scan", async (_req, res) => {
+    if (!isInstagramEnabled()) {
+      return res.status(403).json({ error: "Instagram desativado. Ative-o no painel social primeiro." });
+    }
     const hasCredentials = !!SettingsRepository.get("ig_username");
     if (!hasCredentials) {
       return res.status(400).json({ error: "Configure Instagram primeiro" });
@@ -1266,6 +1361,36 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     } catch (error: any) {
       safeLog("[local-price-scan] erro ao enfileirar: " + error.message);
       res.status(500).json({ error: error.message || "Failed to enqueue local price scan" });
+    }
+  });
+
+  // FASE 12 — settings do agendador do scan de preços locais.
+  app.get("/api/local-price-scan/settings", async (req, res) => {
+    try {
+      const intervalMs = SettingsRepository.getNumber("local_price_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
+      const { listScheduledJobs } = await import("./src/queue/schedulers.ts");
+      const scheduler = (await listScheduledJobs()).find((s) => s.id === "local-price-scan-cron");
+      res.json({ intervalMs, scheduler: scheduler ?? null });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/local-price-scan/settings", async (req, res) => {
+    const { intervalMs } = req.body || {};
+    try {
+      const newInterval = Number(intervalMs);
+      if (!Number.isFinite(newInterval) || newInterval <= 0) {
+        return res.status(400).json({ error: "intervalMs deve ser um número positivo (ms)" });
+      }
+      SettingsRepository.set("local_price_scan_interval_ms", Math.round(newInterval));
+      const { registerLocalPriceScanScheduler } = await import("./src/queue/schedulers.ts");
+      await registerLocalPriceScanScheduler({ intervalMs: Math.round(newInterval) });
+      safeLog(`[local-price-scan] agendador atualizado para ${Math.round(newInterval / 60000)}min`);
+      res.json({ status: "ok", intervalMs: Math.round(newInterval) });
+    } catch (error: any) {
+      safeLog("[local-price-scan] erro ao atualizar agendador: " + error.message);
+      res.status(500).json({ error: error.message || "Failed to update scheduler" });
     }
   });
 
@@ -1486,7 +1611,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     });
   }
 
-  app.listen(PORT, "0.0.0.0", async () => {
+  app.listen(PORT, BIND_HOST, async () => {
     console.log("=".repeat(80));
     console.log("CRIMSON SENTINEL SERVER RUNNING!");
     console.log("Port:", PORT);
@@ -1511,6 +1636,14 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       safeLog("[scheduler] Falha ao registrar scheduler social — Redis indisponível?");
     }
 
+    // FASE 12 — scan de preços locais recorrente (mesmo padrão do social)
+    try {
+      const localIntervalMs = SettingsRepository.getNumber('local_price_scan_interval_ms') ?? (6 * 60 * 60 * 1000);
+      await registerLocalPriceScanScheduler({ intervalMs: localIntervalMs });
+    } catch {
+      safeLog("[scheduler] Falha ao registrar scheduler de preços locais — Redis indisponível?");
+    }
+
     // C3 — auto-start Instagram microservice
     startInstagramService();
 
@@ -1528,6 +1661,10 @@ function execAsync(cmd: string): Promise<void> {
 }
 
 async function startInstagramService() {
+  if (!isInstagramEnabled()) {
+    safeLog("[instagram] desativado no painel social — serviço não iniciado");
+    return;
+  }
   const igUsername = SettingsRepository.get("ig_username");
   const igPassword = SettingsRepository.get("ig_password");
   if (!igUsername || !igPassword) {
@@ -1603,7 +1740,9 @@ function restartInstagramService() {
   setTimeout(() => startInstagramService(), 1000);
 }
 
-// Catch-up scan: check if a scan was missed while PC was off
+// Catch-up scan: check if a scan was missed while PC was off.
+// Enfileira um job scan-all no BullMQ em vez de scraper síncrono no boot
+// (FASE 12 — antes o scraping direto travava o event loop do Express).
 async function checkAndRunCatchupScan() {
   try {
     const lastScanStr = SettingsRepository.get('last_scan_timestamp');
@@ -1619,35 +1758,31 @@ async function checkAndRunCatchupScan() {
     const refreshHours = Number(profiles[0].refreshInterval || '12');
     const intervalMs = refreshHours * 60 * 60 * 1000;
     if (elapsed > intervalMs) {
-      safeLog(`[catchup] Scan overdue by ${Math.round((elapsed - intervalMs) / 60000)}min — running now`);
       const products = AppDataRepository.getAll().products;
-      const urls = products.map((p: any) => p.url).filter(Boolean);
-      if (urls.length === 0) return;
-      safeLog(`[catchup] Scanning ${urls.length} products...`);
-      for (const url of urls) {
-        try {
-          const { advancedScrape } = await import('./src/lib/scraper.ts');
-          const result = await advancedScrape(url, { geminiApiKey: profiles[0]?.geminiApiKey, nvidiaApiKey: profiles[0]?.nvidiaApiKey });
-          if (result && result.price > 0) {
-            const existing = products.find((p: any) => p.url === url || p.id === generateProductId(url));
-            if (existing) {
-              const prevPrice = existing.currentPrice;
-              existing.currentPrice = result.price;
-              existing.previousPrice = prevPrice;
-              existing.lastUpdated = new Date().toISOString();
-              existing.lastScrapeMethod = result.method;
-              existing.name = result.name || existing.name;
-              if (!existing.priceHistory) existing.priceHistory = [];
-              existing.priceHistory.push({ date: new Date().toISOString(), price: result.price });
-            }
-          }
-        } catch (e: any) {
-          safeLog(`[catchup] Failed to scrape ${url}: ${e.message}`);
-        }
+      if (products.length === 0) return;
+      const { isRedisAvailable } = await import("./src/queue/connection.ts");
+      // Aguarda a conexão subir (até 3s) — no boot o listen dispara antes do
+      // Redis terminar o connect; sem espera o catchup cai no "Redis offline".
+      let redisReady = isRedisAvailable();
+      for (let i = 0; i < 15 && !redisReady; i++) {
+        await new Promise((r) => setTimeout(r, 200));
+        redisReady = isRedisAvailable();
       }
-      AppDataRepository.saveAll(AppDataRepository.getAll());
-      SettingsRepository.set('last_scan_timestamp', new Date().toISOString());
-      safeLog(`[catchup] Scan complete`);
+      if (redisReady) {
+        safeLog(
+          `[catchup] Scan overdue by ${Math.round((elapsed - intervalMs) / 60000)}min — enfileirando scan-all (${products.length} produtos)`
+        );
+        const job = await getScanQueue().add(
+          "scan-all",
+          { type: "scan-all", triggeredBy: "catchup" },
+          { jobId: `catchup-${Date.now()}` }
+        );
+        safeLog(`[catchup] scan-all enfileirado job ${job.id}`);
+        return;
+      }
+      safeLog(
+        `[catchup] Scan overdue by ${Math.round((elapsed - intervalMs) / 60000)}min mas Redis offline — aguardando filas`
+      );
     }
   } catch (e: any) {
     safeLog(`[catchup] Error: ${e.message}`);

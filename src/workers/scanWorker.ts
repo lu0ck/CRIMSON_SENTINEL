@@ -5,7 +5,6 @@ import type { ScanJobPayload } from "../queue/types";
 import { AppDataRepository } from "../repositories/appDataRepository";
 import { ProductRepository } from "../repositories/productRepository";
 import { ProfileRepository } from "../repositories/profileRepository";
-import { scrapeProductInfo } from "../lib/gemini";
 import { advancedScrape } from "../lib/scraper";
 import { safeLog } from "../lib/safeLog";
 import { alertProductTargetReached } from "../lib/notify";
@@ -23,24 +22,8 @@ import { scanEstablishmentPrices, type LocalPriceScanOutcome } from "../lib/loca
 import { overpassDiscoverEstablishments, haversineKm, type GeoPoint } from "../lib/geo";
 import { isFlashPrice, createFlashPromotion } from "../lib/flashDetect";
 import { alertFlashPromotion } from "../lib/notify";
-
-// Comparação em provedores externos — cópia adaptada da lógica antiga de
-// server.ts /api/compare. Mantém comportamento idêntico para não regredir.
-const TRUSTED_DOMAINS = [
-  "mercadolivre.com.br",
-  "amazon.com.br",
-  "kabum.com.br",
-  "pichau.com.br",
-  "terabyteshop.com.br",
-  "magazineluiza.com.br",
-  "casasbahia.com.br",
-  "pontofrio.com.br",
-  "extra.com.br",
-  "fastshop.com.br",
-  "girafa.com.br",
-  "carrefour.com.br",
-  "americanas.com.br",
-];
+import { TRUSTED_DOMAINS } from "../lib/trustedDomains";
+import { AI_MODELS } from "../lib/aiModels";
 
 const SCAN_TIMEOUT_MS = Number(process.env.SCAN_TIMEOUT_MS) || 590_000;
 
@@ -117,16 +100,18 @@ async function handleScanAll() {
   for (const product of data.products) {
     try {
       const profile = data.profiles.find((p) => p.id === product.profileId);
-      const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
-      if (!apiKey) continue;
-
-      const info = await scrapeProductInfo(product.url, apiKey, product.profileId);
+      const info = await advancedScrape(product.url, {
+        lmStudioUrl: profile?.lmStudioUrl,
+        nvidiaApiKey: profile?.nvidiaApiKey,
+        geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+      });
       if (info && info.price) {
         const now = new Date().toISOString();
         const priceChanged = info.price !== product.currentPrice;
         product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
         product.currentPrice = info.price;
         product.lastUpdated = now;
+        product.lastScrapeMethod = info.method ?? "scan-all";
         if (priceChanged) product.priceHistory.push({ date: now, price: info.price });
         ProductRepository.save(product);
         updated++;
@@ -152,6 +137,11 @@ async function handleScanAll() {
       safeLog(`[scan-worker] erro ${product.name}: ${err}`);
     }
   }
+
+  // Atualiza o timestamp do último scan (usado pelo catch-up no boot: se o PC
+  // ficou desligado além do refreshInterval, o próximo boot enfileira scan-all).
+  SettingsRepository.set("last_scan_timestamp", new Date().toISOString());
+
   return { updated, errors, total: data.products.length };
 }
 
@@ -178,7 +168,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     try {
       const ai = new GoogleGenAI({ apiKey: finalApiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: AI_MODELS.TEXT,
         contents: prompt,
         config: {
           systemInstruction,
@@ -271,7 +261,7 @@ async function handleLocalInsight(job: Job<ScanJobPayload & { type: "local-insig
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: finalApiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: AI_MODELS.TEXT,
         contents: buildInsightPrompt(insights),
       });
       if (response.text) {
@@ -408,7 +398,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       const OpenAI = (await import("openai")).default;
       const client = new OpenAI({ baseURL: profile.lmStudioUrl, apiKey: "lm-studio" });
       const response = await client.chat.completions.create({
-        model: "qwen",
+        model: AI_MODELS.LOCAL_LLM,
         messages: [{ role: "user", content: prompt }],
       });
       analysis = response.choices[0]?.message?.content || "";
@@ -443,7 +433,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: finalApiKey });
       const response = await ai.models.generateContent({
-        model: "gemini-3-flash-preview",
+        model: AI_MODELS.TEXT,
         contents: prompt,
       });
       analysis = response.text || "";

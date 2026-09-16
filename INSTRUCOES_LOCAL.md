@@ -55,13 +55,13 @@ pm2 ls
 Deverá ver 5 processos:
 | Processo | Função |
 |---|---|
-| `crimson-api` | API Express (porta 3000) |
+| `crimson-api` | API Express (porta 3001) |
 | `crimson-scan-worker` (×4, cluster) | scraping, scan-all, compare, analyze, local-price-scan, discover |
 | `crimson-route-worker` | roteirização (TSP/OSRM) |
 | `crimson-social-worker` | captura/scan WhatsApp e Instagram |
 | `crimson-instagram-service` | microserviço Python instagrapi (porta 8721) |
 
-Acesse **http://localhost:3000**.
+Acesse **http://localhost:3001**.
 
 ### Sem PM2 (desenvolvimento)
 ```bash
@@ -75,7 +75,7 @@ npm run worker:social       # terminal 4
 
 ```bash
 npm run lint                # typecheck (tsc --noEmit)
-curl -s localhost:3000/api/status
+curl -s localhost:3001/api/status
 bash scripts/stress-test-24h.sh   # teste de estabilidade de 24h
 ```
 

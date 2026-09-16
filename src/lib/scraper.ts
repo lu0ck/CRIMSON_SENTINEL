@@ -7,6 +7,7 @@ import path from "path";
 import { getStoreHandler, storeHandlers } from "./store-handlers";
 import { CACHE_DIR, COOKIE_DIR } from "../database/db";
 import { scraperBreaker } from "./circuitBreaker.ts";
+import { AI_MODELS } from "./aiModels";
 
 // @ts-ignore
 chromium.use(stealth());
@@ -1323,7 +1324,7 @@ Return ONLY valid JSON, no explanation.`
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
     try {
       const response = await ai.models.generateContent({
-        model: "gemini-3.6-flash",
+        model: AI_MODELS.URL_CONTEXT,
         contents: prompt,
         config: {
           tools: contextText ? [] : [{ urlContext: {} }],

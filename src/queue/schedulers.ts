@@ -5,6 +5,7 @@ import type { ScanJobPayload, SocialMonitorJobPayload } from "./types";
 const REPEAT_DAILY_KEY = "scan-daily-cron";
 const REPEAT_INTERVAL_KEY = "scan-interval-12h";
 const SOCIAL_SCAN_KEY = "social-scan-cron";
+const LOCAL_PRICE_SCAN_KEY = "local-price-scan-cron";
 
 export async function registerSchedulers(opts?: {
   scanIntervalMs?: number;
@@ -74,7 +75,8 @@ export async function listScheduledJobs() {
   }
   const schedulers = await queue.getJobSchedulers();
   return schedulers.map((s) => ({
-    id: s.id ?? null,
+    // getJobSchedulers() expõe o campo `key`, não `id` (FASE 9)
+    id: s.id ?? (s as any).key ?? null,
     name: s.name,
     pattern: s.pattern ?? null,
     every: s.every ?? null,
@@ -124,6 +126,53 @@ export async function unregisterSocialScheduler(): Promise<void> {
   try {
     await queue.removeJobScheduler(SOCIAL_SCAN_KEY);
     console.log(`[scheduler] removido ${SOCIAL_SCAN_KEY}`);
+  } catch {
+    // já não existia
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FASE 12 — agendador do scan de preços locais (price_url dos estabelecimentos).
+// Mesmo padrão do social: repeatable job na scan-queue (a fila do scanWorker que
+// hospeda o handleLocalPriceScan), via upsert idempotente.
+// ---------------------------------------------------------------------------
+
+export async function registerLocalPriceScanScheduler(opts?: {
+  intervalMs?: number;
+}): Promise<void> {
+  let queue;
+  try {
+    queue = getScanQueue();
+  } catch {
+    console.warn("[scheduler] Redis indisponível — local-price-scan scheduler ignorado");
+    return;
+  }
+  const intervalMs = opts?.intervalMs ?? 6 * 60 * 60 * 1000; // 6h
+
+  await queue.upsertJobScheduler(
+    LOCAL_PRICE_SCAN_KEY,
+    { every: intervalMs },
+    {
+      name: "local-price-scan",
+      data: { type: "local-price-scan" } as ScanJobPayload,
+    }
+  );
+
+  console.log(
+    `[scheduler] scan de preços locais registrado: a cada ${Math.round(intervalMs / 60000)}min`
+  );
+}
+
+export async function unregisterLocalPriceScanScheduler(): Promise<void> {
+  let queue;
+  try {
+    queue = getScanQueue();
+  } catch {
+    return;
+  }
+  try {
+    await queue.removeJobScheduler(LOCAL_PRICE_SCAN_KEY);
+    console.log(`[scheduler] removido ${LOCAL_PRICE_SCAN_KEY}`);
   } catch {
     // já não existia
   }

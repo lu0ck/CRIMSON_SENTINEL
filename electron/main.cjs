@@ -23,6 +23,10 @@ const safeLog = (msg) => {
   }
 };
 
+// Porta do servidor Express embutido. A 3000 é usada por outro serviço do usuário;
+// o fallback cai em 3001 (mesmo default de server.ts).
+const UI_PORT = process.env.CRIMSON_PORT || 3001;
+
 function getTrayIcon() {
   const iconPath = path.join(app.getAppPath(), 'public', 'icon.png');
   if (fs.existsSync(iconPath)) {
@@ -124,7 +128,7 @@ function createWindow() {
     if (!mainWindow || mainWindow.isDestroyed()) return;
 
     safeLog('Attempting to load URL...');
-    mainWindow.loadURL('http://localhost:3000').then(() => {
+    mainWindow.loadURL(`http://localhost:${UI_PORT}`).then(() => {
       if (!mainWindow || mainWindow.isDestroyed()) return;
       safeLog('URL loaded successfully');
       mainWindow.show();

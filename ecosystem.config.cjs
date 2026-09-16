@@ -5,6 +5,16 @@
 //      A3: 4 instâncias em cluster × concurrency 5 = até 20 jobs simultâneos
 //  - route-worker: roteirização (TSP/OSRM, FASE 7)
 //  - social-worker: monitoramento WhatsApp/Instagram (FASE 9/10)
+
+const path = require("path");
+const os = require("os");
+
+// Banco único entre Electron e stack pm2: o Electron usa app.getPath('userData')
+// (= ~/.config/crimson-sentinel), onde vivem os dados reais do usuário. Sem esta
+// variável, db.ts cai no __dirname do projeto e cria um segundo crimson.db vazio
+// (split-brain: scans automáticos não enxergam os produtos).
+const USER_DATA_PATH = path.join(os.homedir(), ".config", "crimson-sentinel");
+
 module.exports = {
   apps: [
     {
@@ -13,6 +23,9 @@ module.exports = {
       interpreter: "none",
       env: {
         NODE_ENV: "development",
+        USER_DATA_PATH,
+        // Porta dedicada — a 3000 é usada por outro serviço (afiliados-bot)
+        PORT: "3001",
       },
       max_restarts: 10,
       min_uptime: "5s",
@@ -21,14 +34,18 @@ module.exports = {
     },
     {
       name: "crimson-scan-worker",
-      script: "./node_modules/.bin/tsx",
-      args: "src/workers/scanWorkerEntry.ts",
+      // Cluster mode exige script JS carregável direto pelo node (pm2 rejeita
+      // .ts sem Node>=22.18). Bootstrap registra o hook tsx e importa o worker,
+      // preservando IPC do cluster (.bin/tsx = shell wrapper; cli.mjs spawn de
+      // filho quebra IPC).
+      script: "scripts/scan-worker-cluster.mjs",
       // A3: 4 instâncias em cluster; cada worker tem concurrency 5 → 20 jobs em paralelo
       // sem OOM (Playwright distribuído em 4 processos, não 1 com 20 browsers).
       instances: 4,
       exec_mode: "cluster",
       env: {
         NODE_ENV: "development",
+        USER_DATA_PATH,
       },
       max_restarts: 10,
       min_uptime: "5s",
@@ -41,6 +58,7 @@ module.exports = {
       args: "src/workers/routeWorkerEntry.ts",
       env: {
         NODE_ENV: "development",
+        USER_DATA_PATH,
       },
       max_restarts: 10,
       min_uptime: "5s",
@@ -53,6 +71,7 @@ module.exports = {
       args: "src/workers/socialWorkerEntry.ts",
       env: {
         NODE_ENV: "development",
+        USER_DATA_PATH,
       },
       max_restarts: 10,
       min_uptime: "5s",

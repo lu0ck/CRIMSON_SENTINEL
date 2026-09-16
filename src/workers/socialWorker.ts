@@ -14,6 +14,8 @@ import {
   enrichParsedPromos,
   isDuplicatePromo,
 } from "../lib/socialParse";
+import { AI_MODELS } from "../lib/aiModels";
+import { isInstagramEnabled } from "../lib/instagramEnabled";
 
 // FASE 8 — monitoramento social. Captura texto de WhatsApp (colado) ou captions
 // do Instagram (via Playwright) e transforma em promoções (source whatsapp/instagram).
@@ -281,8 +283,8 @@ async function handleWhatsappStatusScan(job: Job<SocialMonitorJobPayload & { typ
 async function handleInstagramStoriesScan(
   job: Job<SocialMonitorJobPayload & { type: "instagram-stories-scan" }>
 ) {
-  if (process.env.INSTAGRAM_ENABLED !== "true") {
-    return { skipped: true, reason: "INSTAGRAM_ENABLED=false no .env" };
+  if (!isInstagramEnabled()) {
+    return { skipped: true, reason: "instagram desativado no painel social" };
   }
   if (!SettingsRepository.getBool("social_monitoring_enabled")) {
     return { skipped: true, reason: "social_monitoring_enabled=false" };
@@ -365,7 +367,7 @@ async function handleInstagramStoriesScan(
                 inlineData: { data: base64, mimeType: media.mimeType },
               };
               const r = await ai.models.generateContent({
-                model: "gemini-2.0-flash",
+                model: AI_MODELS.VISION,
                 contents: [
                   {
                     role: "user",

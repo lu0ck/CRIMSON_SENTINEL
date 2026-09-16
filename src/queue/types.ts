@@ -12,7 +12,7 @@ export interface ScrapeJobPayload {
 
 export interface ScanAllJobPayload {
   type: "scan-all";
-  triggeredBy: "cron-daily" | "cron-interval" | "manual";
+  triggeredBy: "cron-daily" | "cron-interval" | "manual" | "catchup";
 }
 
 export interface CompareJobPayload {

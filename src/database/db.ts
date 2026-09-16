@@ -90,6 +90,17 @@ export function getDb(): Database.Database {
     console.log("[db] migração: social_monitoring_enabled atualizado para true");
   }
 
+  // FASE 12+ (analógico ao INSERT OR IGNORE do schema.sql): bancos antigos não
+  // recebem as settings novas pelo CREATE TABLE IF NOT EXISTS — insere default.
+  for (const [key, value] of [
+    ["local_price_scan_interval_ms", "21600000"], // FASE 12: scan de preços locais (6h)
+  ] as const) {
+    db.prepare(
+      `INSERT INTO user_settings (key, value, updated_at) SELECT ?, ?, datetime('now')
+       WHERE NOT EXISTS (SELECT 1 FROM user_settings WHERE key = ?)`
+    ).run(key, value, key);
+  }
+
   dbInstance = db;
 
   console.log(`[db] SQLite inicializado: ${DB_PATH}`);

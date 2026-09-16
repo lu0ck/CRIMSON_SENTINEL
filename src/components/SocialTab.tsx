@@ -15,6 +15,7 @@ import {
   Clock,
   QrCode,
   LogIn,
+  Power,
 } from "lucide-react";
 
 type ToastType = "success" | "error" | "info";
@@ -89,6 +90,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [igHealthLoading, setIgHealthLoading] = useState(true);
   const [igLoginLoading, setIgLoginLoading] = useState(false);
   const [igScanning, setIgScanning] = useState(false);
+  const [igToggling, setIgToggling] = useState(false);
 
   // ---- Instagram credentials (sem .env) ----
   const [igHasCredentials, setIgHasCredentials] = useState(false);
@@ -154,6 +156,27 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       toast("FALHA AO ALTERAR WHATSAPP", "error", String(err?.message || err));
     } finally {
       setWaToggling(false);
+    }
+  };
+
+  const toggleInstagram = async (enabled: boolean) => {
+    setIgToggling(true);
+    try {
+      await apiJson("/api/social/instagram/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      setIgEnabled(enabled);
+      if (enabled) {
+        setIgOk(false);
+        setTimeout(() => loadInstagramHealth(), 3000);
+      }
+      toast(enabled ? "INSTAGRAM ATIVADO" : "INSTAGRAM DESATIVADO", "success");
+    } catch (err: any) {
+      toast("FALHA AO ALTERAR INSTAGRAM", "error", String(err?.message || err));
+    } finally {
+      setIgToggling(false);
     }
   };
 
@@ -704,12 +727,30 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
           <SectionTitle icon={<Instagram size={16} />}>INSTAGRAM — STORIES COM PREÇO</SectionTitle>
           {igHasCredentials && (
             <div className="flex items-center gap-2">
-              <span className={cn("text-[9px] font-mono", !igOk ? "text-red-500" : igSessionLoaded ? "text-green-500" : "text-amber-500")}>
-                {!igOk ? "● INICIANDO" : igSessionLoaded ? "● CONECTADO" : "○ SEM SESSÃO"}
+              <span className={cn("text-[9px] font-mono", !igEnabled ? "text-crimson/40" : !igOk ? "text-red-500" : igSessionLoaded ? "text-green-500" : "text-amber-500")}>
+                {!igEnabled ? "● DESLIGADO" : !igOk ? "● INICIANDO" : igSessionLoaded ? "● CONECTADO" : "○ SEM SESSÃO"}
               </span>
+              {igEnabled ? (
+                <button
+                  onClick={() => { playSound("click"); toggleInstagram(false).catch(() => {}); }}
+                  disabled={igToggling}
+                  className="hud-button flex items-center gap-2 text-red-400 disabled:opacity-50"
+                >
+                  DESATIVAR
+                </button>
+              ) : (
+                <button
+                  onClick={() => { playSound("click"); toggleInstagram(true).catch(() => {}); }}
+                  disabled={igToggling}
+                  className="hud-button flex items-center gap-2 disabled:opacity-50"
+                >
+                  {igToggling ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  {igToggling ? "ATIVANDO..." : "ATIVAR"}
+                </button>
+              )}
               <button
                 onClick={() => { playSound("click"); loginInstagram().catch(() => {}); }}
-                disabled={igLoginLoading || !igOk}
+                disabled={igLoginLoading || !igOk || !igEnabled}
                 className="hud-button flex items-center gap-2 disabled:opacity-50"
               >
                 {igLoginLoading ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
@@ -717,7 +758,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               </button>
               <button
                 onClick={() => { playSound("click"); scanInstagram().catch(() => {}); }}
-                disabled={igScanning || !igOk || !igSessionLoaded}
+                disabled={igScanning || !igOk || !igSessionLoaded || !igEnabled}
                 className="hud-button flex items-center gap-2 disabled:opacity-50"
               >
                 {igScanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
@@ -781,6 +822,14 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
           ) : igHealthLoading ? (
             <div className="flex items-center gap-3 text-crimson/50 font-mono text-xs">
               <Loader2 size={14} className="animate-spin" /> VERIFICANDO SERVIÇO...
+            </div>
+          ) : !igEnabled ? (
+            <div className="flex items-start gap-3">
+              <Power size={14} className="text-crimson/50 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
+                Instagram desativado no painel. Clique em ATIVAR no topo para iniciar o
+                serviço e liberar LOGIN/SCAN de Stories.
+              </p>
             </div>
           ) : !igOk ? (
             <div className="flex items-start gap-3">

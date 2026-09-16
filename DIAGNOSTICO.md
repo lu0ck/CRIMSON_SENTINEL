@@ -459,4 +459,116 @@ Coleta automática de preços de itens locais via scraping em background (sem tr
 
 **Nota FASE 11→12:** próximos passos naturais: integração WhatsApp real (sessão), dedup/mescla de estabelecimentos, ou agendador do scan de preços locais (repeatable job, como o social).
 
+### 6.11.1 Migração de ambiente (2026-08-24) — quebras e correções
+
+O ambiente foi migrado para outro disco; o projeto agora vive em `/mnt/SSD_Games_2/Projetos/CRIMSON_SENTINEL` (antes `/mnt/ssd_dados/...`). Impactos e resoluções:
+
+| Item | Problema | Resolução |
+|---|---|---|
+| Node | v22.23.2 → **v20.20.2** | `node_modules` recompilados (`npm install --ignore-scripts` + `npm rebuild`); better-sqlite3 compilou OK para ABI do Node 20 |
+| better-sqlite3 | `gyp ERR! ... .d.raw: Arquivo ou diretório inexistente` no install padrão | Instalar com `--ignore-scripts` e depois `npx node-gyp rebuild --release` dentro de `node_modules/better-sqlite3` |
+| tsc | Os 41 erros pré-existentes em scraper.ts/store-handlers.ts **desapareceram** com o fresh install — typecheck agora 100% limpo | — |
+| Redis | Não existia no novo ambiente (sem sudo) | Compilado do fonte em `/tmp/opencode/redis-7.4.1`; binários persistidos em `~/.local/opt/{redis-server,redis-cli}`. Iniciar com: `~/.local/opt/redis-server --port 6379 --daemonize yes` (**volátil entre boots — reiniciar se ping falhar**) |
+| pm2 | Não estava global; dump antigo restaurado com entradas obsoletas | Usar `npx pm2 ...`; `pm2 kill` + start + `pm2 save` para limpar dump |
+| scan-worker cluster | pm2 rejeita script `.ts` sem Node>=22.18 ("TypeScript apps require bun, Node.js >= 22.18..."); `.bin/tsx` é shell wrapper (SyntaxError em cluster); `cli.mjs` spawn filho e quebra IPC do cluster | Novo bootstrap `scripts/scan-worker-cluster.mjs`: `import { register } from "tsx/esm/api"; register(); await import(...)` — mantém 4 instâncias × concurrency 5 no cluster |
+
+**E2E pós-migração validado**: fake market → job `local-price-scan` consumido pelo cluster → `recorded: 2` (R$12,34, method PLAYWRIGHT_STEALTH) → re-scan dedup (`dup: 2`) → séries visíveis em `/api/price-history`. Scheduler social visível (`social-scan-cron`, next ok). 8 processos online (api + 4×scan cluster + route + social + instagram-service).
+
+## 6.12 Status da FASE 12 (concluída) — Agendador do scan de preços locais + auditoria de código
+
+Três frentes: (1) o **scan de preços locais recorrente** como repeatable job do BullMQ; (2) **auditoria de alta prioridade** (domínios confiáveis, modelos de IA, catchup assíncrono); (3) pequenos fixes de robustez.
+
+### 6.12.1 Agendador do scan de preços locais (repeatable job)
+
+| Arquivo | Papel |
+|---|---|
+| `src/database/schema.sql` + `src/database/db.ts` | Setting `local_price_scan_interval_ms` default 6h; migração defensiva em bancos antigos (INSERT se ausente) |
+| `src/queue/schedulers.ts` | `registerLocalPriceScanScheduler`/`unregisterLocalPriceScanScheduler` (upsert idempotente do `local-price-scan-cron` na scan-queue, name `local-price-scan`); `listScheduledJobs` passou a expor `id` corretamente (BullMQ v6 usa `key`, não `id` — bug herdado da FASE 9 que deixava `scheduler:null` no retorno) |
+| `server.ts` | Registro no boot; `GET/PUT /api/local-price-scan/settings`; `/api/status` expõe `nextLocalPriceScanMinutes`; `PORT` passou a ler `process.env.PORT` (era hardcoded 3000 — bug descoberto no teste) |
+| `src/components/LocalTab.tsx` | Seletor de frequência (1h/6h/12h/24h) + indicador "PRÓXIMO SCAN" no header de ESTABELECIMENTOS (refresh 60s) |
+
+**Testes realizados (2026-09-15):**
+- ✅ Boot: `[scheduler] scan de preços locais registrado: a cada 360min`
+- ✅ `GET /api/local-price-scan/settings` → `{intervalMs, scheduler:{id:"local-price-scan-cron", every, next}}`
+- ✅ `PUT` para 1h → 3600000 e scheduler re-registrado; revert para 6h persistido
+- ✅ Repeat key no Redis: `bull:scan-queue:repeat:local-price-scan-cron`
+- ✅ Tick imediato gerou job na fila `wait` com data `{"type":"local-price-scan"}` (mesmo padrão FASE 2/9)
+- ✅ `/api/status` → `redis.connected` e `nextLocalPriceScanMinutes`
+- ⚠️ Porta 3000 estava ocupada por outro projeto (`afiliados-bot`); teste feito na 3150 via `PORT` — fix `PORT = Number(process.env.PORT) || 3000`
+
+### 6.12.2 Auditoria de alta prioridade
+
+1. **Domínios confiáveis unificados** — `src/lib/trustedDomains.ts` (`TRUSTED_DOMAINS` + `isTrustedHost`). Removidas listas duplicadas/divergentes de `server.ts` (2x compare synchronous fallback) e `scanWorker.ts` (`handleCompare`); **shopee/aliexpress/casasbahia/americanas** deixaram de constar (inconsistentes com o resto).
+2. **Modelos de IA centralizados** — `src/lib/aiModels.ts` (`TEXT`/`URL_CONTEXT`/`VISION`/`LOCAL_LLM`). Substituídos strings hardcoded (`gemini-3.6-flash`, `gemini-2.0-flash`, `qwen`) em `server.ts`, `scanWorker.ts`, `gemini.ts`, `scraper.ts`, `socialParse.ts`, `socialWorker.ts`.
+3. **`handleScanAll` sem Gemini obrigatório** — trocado `scrapeProductInfo()` (só Gemini urlContext, exigia API key e pulava o produto sem ela) por `advancedScrape()` (multi-estratégia). Worker grava `last_scan_timestamp` ao concluir.
+4. **Catchup assíncrono** — `checkAndRunCatchupScan` (server.ts) deixou de scrapar síncrono no boot (travava o event loop; explicava marca de 5s por produto no boot) e agora enfileira `scan-all` no BullMQ com `triggeredBy:"catchup"` (adicionado ao discriminador em `types.ts`); espera até 3s o Redis conectar.
+5. **Status Redis** — `/api/status` expõe `redis.connected`; `App.tsx` alerta via toast quando Redis cai (todos os workers param).
+
+**Validação**: `npm run lint` (tsc 0 erros), `npm run build` OK.
+
+**Nota FASE 12→13 (auditoria):** `scrapeProductInfo` era o único uso de `gemini.ts` — **arquivo inteiro removido** (zero importers). `syncPriceHistory` virou **incremental** (ver FASE 13). Próximos naturais: revisão de segurança, dedup/mescla de estabelecimentos, WhatsApp real (sessão).
+
+## 6.13 Status da FASE 13 (concluída) — Auditoria: histórico incremental + código morto
+
+1. **`ProductRepository.syncPriceHistory` incremental** — antes: `DELETE` de todo o histórico + reinsert em **cada** `save()` (reescrevia todas as linhas a cada scan de centenas de produtos). Agora: insert **só dos pontos ausentes** (chave `price|date`), dentro de transação. Idempotente e mais barato; comportamento equivalente pois `priceHistory` só recebe append nos fluxos atuais.
+2. **`src/lib/gemini.ts` removido** — o módulo inteiro era código morto (`scrapeProductInfo` não tinha mais importadores desde a FASE 12; a estratégia Gemini URL-context vive em `scraper.ts` via `AI_MODELS.URL_CONTEXT`).
+
+**Validação (teste isolado em DB temporário, sem tocar no DB real):**
+- ✅ save #1 (2 pontos) → `price_history` 2 linhas
+- ✅ save #2 (+1 ponto) → 3 linhas (só delta inserido)
+- ✅ save #3 com mesmo array → 3 linhas (**idempotente**, 0 duplicados por `price|date`)
+- ✅ `npm run lint` (tsc 0 erros) e `npm run build` OK
+- ✅ Produto de teste removido após o teste
+
+### 6.13.2 Auditoria de segurança (exposição à rede)
+
+**Problemas identificados:**
+- `app.listen(PORT, "0.0.0.0")` — painel + API (sem autenticação) expostos à LAN; `/api/data` devolve **segredos em claro** (`gemini_api_key`, `gmail_pass`, `telegram_token`, `discord_webhook`) para qualquer página/processo com acesso à porta.
+- Sem checagem de `Host` header → vulnerável a **DNS rebinding** (domínio externo resolvendo para 127.0.0.1 leria `/api/data`).
+- Redis: `bind *` mas `protected-mode yes` (aceitável — loopback efetivo para hosts externos; documentado, não alterado pois é infra externa ao repo).
+
+**Correções (`server.ts`):**
+- `app.listen(PORT, BIND_HOST)` com `BIND_HOST = process.env.BIND_HOST || "127.0.0.1"` — exposição LAN desligada por padrão.
+- Middleware de **Host allowlist** antes de todas as rotas: aceita `localhost`, `127.0.0.1`, `[::1]` (+ `BIND_HOST` explícito); qualquer outro Host → **403**.
+
+**Decisão documentada:** manter os segredos em `GET /api/data` foi **intencional** — o frontend pré-preenche o form de settings com os valores completos e os botões de teste (Discord/Telegram/Gmail) precisam deles. Com bind localhost + Host-check, o surface de exposição fica restrito à própria máquina (mesma confiança de um gerenciador de senhas de desktop).
+
+**.env.example** ganhou `BIND_HOST=127.0.0.1` documentado (use `0.0.0.0` deliberadamente para expor à LAN).
+
+**Validação E2E (pm2, porta 3001):**
+- ✅ `Host: localhost:3001` → 200, `redis: true`
+- ✅ Host default `127.0.0.1:3001` → 200
+- ✅ **DNS rebinding** (`Host: evil-ator.example.com`) → **403**
+- ✅ IP da LAN (`192.168.1.195:3001`) → **sem resposta** (bind loopback)
+
+### 6.13.3 Toggle Instagram em runtime (sem .env) + dedup/mescla de estabelecimentos
+
+**Instagram — `user_settings.instagram_enabled` (precedência sobre `.env` legado):**
+- Novo helper `src/lib/instagramEnabled.ts` (`isInstagramEnabled`): lê `user_settings.instagram_enabled`; se ausente, preserva comportamento legado (`INSTAGRAM_ENABLED=true`). Default continua **desligado**.
+- Aplicado em: gate de boot do microserviço (`startInstagramService`), `health`, `login` e `scan` (todos respondem **403** quando desligado), e no worker `handleInstagramStoriesScan` (skip).
+- Novo `GET/POST /api/social/instagram/toggle` (POST liga → inicia serviço; desliga → `stopInstagramService`).
+- UI (SocialTab): botão **ATIVAR/DESATIVAR** no header do Instagram + status "● DESLIGADO"; botões LOGIN/SCAN desabilitados com o módulo off; corpo mostra aviso de desativado.
+
+**Dedup/mescla de estabelecimentos:**
+- `EstablishmentRepository.findDuplicatePairs()`: detecta pares por **nome normalizado** (lowercase + sem acentos + espaços colapsados), **OSM id** e **WhatsApp** (dígitos); match mais forte (osm > whatsapp > nome) vence por par.
+- `EstablishmentRepository.merge(keepId, removeIds)`: transação que reponta `price_observations`, `promotions` e `route_stops` → sobrevivente, exclui duplicado(s) e **dedup limpeza pós-mescla** (promoções e observações exatamente iguais no alvo: `MIN(rowid)` por chave).
+- Endpoints: `GET /api/establishments/duplicates` e `POST /api/establishments/merge`.
+- UI (LocalTab): painel **DUPLICADOS SUSPEITOS (N)** com motivo + botão **MESCLAR** (confirma via `window.confirm`; toasts com contadores repontados/deduplicated).
+
+**Validação E2E (server real, porta 3101, DB temporário):**
+- ✅ 6 estabelecimentos seed → detecção de **3 pares** corretos (nome acentuado, OSM 123456, WhatsApp com símbolos `(55)11 99999-8888`)
+- ✅ Merge `est-b → est-a`: repontou 2 obs + 2 promoções, excluiu o duplicado, dedup 1 promo + 1 obs (idênticas)
+- ✅ Pós-merge: 5 estabelecimentos, `est-b` ausente, obs/promoções todas em `est-a`
+- ✅ Toggle IG: GET default `false` → POST `true` → `true`; login/scan com toggle off → **403**; health off → `{enabled:false}`
+- ✅ `npm run lint` (tsc 0 erros) e `npm run build` OK
+
+### 6.13.4 WhatsApp real (sessão via whatsapp-web.js) — verificado, já completo
+
+**Frentes C2 já implementadas e deixadas como estavam (não reescritas):**
+- `src/social/whatsappSession.ts`: sessão com `LocalAuth` persistente + QR via `qrcode-terminal`; eventos `qr/authenticated/ready/auth_failure/disconnected`; `fetchContactStatuses` lê Status dos contatos cadastrados; `isWhatsappReady`.
+- Endpoints: `GET/POST /api/social/whatsapp/toggle` (user_settings `whatsapp_enabled`), `GET /api/social/whatsapp/qr` (inicia sessão + QR), `GET /api/social/whatsapp/status`, `POST /api/social/whatsapp/scan`.
+- Worker `handleWhatsappStatusScan`: respeita `whatsapp_enabled` + `social_monitoring_enabled`, throttle por contato (`whatsapp_scan_per_contact_min`, default 20m), extrai promoções e dispara alertas.
+- UI (SocialTab): toggle ATIVAR/DESATIVAR, status CONECTADO/NÃO AUTENTICADO, GERAR QR (renderiza ANSI), SCAN STATUS.
+- Deps `whatsapp-web.js` + `qrcode-terminal` já no package.json. Riscos de banimento documentados no header do módulo e no aviso do rodapé da aba.
+
 
