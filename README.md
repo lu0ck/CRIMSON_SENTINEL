@@ -11,8 +11,8 @@
 │ React+Vite │ ────────────► │ Express API │ ─────────────────────► │ crimson-scan-worker  │ 4× cluster
 │ (HUD)      │               │  server.ts  │                        │   scrape, scan-all,   │ concurrency 5
 └────────────┘               └─────────────┘                        │   compare, analyze,   │ = até 20 jobs
-                                    │  SQLite (better-sqlite3)      │   local-price-scan,   │
-                                    │  src/database/crimson.db      │   discover, insight   │
+                                     │  SQLite (better-sqlite3)      │   local-price-scan,   │
+                                     │  crimson.db (USER_DATA_PATH)  │   discover, insight   │
                                     ▼                               └─────────────────────┘
                           ┌────────────────────┐                    ┌─────────────────────┐
                           │ Filas (3):         │                    │ crimson-route-worker │
@@ -34,7 +34,7 @@
 - **Fila única de scan** com 4 instâncias PM2 em cluster (`concurrency: 5` cada) → até **20 jobs simultâneos** sem OOM.
 - **Lock anti-travamento**: `lockDuration: 65s`, `stalledInterval: 30s`, `maxStalledCount: 1`.
 - **Toda IA roda em worker** (nunca no handler HTTP): LM Studio → NVIDIA → Gemini, em cascata.
-- **Persistência** em SQLite (`src/database/schema.sql`), acessada via repositórios em `src/repositories/`.
+- **Persistência** em SQLite (`crimson.db` na raiz do projeto; `USER_DATA_PATH` sobrescreve o caminho em produção), acessada via repositórios em `src/repositories/`.
 
 ---
 
@@ -42,6 +42,7 @@
 
 ### 1. Pré-requisitos
 - Node.js ≥ 18 e npm
+- PM2 (`npm i -g pm2`); sem instalação global, use `npx pm2 ...` nos comandos abaixo
 - Docker (para o Redis) ou um Redis em `127.0.0.1:6379`
 - Python 3.10+ **apenas se** for usar o módulo Instagram (C3)
 
@@ -58,7 +59,7 @@ cp .env.example .env        # preencha GEMINI_API_KEY e canais de notificação
 
 ### 4. Suba tudo com PM2
 ```bash
-npm run pm2:start           # 5 processos: api, scan-worker(4), route-worker, social-worker, instagram-service
+npm run pm2:start           # 5 apps · 8 processos (scan-worker em 4×cluster) + instagram-service
 npm run pm2:logs            # acompanhe os logs
 ```
 
@@ -91,7 +92,8 @@ A UI fica em **http://localhost:3001**.
   - `GET /api/social/instagram/health`, `POST /api/social/instagram/login`, `POST /api/social/instagram/scan`.
   - Throttle: `user_settings.instagram_scan_per_handle_min` (default 45min).
 - **Captura manual**: `POST /api/social/capture` (texto colado do WhatsApp ou URL de perfil público).
-- **⚠️ Aviso**: os módulos C2/C3 usam APIs **não oficiais** e violam os ToS. Use SEMPRE conta secundária dedicada. Ligue apenas se `WHATSAPP_ENABLED=true`/`INSTAGRAM_ENABLED=true` (ver `python_instagram/README.md`).
+- **Toggles**: WhatsApp e Instagram são ligados/desligados **no painel (aba SOCIAL)** — sem `.env`. O toggle do Instagram também sobe/derruba o microserviço Python. Padrão: ambos **desligados**.
+- **⚠️ Aviso**: os módulos C2/C3 usam APIs **não oficiais** e violam os ToS. Use SEMPRE conta secundária dedicada.
 
 ### Análise com IA
 - `POST /api/analyze` e `POST /api/local-insights/analyze` **enfileiram** jobs e respondem `{ jobId }`; a UI faz *poll* via `GET /api/jobs/:queue/:id`.
@@ -115,13 +117,26 @@ Teste de estresse de 24h: `bash scripts/stress-test-24h.sh` (gera `RELATORIO_TES
 
 ## 🔑 Variáveis de ambiente
 
-Ver `.env.example`. Destaques: `GEMINI_API_KEY`, `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `REDIS_URL`, `SERPAPI_KEY` (Popular Times best-effort), `SOCIAL_MONITORING_ENABLED`, `WHATSAPP_ENABLED`, `INSTAGRAM_ENABLED`, `INSTAGRAM_SERVICE_PORT=8721`.
+Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `BIND_HOST=127.0.0.1` (restrito a localhost; use `0.0.0.0` deliberadamente para expor à LAN), `GEMINI_API_KEY`, `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `REDIS_URL`, `SERPAPI_KEY` (Popular Times best-effort), `SOCIAL_MONITORING_ENABLED`, `INSTAGRAM_SERVICE_PORT=8721`. `INSTAGRAM_ENABLED` é apenas **fallback legado** do toggle do Instagram (hoje controlado pela UI).
 
 ---
 
-## ⚠️ Segurança
-- Nunca commite `.env` nem `data.json`/`crimson.db` com chaves privadas.
-- Chaves podem ser configuradas pela UI (aba CONFIG), salvas por perfil de operador.
+## 📚 Documentos
+
+- `DIAGNOSTICO.md` — histórico completo de fases (1–13), auditorias e decisões técnicas
+- `INSTRUCOES_LOCAL.md` — guia do módulo local/ROTA (preços, roteirização, insights)
+- `GUIA_SOCIAL.md` — configuração dos módulos WhatsApp/Instagram (C2/C3)
+
+---
+
+## 🛣️ Estado & Roadmap
+
+Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento social (WhatsApp/Instagram), insights locais, scan recorrente de preços locais, auditorias de segurança (bind/Host), dedup/mescla de estabelecimentos. Roadmap detalhado, histórico e decisões em `DIAGNOSTICO.md`.
+
+**Pendências abertas:**
+- **FASE 7** — validar o caminho **Gemini real** dos insights locais (precisa `GEMINI_API_KEY` no perfil; hoje apenas o fallback determinístico foi exercitado).
+- **Instagram × PM2** — o microserviço Python é gerenciado pelo PM2 **e** o `server.ts` também tenta spawná-lo na porta 8721 (EADDRINUSE em produção); o toggle da UI não derruba o processo do PM2. A decidir: reter apenas um dos dois donos.
+- **Cluster 4×** — validar o `crimson-scan-worker` em cluster (até 20 jobs simultâneos) num scan real com muitos produtos.
 
 ---
 
