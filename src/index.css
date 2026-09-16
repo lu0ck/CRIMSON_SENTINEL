@@ -14,6 +14,10 @@
 }
 
 @layer base {
+  html {
+    font-size: 18px;
+  }
+
   body {
     @apply bg-[#0a0a0a] text-white font-sans overflow-hidden font-bold;
   }
