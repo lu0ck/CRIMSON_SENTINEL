@@ -113,6 +113,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
+    title: 'Crimson Sentinel',
     frame: false,
     show: false,
     backgroundColor: '#0a0a0a',

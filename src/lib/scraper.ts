@@ -39,6 +39,9 @@ const USER_AGENTS = [
 
 const MAX_PRICE = 10_000_000;
 
+// Modelo de extração NVIDIA NIM (o antigo meta/llama-3.1-8b-instruct foi retirado da lista)
+const NVIDIA_EXTRACT_MODEL = "mistralai/mistral-nemotron";
+
 function simpleHash(str: string): string {
   let hash = 0;
   for (let i = 0; i < str.length; i++) {
@@ -1265,16 +1268,21 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 		'.price',
 		'.preco'
 	];
-	var domPrice = 0;
+	var domCandidates = [];
 	for (var i = 0; i < priceSelectors.length; i++) {
-		var el = document.querySelector(priceSelectors[i]);
-		if (el) {
+		var els = document.querySelectorAll(priceSelectors[i]);
+		for (var e2 = 0; e2 < els.length; e2++) {
+			var el = els[e2];
+			if (el.closest && (el.closest("s") || el.closest("del"))) continue;
 			var txt = el.textContent || "";
 			if (/[eE][+-]?\\d+/i.test(txt)) continue;
+			if (/\\d+\\s*x\\s*(de\\s*)?/i.test(txt)) continue;
 			var parsed = parseBrazilianPrice(txt);
-			if (isValidPrice(parsed)) { domPrice = parsed; break; }
+			if (isValidPrice(parsed) && domCandidates.indexOf(parsed) === -1) domCandidates.push(parsed);
 		}
 	}
+	var domPrice = 0;
+	if (domCandidates.length > 0) domPrice = Math.min.apply(null, domCandidates);
 
 	function nearNamePrices() {
 		var idx = body.indexOf(name);
@@ -1283,13 +1291,21 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 		var end = Math.min(body.length, idx + 1800);
 		var region = body.slice(start, end);
 		var res = [];
+		var porRes = [];
 		var re = /R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi;
-		var m;
-		while ((m = re.exec(region))) {
-			var p = parseBrazilianPrice(m[0]);
-			if (isValidPrice(p)) res.push(p);
+		var nm;
+		while ((nm = re.exec(region))) {
+			var before = region.substring(Math.max(0, nm.index - 30), nm.index);
+			if (/x\\s*de\\s*r\\$/i.test(before) || /x\\s*r\\$/i.test(before) || /(\\d)\\s*x\\s*$/i.test(before)) continue;
+			var p = parseBrazilianPrice(nm[0]);
+			if (isValidPrice(p)) {
+				if (/\\bpor\\b/i.test(before) || /\\bsó\\b/i.test(before) || /\\bvista\\b/i.test(before)) porRes.push(p);
+				else res.push(p);
+			}
 		}
-		return res;
+		res.sort(function(a, b) { return a - b; });
+		porRes.sort(function(a, b) { return a - b; });
+		return porRes.concat(res);
 	}
 
 	var price = 0;
@@ -1318,21 +1334,30 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
 		var near = nearNamePrices();
 		if (near.length > 0) { price = near[0]; usedSource = "NEAR_NAME"; }
 	}
-	// 5) last resort: por > frequência > menor
+	// 5) last resort: por/só > frequência > menor (exclui parcelas)
 	if (!isValidPrice(price)) {
 		var allPrices = [];
-		var matches = body.match(/R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi) || [];
-		for (var mi = 0; mi < matches.length; mi++) {
-			var pp = parseBrazilianPrice(matches[mi]);
+		var bodyScan = /R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi;
+		var bsm;
+		while ((bsm = bodyScan.exec(body))) {
+			var ctx = body.substring(Math.max(0, bsm.index - 30), bsm.index);
+			if (/x\\s*de\\s*r\\$/i.test(ctx) || /x\\s*r\\$/i.test(ctx) || /(\\d)\\s*x\\s*$/i.test(ctx)) continue;
+			var pp = parseBrazilianPrice(bsm[0]);
 			if (isValidPrice(pp)) allPrices.push(pp);
 		}
 		var porPrices = [];
 		var bodyLines = body.split(/\\n/);
 		for (var li2 = 0; li2 < bodyLines.length; li2++) {
 			var line = bodyLines[li2];
-			if (/\\bpor\\b/i.test(line) && /\\$/.test(line)) {
-				var lp = parseBrazilianPrice(line);
-				if (isValidPrice(lp)) porPrices.push(lp);
+			if ((/\\bpor\\b/i.test(line) || /\\bvista\\b/i.test(line) || /\\bsó\\b/i.test(line)) && /\\$/.test(line)) {
+				var lx = /R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi;
+				var lm2;
+				while ((lm2 = lx.exec(line))) {
+					var lctx = line.substring(Math.max(0, lm2.index - 30), lm2.index);
+					if (/x\\s*de\\s*r\\$/i.test(lctx) || /x\\s*r\\$/i.test(lctx) || /(\\d)\\s*x\\s*$/i.test(lctx)) continue;
+					var lp = parseBrazilianPrice(lm2[0]);
+					if (isValidPrice(lp)) porPrices.push(lp);
+				}
 			}
 		}
 		if (porPrices.length > 0) price = Math.min.apply(null, porPrices);
@@ -1517,7 +1542,7 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeR
     });
 
     const response = await client.chat.completions.create({
-      model: "meta/llama-3.1-8b-instruct",
+      model: NVIDIA_EXTRACT_MODEL,
       messages: [
         {
           role: "system",
@@ -1814,7 +1839,7 @@ async function scrapeWithSearchVerify(
         apiKey: options.nvidiaApiKey,
       });
       const resp = await client.chat.completions.create({
-        model: "meta/llama-3.1-8b-instruct",
+        model: NVIDIA_EXTRACT_MODEL,
         messages: [
           { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
           { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },

@@ -680,51 +680,82 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       ];
 
       var price = 0;
+      var ldPrice = 0;
 
-      // Estratégia 0: JSON-LD para preço
+      // Estratégia 0: JSON-LD — captura o preço de venda (offers.price / lowPrice)
       var ldScripts4 = document.querySelectorAll('script[type="application/ld+json"]');
       for (var n = 0; n < ldScripts4.length; n++) {
         try {
           var ld3 = JSON.parse(ldScripts4[n].textContent);
-          if (ld3 && ld3.offers) {
-            var ldOffer = ld3.offers;
-            if (ld3.offers['@type'] === 'AggregateOffer' && ld3.offers.lowPrice) {
-              var ldPrice = parseFloat(ld3.offers.lowPrice);
-              if (ldPrice >= 10 && ldPrice <= 100000 && Number.isFinite(ldPrice)) { price = ldPrice; break; }
-            }
-            if (ldOffer.price) {
-              var ldPrice2 = parseFloat(ldOffer.price);
-              if (ldPrice2 >= 10 && ldPrice2 <= 100000 && Number.isFinite(ldPrice2)) { price = ldPrice2; break; }
+          var ldNodes = [];
+          if (ld3 && ld3['@graph'] && ld3['@graph'].length) ldNodes = ldNodes.concat(ld3['@graph']);
+          if (ld3) ldNodes.push(ld3);
+          for (var ng = 0; ng < ldNodes.length; ng++) {
+            var ldNode = ldNodes[ng];
+            if (!ldNode || (ldNode['@type'] !== 'Product' && ldNode['@type'] !== 'product')) continue;
+            var ldOffs = ldNode.offers;
+            if (!ldOffs) continue;
+            var ldOffsArr = Array.isArray(ldOffs) ? ldOffs : [ldOffs];
+            for (var oi = 0; oi < ldOffsArr.length; oi++) {
+              var ldO = ldOffsArr[oi] || {};
+              var ldV = 0;
+              if (ldO['@type'] === 'AggregateOffer' && ldO.lowPrice) ldV = parseFloat(ldO.lowPrice);
+              else if (ldO.price) ldV = parseFloat(ldO.price);
+              if (ldV >= 10 && ldV <= 100000 && Number.isFinite(ldV) && (ldPrice === 0 || ldV < ldPrice)) ldPrice = ldV;
             }
           }
         } catch(e) {}
       }
 
-      for (var i = 0; i < priceSelectors.length; i++) {
-        var el = document.querySelector(priceSelectors[i]);
-        if (el) {
-          var text = el.textContent || "";
-          console.log("[ML] Selector " + priceSelectors[i] + ": " + text.substring(0, 50));
-
-          // ML pode mostrar "60" (parte inteira) e "13" (centavos) separados
-          var fractionEl = el.querySelector(".andes-money-amount__fraction");
-          var centsEl = el.querySelector(".andes-money-amount__cents");
-
-          if (fractionEl && centsEl) {
-            var intPart = fractionEl.textContent || "";
-            var decPart = centsEl.textContent || "";
-            var fullPrice = intPart.replace(/[^\\d]/g, '') + "." + decPart.replace(/[^\\d]/g, '');
-            price = parseFloat(fullPrice) || 0;
-          } else {
-            price = parseBrazilianPrice(text);
-          }
-
-          if (isValidPrice(price)) {
-            console.log("[ML] Valid price from selector: " + price);
-            break;
-          }
-          price = 0;
+      // Estratégia 1: DOM — coletar todos os preços da área de preço e
+      // escolher o de VENDA (ignora o "De R$ x" riscado e parcelas)
+      function parseAmount(amountEl) {
+        var fracEl = amountEl.querySelector(".andes-money-amount__fraction");
+        var centsEl = amountEl.querySelector(".andes-money-amount__cents");
+        if (fracEl) {
+          var whole = (fracEl.textContent || "0").replace(/[^\d]/g, "");
+          var dec = centsEl ? (centsEl.textContent || "00").replace(/[^\d]/g, "") : "00";
+          while (dec.length < 2) dec += "0";
+          return parseFloat(whole + "." + dec) || 0;
         }
+        return parseBrazilianPrice(amountEl.textContent || "");
+      }
+      function isOldOrInstallment(amountEl) {
+        var node = amountEl;
+        for (var tier = 0; tier < 5 && node; tier++) {
+          if (node.tagName === "S") return true;
+          var cls = (node.getAttribute && (node.getAttribute("class") || "")) || "";
+          if (cls.indexOf("discount") !== -1 || cls.indexOf("original") !== -1 ||
+              cls.indexOf("installments") !== -1 || cls.indexOf("split") !== -1) return true;
+          if (node.style && node.style.textDecoration &&
+              String(node.style.textDecoration).indexOf("line-through") !== -1) return true;
+          node = node.parentElement;
+        }
+        return false;
+      }
+      var domCandidates = [];
+      var amountEls = document.querySelectorAll(".ui-pdp-price .andes-money-amount");
+      for (var a = 0; a < amountEls.length; a++) {
+        var amt = amountEls[a];
+        var aria = amt.getAttribute && (amt.getAttribute("aria-label") || "");
+        if (aria) {
+          var al = aria.toLowerCase();
+          if (al.indexOf("de r$") === 0 || al.indexOf("antes") !== -1 ||
+              al.indexOf("original") !== -1 || al.indexOf("x de r$") !== -1 ||
+              /\d+\s*x\s*de\s*r\$/.test(al)) continue;
+        }
+        if (isOldOrInstallment(amt)) continue;
+        var pv = parseAmount(amt);
+        if (pv >= 10 && pv <= 5000000 && domCandidates.indexOf(pv) === -1) domCandidates.push(pv);
+      }
+      if (domCandidates.length > 0) {
+        domCandidates.sort(function(x, y) { return x - y; });
+        price = domCandidates[0];
+        console.log("[ML] Sale price from DOM: " + price);
+      }
+      if (ldPrice > 0) {
+        price = (price === 0) ? ldPrice : Math.min(price, ldPrice);
+        console.log("[ML] Price after JSON-LD cross-check: " + price);
       }
 
       // ESTRATÉGIA 2: Buscar no texto
@@ -862,58 +893,100 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       // --- Extrair preço BRL ---
       var price = 0;
 
-      // Prioridade 0: extrair BRL do URL params (pdp_npi contém preço BRL)
-      try {
-        var urlStr = window.location.href;
-        var npiMatch = urlStr.match(/pdp_npi=([^&]+)/);
-        if (npiMatch) {
-          var npiDecoded = decodeURIComponent(npiMatch[1]);
-          // Padrão: ...BRL!88.88!25.08... (primeiro é "de", segundo é "por")
-          var brlMatches = npiDecoded.match(/BRL[!%21]([\\d.]+)/g) || [];
-          var npiPrices = [];
-          for (var n = 0; n < brlMatches.length; n++) {
-            var numStr = brlMatches[n].replace(/BRL[!%21]/, '');
-            var npiPrice = parseFloat(numStr);
-            if (npiPrice >= 5 && npiPrice <= 100000 && Number.isFinite(npiPrice)) {
-              npiPrices.push(npiPrice);
+      // Coleta candidatos em R$/BRL do texto, excluindo parcelas ("x de R$")
+      function isParcela(line, idx) {
+        var before = line.substring(Math.max(0, idx - 30), idx);
+        return /x\s*de\s*r\$/i.test(before) || /x\s*r\$/i.test(before) ||
+               (/(\d+)\s*x\s*$/i.test(before) && /\d/.test(before));
+      }
+      function collectBodyPrices() {
+        var res = [];
+        var patterns3 = [/R\$\s*[\d.,]+/gi, /BRL\s*[\d.,]+/gi];
+        for (var pi2 = 0; pi2 < patterns3.length; pi2++) {
+          var rx3 = patterns3[pi2];
+          var mm;
+          while ((mm = rx3.exec(body)) !== null) {
+            if (isParcela(body, mm.index)) continue;
+            var v = parseBrazilianPrice(mm[0].replace(/BRL/gi, "R$"));
+            if (isValidPrice(v) && v >= 10 && res.indexOf(v) === -1) res.push(v);
+          }
+        }
+        return res;
+      }
+      var bodyPrices = collectBodyPrices();
+
+      // Prioridade 0: preço renderizado no DOM (preço atual promocional)
+      var domCandidates = [];
+      var domSel = [
+        "meta[itemprop='price']",
+        "meta[property='og:price:amount']",
+        "[class*='currentPrice']",
+        ".product-price-current",
+        "[class*='priceText']",
+        ".price--currentPriceText",
+        "[class*='product-price']"
+      ];
+      for (var d = 0; d < domSel.length; d++) {
+        try {
+          var els = document.querySelectorAll(domSel[d]);
+          for (var e = 0; e < els.length; e++) {
+            var ce = els[e];
+            var val = ce.getAttribute ? (ce.getAttribute("content") || ce.getAttribute("value") || "") : "";
+            var raw = val || ce.textContent || "";
+            var vm = raw.match(/[\d.,]+/);
+            var v = vm ? parseFloat(vm[0].replace(/\.(?=\d{3})/g, "").replace(",", ".")) : 0;
+            if (v >= 30 && v <= 100000 && domCandidates.indexOf(v) === -1) domCandidates.push(v);
+          }
+        } catch(e) {}
+      }
+      var domPrice = 0;
+      if (domCandidates.length > 0) {
+        for (var dc = 0; dc < domCandidates.length; dc++) {
+          if (domCandidates[dc] >= 30) { domPrice = domCandidates[dc]; break; }
+        }
+      }
+      // Se o DOM tem preço mas o body mostra uma promoção bem menor (par De/Por), usar a promo
+      if (domPrice > 0 && bodyPrices.length > 0) {
+        var bodyMin = Math.min.apply(null, bodyPrices);
+        price = bodyMin <= domPrice * 0.9 ? bodyMin : domPrice;
+      } else if (domPrice > 0) {
+        price = domPrice;
+      }
+
+      // Prioridade 1: body — preço de venda (menor sem parcelas/riscados)
+      if (!isValidPrice(price) && bodyPrices.length > 0) {
+        price = Math.min.apply(null, bodyPrices);
+      }
+
+      // Prioridade 2: pdp_npi do URL — pega o que bate com o body, senão o MENOR (o "por")
+      if (!isValidPrice(price)) {
+        try {
+          var urlStr = window.location.href;
+          var npiMatch = urlStr.match(/pdp_npi=([^&]+)/);
+          if (npiMatch) {
+            var npiDecoded = decodeURIComponent(npiMatch[1]);
+            var brlMatches = npiDecoded.match(/BRL[!%21]([\d.]+)/g) || [];
+            var npiPrices = [];
+            for (var n = 0; n < brlMatches.length; n++) {
+              var numStr = brlMatches[n].replace(/BRL[!%21]/, '');
+              var npiPrice = parseFloat(numStr);
+              if (npiPrice >= 5 && npiPrice <= 100000 && Number.isFinite(npiPrice)) {
+                npiPrices.push(npiPrice);
+              }
+            }
+            if (npiPrices.length > 0) {
+              npiPrices.sort(function(a, b) { return a - b; });
+              var picked = 0;
+              for (var pc = 0; pc < npiPrices.length; pc++) {
+                if (bodyPrices.indexOf(npiPrices[pc]) !== -1) { picked = npiPrices[pc]; break; }
+              }
+              price = picked || npiPrices[0];
             }
           }
-          if (npiPrices.length > 0) {
-            npiPrices.sort(function(a, b) { return a - b; });
-            price = npiPrices.length >= 2 ? npiPrices[1] : npiPrices[0];
-          }
-        }
-      } catch(e) {}
-
-      // Prioridade 1: regex R$ no body — SOBRESCREVE apenas se P0 não achou preço válido
-      if (!isValidPrice(price)) {
-        var rMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
-        var rPrices = [];
-        for (var i = 0; i < rMatches.length; i++) {
-          var parsed = parseBrazilianPrice(rMatches[i]);
-          if (isValidPrice(parsed) && parsed >= 10) rPrices.push(parsed);
-        }
-        if (rPrices.length > 0) {
-          rPrices.sort(function(a, b) { return a - b; });
-          price = rPrices[Math.floor(rPrices.length / 2)];
-        }
+        } catch(e) {}
       }
 
-      // Prioridade 1b: regex BRL no body — só se P0 e P1 não acharam
-      if (!isValidPrice(price)) {
-        var brlMatches2 = body.match(/BRL\\s*[\\d.,]+/g) || [];
-        var brlPrices = [];
-        for (var j = 0; j < brlMatches2.length; j++) {
-          var parsed2 = parseBrazilianPrice(brlMatches2[j].replace(/BRL/g, 'R$'));
-          if (isValidPrice(parsed2) && parsed2 >= 5) brlPrices.push(parsed2);
-        }
-        if (brlPrices.length > 0) {
-          brlPrices.sort(function(a, b) { return a - b; });
-          price = brlPrices[0];
-        }
-      }
-
-      // Prioridade 2: meta[itemprop="price"] (mas ignorar se < 10 — provavelmente CNY)
+      // Prioridade 3: meta[itemprop="price"] (ignorar se < 30 — provavelmente CNY)
       if (!isValidPrice(price)) {
         var metaPrice = document.querySelector('meta[itemprop="price"]');
         if (metaPrice) {
@@ -922,7 +995,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         }
       }
 
-      // Prioridade 3: .product-price-value
+      // Prioridade 4: .product-price-value
       if (!isValidPrice(price)) {
         var priceEl = document.querySelector(".product-price-value, [class*='product-price']");
         if (priceEl) {
