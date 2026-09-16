@@ -326,6 +326,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       return true;
     })
     .slice(0, 3);
+  safeLog(`[scan-worker] compare scrape: ${urls.length} URLs para escrapar: ${urls.join(", ")}`);
   const scraped: { site: string; price: number; url: string }[] = [];
   if (urls.length > 0) {
     const settled = await Promise.allSettled(
@@ -340,8 +341,8 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           }),
           COMPARE_SCRAPE_TIMEOUT_MS
         ).then((info: any) => {
-          if (!info || !info.price || !info.name) return null;
-          if (!sameProduct(productName, info.name)) return null;
+          if (!info || !info.price || !info.name) { safeLog(`[scan-worker] compare scrape skip ${url}: no data (price=${info?.price}, name=${info?.name})`); return null; }
+          if (!sameProduct(productName, info.name)) { safeLog(`[scan-worker] compare scrape skip ${url}: sameProduct=false (name="${info.name}")`); return null; }
           return { site: new URL(url).hostname, price: info.price, url };
         })
       )
@@ -381,7 +382,11 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       const jm = rawText.match(/\[[\s\S]*\]/);
       if (jm) {
         const parsed = JSON.parse(jm[0]);
-        const rawResults = (Array.isArray(parsed) ? parsed : []).filter(
+        const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
+        const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
+          ...r,
+          title: r.title || r.site || snippetMap.get(r.url) || "",
+        })).filter(
           (r: any) => r && r.url && r.price > 0 && r.price <= 5000000
         );
         const results = await filterAndDedupe(rawResults, productName);

@@ -14,8 +14,8 @@ export function normalize(name: string): string {
 }
 
 export const QUERY_STOPWORDS = new Set([
-  "preto", "white", "branco", "black", "gamer", "gabinete", "fonte",
-  "processador", "placa", "sem", "com", "para", "fans", "vidro", "temperado",
+  "preto", "white", "branco", "black", "gamer",
+  "sem", "com", "para", "fans", "vidro", "temperado",
   "atx", "e-atx", "mid", "tower", "miniatx", "matx", "full", "rgb", "argb",
   "pfc", "ativo", "modular", "certificado", "desktop", "servidor", "preco",
   "preço", "valor", "brasil", "lojas", "descricao", "descrição", "kit", "base",
@@ -104,6 +104,7 @@ function getCategoryKeywords(productName: string): string[] {
 }
 
 export function sameProduct(productName: string, pageTitle: string): boolean {
+  if (!pageTitle) return false;
   const skus = extractModelTokens(productName);
 
   if (skus.length > 0) {
@@ -155,7 +156,7 @@ export function filterAndDedupe(
     }
     if (seenUrl.has(keyUrl)) continue;
 
-    if (productName && out.length > 0 && !sameProduct(productName, r.title)) {
+    if (productName && r.title && !sameProduct(productName, r.title)) {
       continue;
     }
 

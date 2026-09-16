@@ -1487,7 +1487,7 @@ const queued = await response.json();
 
       <div className="flex flex-1 overflow-hidden">
         {/* Sidebar HUD */}
-        <nav className="w-20 border-r border-crimson/30 flex flex-col items-center py-8 gap-8 bg-black/20 z-10 relative">
+        <nav className="w-20 border-r border-crimson/30 flex flex-col items-center py-3 gap-2 bg-black/20 z-10 relative">
           <div className="absolute inset-0 pointer-events-none opacity-5 flex items-center justify-center overflow-hidden">
             <div className="w-64 h-64 border-4 border-dashed border-crimson rounded-full hud-rotate" />
             <div className="absolute w-48 h-48 border-2 border-dotted border-crimson rounded-full hud-rotate [animation-direction:reverse]" />
@@ -1541,7 +1541,7 @@ const queued = await response.json();
             icon={<Settings size={24} />}
             label="CONFIG"
           />
-          <div className="mt-auto flex flex-col gap-4">
+          <div className="mt-auto flex flex-col gap-2">
             <NavButton 
               active={false} 
               onClick={() => { playSound('click'); setActiveProfileId(null); }}
@@ -2433,7 +2433,7 @@ function NavButton({ active, onClick, icon, label, badge }: { active: boolean, o
       )}
     >
       <div className={cn(
-        "p-2 rounded-lg transition-all relative",
+        "p-1.5 rounded-lg transition-all relative",
         active && "bg-crimson/10 shadow-[0_0_15px_rgba(255,0,0,0.3)]"
       )}>
         {icon}
