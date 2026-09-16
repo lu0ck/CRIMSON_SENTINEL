@@ -35,6 +35,7 @@ import {
 } from "./src/lib/notify.ts";
 import { buildLocalInsights, summarizeInsights } from "./src/lib/localInsights.ts";
 import { isTrustedHost } from "./src/lib/trustedDomains.ts";
+import { filterAndDedupe } from "./src/lib/compare.ts";
 import { AI_MODELS } from "./src/lib/aiModels.ts";
 import { isInstagramEnabled } from "./src/lib/instagramEnabled.ts";
 import {
@@ -318,8 +319,9 @@ app.post("/api/compare", async (req, res) => {
             contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
             config: {
               systemInstruction: `Você é o SENTINEL, um agente de inteligência de mercado de elite.
-              FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
-              PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
+              FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (preços em BRL no site Brasil).
+              A URL DEVE ser a página EXATA do produto (NUNCA catálogo, busca, categoria ou produtos relacionados).
+              O produto DEVE ser o MESMO modelo/SKU do usuário (confira o código, ex: KLK00094, KYBER850G-BKCBR). NUNCA um modelo parecido da mesma marca.
               PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
               Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.`,
               tools: [{ googleSearch: {} }],
@@ -340,7 +342,7 @@ app.post("/api/compare", async (req, res) => {
           });
           const text = response.text || "[]";
           const parsed = JSON.parse(text);
-          results = parsed.filter((r: any) => {
+          const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
             try {
               const host = new URL(r.url).hostname.toLowerCase();
@@ -349,8 +351,9 @@ app.post("/api/compare", async (req, res) => {
               return false;
             }
           });
-          if (results.length < parsed.length) {
-            safeLog(`[compare] Gemini: ${results.length}/${parsed.length} resultados válidos (links inválidos removidos)`);
+          results = await filterAndDedupe(rawResults, productName);
+          if (rawResults.length < parsed.length) {
+            safeLog(`[compare] Gemini: ${rawResults.length}/${parsed.length} resultados em domínios confiáveis, ${results.length} páginas do MESMO produto`);
           }
           break;
         } catch (geminiErr: any) {
@@ -378,9 +381,9 @@ app.post("/api/compare", async (req, res) => {
           apiKey: nvidiaApiKey,
         });
         const response = await client.chat.completions.create({
-          model: "meta/llama-3.1-8b-instruct",
+          model: "mistralai/mistral-nemotron",
           messages: [
-            { role: "system", content: "Você é o SENTINEL, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
+            { role: "system", content: "Você é o SENTINEL, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
             { role: "user", content: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras. JSON:` },
           ],
           max_tokens: 800,
@@ -391,7 +394,7 @@ app.post("/api/compare", async (req, res) => {
         const jsonMatch = text.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          results = parsed.filter((r: any) => {
+          const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
             try {
               const host = new URL(r.url).hostname.toLowerCase();
@@ -400,7 +403,8 @@ app.post("/api/compare", async (req, res) => {
               return false;
             }
           });
-          safeLog(`[compare] NVIDIA fallback: ${results.length}/${parsed.length} resultados válidos`);
+          results = await filterAndDedupe(rawResults, productName);
+          safeLog(`[compare] NVIDIA fallback: ${rawResults.length}/${parsed.length} domínios confiáveis, ${results.length} páginas do MESMO produto`);
         }
       } catch (nvidiaErr: any) {
         safeLog(`[compare] NVIDIA fallback falhou: ${nvidiaErr.message}`);
@@ -605,7 +609,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
             apiKey: nvidiaApiKey,
           });
           const response = await client.chat.completions.create({
-            model: "meta/llama-3.1-8b-instruct",
+            model: "mistralai/mistral-nemotron",
             messages: [{ role: "user", content: prompt }],
             max_tokens: 500,
             temperature: 0,

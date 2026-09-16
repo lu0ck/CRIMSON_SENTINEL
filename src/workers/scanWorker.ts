@@ -22,10 +22,31 @@ import { scanEstablishmentPrices, type LocalPriceScanOutcome } from "../lib/loca
 import { overpassDiscoverEstablishments, haversineKm, type GeoPoint } from "../lib/geo";
 import { isFlashPrice, createFlashPromotion } from "../lib/flashDetect";
 import { alertFlashPromotion, recordInAppAlert } from "../lib/notify";
-import { TRUSTED_DOMAINS } from "../lib/trustedDomains";
+import { TRUSTED_DOMAINS, isTrustedHost } from "../lib/trustedDomains";
+import { filterAndDedupe, isProductUrl, buildSearchQuery, sameProduct } from "../lib/compare";
+import { normalizeProductUrl } from "../lib/url";
 import { AI_MODELS } from "../lib/aiModels";
 
-const SCAN_TIMEOUT_MS = Number(process.env.SCAN_TIMEOUT_MS) || 590_000;
+const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
+const COMPARE_SCRAPE_TIMEOUT_MS = 45_000;
+const NVIDIA_EXTRACT_MODEL = "mistralai/mistral-nemotron";
+
+// Corrida com timeout: rejeita a promise após `ms` sem travar o worker.
+function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`TIMEOUT ${ms}ms`)), ms);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      }
+    );
+  });
+}
 
 async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
   const { url, productId, profileId } = job.data;
@@ -159,8 +180,9 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
 
   const systemInstruction = `Você é o SENTINEL, um agente de inteligência de mercado de elite.
   Sua missão é extrair preços REAIS e ATUAIS de produtos no mercado brasileiro com precisão cirúrgica.
-  FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau e Kabum.
-  PROIBIDO: Shopee, AliExpress, sites de cupons, fóruns ou anúncios de usados.
+  FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (preços em BRL no site Brasil).
+  A URL DEVE ser a página EXATA do produto (NUNCA catálogo, busca, categoria ou produtos relacionados).
+  O produto encontrado DEVE ser o MESMO modelo/SKU do usuário (conferir código do modelo, ex: KLK00094, KYBER850G-BKCBR). NUNCA um modelo parecido da mesma marca.
   PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
   PARCELAMENTO: IGNORE o valor total parcelado se houver um preço à vista menor.
   PREÇOS ANTIGOS: Ignore preços riscados. Foque no "Por: R$ ...".
@@ -168,80 +190,208 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
   Se não houver resultados válidos, retorne [].`;
 
   const prompt = `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`;
+  const searchQuery = buildSearchQuery(productName);
 
-  const { GoogleGenAI, Type } = await import("@google/genai");
+  // Cascata rápido → lento (nunca escrape pesado sequencial):
+  // 1) Gemini (1 chamada com googleSearch) — tenta SEMPRE que houver chave;
+  // 2) Serper → Tavily para achar URLs confiáveis (+ snippets);
+  // 3) advancedScrape em PARALELO (máx 3, timeout 45s/URL);
+  // 4) NVIDIA extraindo preços direto dos snippets de busca.
 
-  if (finalApiKey && !profile?.serperApiKey && !profile?.tavilyApiKey) {
+  // 1) GEMINI — caminho rápido.
+  if (finalApiKey) {
     try {
+      const { GoogleGenAI, Type } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: finalApiKey });
-      const response = await ai.models.generateContent({
-        model: AI_MODELS.TEXT,
-        contents: prompt,
-        config: {
-          systemInstruction,
-          tools: [{ googleSearch: {} }],
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.ARRAY,
-            items: {
-              type: Type.OBJECT,
-              properties: {
-                site: { type: Type.STRING },
-                price: { type: Type.NUMBER },
-                url: { type: Type.STRING },
+      const response = await withTimeout(
+        ai.models.generateContent({
+          model: AI_MODELS.TEXT,
+          contents: prompt,
+          config: {
+            systemInstruction,
+            tools: [{ googleSearch: {} }],
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  site: { type: Type.STRING },
+                  price: { type: Type.NUMBER },
+                  url: { type: Type.STRING },
+                },
+                required: ["site", "price", "url"],
               },
-              required: ["site", "price", "url"],
             },
           },
-        },
+        }),
+        COMPARE_SEARCH_TIMEOUT_MS
+      );
+      const parsed = JSON.parse(response.text || "[]");
+      const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
+        if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
+        try {
+          return isTrustedHost(new URL(r.url).hostname);
+        } catch {
+          return false;
+        }
       });
-      const text = response.text || "[]";
-      const result = JSON.parse(text);
-      return { jobKey, results: result };
+      const results = await filterAndDedupe(rawResults, productName);
+      if (results.length > 0) {
+        safeLog(`[scan-worker] compare via Gemini: ${results.length} resultados para "${productName}"`);
+        return { jobKey, results };
+      }
+      safeLog(`[scan-worker] compare Gemini: ${rawResults.length}/${Array.isArray(parsed) ? parsed.length : 0} válidos — baixando para busca+scrape`);
     } catch (err: any) {
-      safeLog(`[scan-worker] Gemini Search falhou: ${err.message}`);
+      safeLog(`[scan-worker] compare Gemini falhou: ${err.message || err}`);
     }
   }
 
-  // Fallback Tavily
+  // 2) BUSCA — Tavily primeiro (funciona e traz snippets); Serper só como
+  //    fallback quando Tavily não achar nada. Praticamente a key do perfil
+  //    retorna 0 em variações gl/hl, então Tavily é a fonte primária.
+  type SearchItem = { url: string; snippet: string };
+  let items: SearchItem[] = [];
   if (profile?.tavilyApiKey) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), SCAN_TIMEOUT_MS);
-    try {
-      const r = await fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: profile.tavilyApiKey,
-          query: `${productName} preço brasil`,
-          search_depth: "basic",
-          include_domains: TRUSTED_DOMAINS,
-        }),
-        signal: controller.signal,
-      });
-      clearTimeout(timeoutId);
-      const j = await r.json();
-      const links = (j.results || []).map((i: any) => i.url).slice(0, 5);
-
-      const scraped: { site: string; price: number; url: string }[] = [];
-      for (const url of links) {
-        try {
-          const info: any = await advancedScrape(url, {
-            lmStudioUrl: profile.lmStudioUrl,
-            nvidiaApiKey: profile.nvidiaApiKey,
-            geminiApiKey: finalApiKey,
-            serperApiKey: profile.serperApiKey,
-            tavilyApiKey: profile.tavilyApiKey,
-          });
-          if (info && info.price && info.name) {
-            scraped.push({ site: new URL(url).hostname, price: info.price, url });
-          }
-        } catch {}
+    // Variações: (1) query limpa restrita aos domínios confiáveis; (2) sem
+    // restrição de domínio (Google indexa AliExpress/Shopee melhor); (3) sem
+    // o rodapé "preço brasil".
+    const variations = [
+      { query: searchQuery, include_domains: TRUSTED_DOMAINS },
+      { query: searchQuery, include_domains: undefined as string[] | undefined },
+      {
+        query: searchQuery.replace(/\s*pre[çc]o brasil\s*$/i, ""),
+        include_domains: undefined as string[] | undefined,
+      },
+    ];
+    for (const v of variations) {
+      if (items.length > 0) break;
+      try {
+        const res = await withTimeout(
+          fetch("https://api.tavily.com/search", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              api_key: profile.tavilyApiKey,
+              query: v.query,
+              search_depth: "basic",
+              ...(v.include_domains ? { include_domains: v.include_domains } : {}),
+              max_results: 10,
+            }),
+          }),
+          COMPARE_SEARCH_TIMEOUT_MS
+        );
+        const j = await res.json();
+        items = (Array.isArray(j.results) ? j.results : []).map((x: any) => ({
+          url: x.url || "",
+          snippet: `${x.title || ""} ${x.content || ""}`,
+        }));
+        items = items.filter((i) => isProductUrl(i.url));
+        safeLog(`[scan-worker] compare Tavily (${v.include_domains ? "restrito" : "livre"}): ${items.length} URLs de produto`);
+      } catch (err: any) {
+        safeLog(`[scan-worker] compare Tavily falhou: ${err.message || err}`);
       }
-      return { jobKey, results: scraped };
-    } catch (err) {
-      clearTimeout(timeoutId);
-      throw err;
+    }
+  }
+  if (items.length === 0 && profile?.serperApiKey) {
+    try {
+      const res = await withTimeout(
+        fetch("https://google.serper.dev/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-KEY": profile.serperApiKey },
+          body: JSON.stringify({ q: searchQuery, gl: "br", hl: "pt-br", num: 10 }),
+        }),
+        COMPARE_SEARCH_TIMEOUT_MS
+      );
+      const j = await res.json();
+      items = (Array.isArray(j.organic) ? j.organic : []).map((x: any) => ({
+        url: x.link || "",
+        snippet: `${x.title || ""} ${x.snippet || ""}`,
+      }));
+      items = items.filter((i) => isProductUrl(i.url));
+      safeLog(`[scan-worker] compare Serper: ${items.length} URLs de produto`);
+    } catch (err: any) {
+      safeLog(`[scan-worker] compare Serper falhou: ${err.message || err}`);
+    }
+  }
+
+  // 3) SCRAPE PARALELO — máx 3 URLs únicas, timeout de 45s por página.
+  const seenUrls = new Set<string>();
+  const urls = items
+    .map((i) => i.url)
+    .filter((u) => {
+      const key = normalizeProductUrl(u);
+      if (seenUrls.has(key)) return false;
+      seenUrls.add(key);
+      return true;
+    })
+    .slice(0, 3);
+  const scraped: { site: string; price: number; url: string }[] = [];
+  if (urls.length > 0) {
+    const settled = await Promise.allSettled(
+      urls.map((url) =>
+        withTimeout(
+          advancedScrape(url, {
+            lmStudioUrl: profile?.lmStudioUrl,
+            nvidiaApiKey: profile?.nvidiaApiKey,
+            geminiApiKey: finalApiKey,
+            serperApiKey: profile?.serperApiKey,
+            tavilyApiKey: profile?.tavilyApiKey,
+          }),
+          COMPARE_SCRAPE_TIMEOUT_MS
+        ).then((info: any) => {
+          if (!info || !info.price || !info.name) return null;
+          if (!sameProduct(productName, info.name)) return null;
+          return { site: new URL(url).hostname, price: info.price, url };
+        })
+      )
+    );
+    for (const s of settled) {
+      if (s.status === "fulfilled" && s.value) scraped.push(s.value);
+    }
+    safeLog(`[scan-worker] compare scrape: ${scraped.length}/${urls.length} URLs com preço do MESMO produto`);
+    if (scraped.length > 0) return { jobKey, results: scraped };
+  }
+
+  // 4) NVIDIA — último recurso: extrai preços dos snippets (sem abrir páginas).
+  if (profile?.nvidiaApiKey && items.length > 0) {
+    try {
+      const OpenAI = (await import("openai")).default;
+      const client = new OpenAI({
+        baseURL: "https://integrate.api.nvidia.com/v1",
+        apiKey: profile.nvidiaApiKey,
+      });
+      const snippet = items
+        .map((i) => `${i.url}\n${i.snippet}`)
+        .join("\n---\n")
+        .slice(0, 4000);
+      const resp = await withTimeout(
+        client.chat.completions.create({
+          model: NVIDIA_EXTRACT_MODEL,
+          messages: [
+            { role: "system", content: 'Você é o SENTINEL. A partir dos resultados de busca abaixo, retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string"}]. FONTES: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. Use preços à vista em BRL e só URLs completas.' },
+            { role: "user", content: `${snippet}\n\nJSON:` },
+          ],
+          max_tokens: 600,
+          temperature: 0,
+        }),
+        30_000
+      );
+      const rawText = (resp.choices[0]?.message?.content || "").replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+      const jm = rawText.match(/\[[\s\S]*\]/);
+      if (jm) {
+        const parsed = JSON.parse(jm[0]);
+        const rawResults = (Array.isArray(parsed) ? parsed : []).filter(
+          (r: any) => r && r.url && r.price > 0 && r.price <= 5000000
+        );
+        const results = await filterAndDedupe(rawResults, productName);
+        if (results.length > 0) {
+          safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados`);
+          return { jobKey, results };
+        }
+      }
+    } catch (err: any) {
+      safeLog(`[scan-worker] compare NVIDIA falhou: ${err.message || err}`);
     }
   }
 

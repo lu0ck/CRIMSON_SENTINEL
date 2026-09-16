@@ -8,7 +8,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { 
   LayoutDashboard, 
@@ -188,6 +188,25 @@ export default function App() {
   const [showConfirmPurge, setShowConfirmPurge] = useState(false);
   const [scanTimeout, setScanTimeout] = useState<number>(600);
   const [scanController, setScanController] = useState<AbortController | null>(null);
+  // Cronômetro baseado em deadline real: roda em useEffect enquanto isComparing,
+  // então sempre desce de forma determinística durante o scan.
+  const scanEndsAtRef = useRef(0);
+  const scanControllerRef = useRef<AbortController | null>(null);
+
+  scanControllerRef.current = scanController;
+
+  useEffect(() => {
+    if (!isComparing) return;
+    const id = setInterval(() => {
+      const remaining = Math.max(0, Math.round((scanEndsAtRef.current - Date.now()) / 1000));
+      setScanTimeout(remaining);
+      if (remaining <= 0) {
+        clearInterval(id);
+        scanControllerRef.current?.abort();
+      }
+    }, 500);
+    return () => clearInterval(id);
+  }, [isComparing]);
 
   const testDiscord = async () => {
     if (!activeProfile?.discordWebhook) return;
@@ -1029,21 +1048,11 @@ const queued = await response.json();
     setIsComparing(true);
     setLastSearchTime(now);
     setScanTimeout(600);
+    scanEndsAtRef.current = Date.now() + 600_000;
     setSystemMessage(`INITIATING MARKET SCAN: ${product.name.toUpperCase()}`);
 
     const controller = new AbortController();
     setScanController(controller);
-
-    const countdownInterval = setInterval(() => {
-      setScanTimeout(prev => {
-        if (prev <= 1) {
-          clearInterval(countdownInterval);
-          controller.abort();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
 
     try {
       const response = await fetch("/api/compare", {
@@ -1055,8 +1064,6 @@ const queued = await response.json();
         }),
         signal: controller.signal
       });
-
-      clearInterval(countdownInterval);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
@@ -1116,8 +1123,6 @@ const queued = await response.json();
         }
       }
     } catch (error: any) {
-      clearInterval(countdownInterval);
-
       if (error.name === 'AbortError') {
         setSystemMessage("MARKET SCAN CANCELLED");
         addToast("Market scan cancelled", "info");
@@ -1127,7 +1132,6 @@ const queued = await response.json();
         addToast(msg, "error");
       }
     } finally {
-      clearInterval(countdownInterval);
       setIsComparing(false);
       setComparingProduct(null);
       setScanController(null);
@@ -2261,8 +2265,8 @@ const queued = await response.json();
           </Modal>
         )}
 
-{isComparing && (
-        <Modal title="MARKET COMPARISON" onClose={() => { setIsComparing(false); setComparisonResults([]); }}>
+{isComparing || comparisonResults.length > 0 ? (
+        <Modal title="MARKET COMPARISON" onClose={() => { setIsComparing(false); setComparisonResults([]); setComparingProduct(null); }}>
           <div className="flex flex-col gap-4 relative min-h-[200px] justify-center">
             {comparingProduct ? (
               <div className="flex flex-col items-center py-12 gap-4">
@@ -2318,7 +2322,13 @@ const queued = await response.json();
                     </div>
                   </motion.div>
                 ))}
-              </div>
+                  <button
+                    onClick={() => { setIsComparing(false); setComparisonResults([]); setComparingProduct(null); }}
+                    className="hud-button w-full mt-2 py-2 text-[10px]"
+                  >
+                    FECHAR
+                  </button>
+                </div>
             ) : (
               <div className="flex flex-col items-center py-12 gap-4 text-center">
                 <ShieldAlert className="text-crimson/30" size={48} />
@@ -2330,7 +2340,7 @@ const queued = await response.json();
             )}
           </div>
         </Modal>
-      )}
+      ) : null}
       </AnimatePresence>
 
 {/* Toast Notifications */}

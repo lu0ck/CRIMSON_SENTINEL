@@ -1,7 +1,8 @@
 // Domínios confiáveis para comparação de preços (FASE 12).
 // FONTE ÚNICA: usada pelo scanWorker (worker Compare) e pelos fallbacks
 // síncronos do server.ts quando o Redis está offline. Lista alinhada com o
-// system instruction do handleCompare (PROIBIDO Shopee/AliExpress).
+// system instruction do handleCompare (inclui AliExpress e Shopee — preços
+// regionais em BRL quando acessados do Brasil).
 
 export const TRUSTED_DOMAINS = [
   "mercadolivre.com.br",
@@ -17,6 +18,9 @@ export const TRUSTED_DOMAINS = [
   "girafa.com.br",
   "carrefour.com.br",
   "americanas.com.br",
+  "aliexpress.com",
+  "pt.aliexpress.com",
+  "shopee.com.br",
 ];
 
 // Prefixos curtos que casam com o hostname (ex: "amazon.com.br" → "amzon",
@@ -42,6 +46,8 @@ export const TRUSTED_HOST_MATCHERS = [
   "fastshop",
   "girafa",
   "carrefour",
+  "aliexpress",
+  "shopee",
 ];
 
 // Verifica se um hostname pertence a um domínio confiável.
