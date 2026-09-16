@@ -86,14 +86,37 @@ export function extractModelTokens(name: string): string[] {
   ];
 }
 
+function getCategoryKeywords(productName: string): string[] {
+  const categoryMap: Record<string, string[]> = {
+    gabinete: ["gabinete", "case", "mid-tower", "full-tower", "mini-itx"],
+    fonte: ["fonte", "power supply", "psu", "atx"],
+    processador: ["processador", "cpu", "xeon", "ryzen", "core", "i3", "i5", "i7", "i9", "athlon"],
+    placa: ["placa", "gpu", "rtx", "gtx", "radeon", "rx"],
+  };
+
+  const norm = productName.toLowerCase();
+  for (const [key, keywords] of Object.entries(categoryMap)) {
+    if (norm.includes(key) || keywords.some((k) => norm.includes(k))) {
+      return [key, ...keywords.filter((k) => norm.includes(k))];
+    }
+  }
+  return [];
+}
+
 export function sameProduct(productName: string, pageTitle: string): boolean {
   const skus = extractModelTokens(productName);
 
   if (skus.length > 0) {
-    return (
-      skus.every((s) => pageTitle.toLowerCase().includes(s)) &&
-      titleSimilarity(productName, pageTitle) >= TITLE_SIM_THRESHOLD
-    );
+    if (!skus.every((s) => pageTitle.toLowerCase().includes(s))) return false;
+    if (titleSimilarity(productName, pageTitle) < TITLE_SIM_THRESHOLD) return false;
+
+    const category = getCategoryKeywords(productName);
+    if (category.length > 0) {
+      const pageNorm = pageTitle.toLowerCase();
+      if (!category.some((c) => pageNorm.includes(c))) return false;
+    }
+
+    return true;
   }
 
   const tokens = normalize(productName)
