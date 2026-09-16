@@ -135,6 +135,30 @@ export async function alertShoppingItemTargetReached(
   });
 }
 
+// Regista um alerta apenas in-app (Central de Alertas), sem canais externos.
+// Dedup por (entityType, entityId) dentro do cooldown (default 1h) para não
+// inchar o painel com o mesmo erro repetido. Não respeita notifications_enabled
+// (erros/debugging devem aparecer sempre no painel).
+export function recordInAppAlert(
+  entityType: string,
+  entityId: string,
+  title: string,
+  message: string,
+  cooldownHours = 1
+): boolean {
+  if (NotificationRepository.hasSentWithin(entityType, entityId, cooldownHours)) {
+    return false;
+  }
+  NotificationRepository.record({
+    entityType,
+    entityId,
+    channel: "in-app",
+    title,
+    message,
+  });
+  return true;
+}
+
 // Alerta quando uma promoção ativa é cadastrada/detectada.
 export async function alertActivePromotion(
   promotionId: string,

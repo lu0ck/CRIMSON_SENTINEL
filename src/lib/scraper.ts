@@ -22,6 +22,8 @@ export interface ScrapeResult {
   available: boolean;
   imageUrl?: string;
   method?: string;
+  priceConfirmed?: boolean;
+  nameSource?: string;
 }
 
 const USER_AGENTS = [
@@ -137,6 +139,13 @@ function isPriceRealistic(price: number, productName?: string): boolean {
           nameLower.includes('i7-2') || nameLower.includes('i7-3') || nameLower.includes('pentium') ||
           nameLower.includes('celeron')) {
         return price >= 30 && price <= 30000;
+      }
+      // Coolers, ventoinhas e watercoolers citam Intel/AMD só por compatibilidade — são baratos
+      if (nameLower.includes('cooler') || nameLower.includes('ventoinha') ||
+          nameLower.includes('watercooler') || nameLower.includes('cooling') ||
+          nameLower.includes('pasta termica') || nameLower.includes('pasta térmica') ||
+          nameLower.includes('fan set') || nameLower.includes('kit fan')) {
+        return price >= 15 && price <= 3000;
       }
       // Placas de vídeo de alta gama (RX 9070, RTX 4080, etc) devem ter preço mínimo maior
       if (nameLower.includes('9070') || nameLower.includes('4080') ||
@@ -258,6 +267,147 @@ function getDomain(url: string): string {
   }
 }
 
+interface RawProductData {
+  title: string;
+  ogTitle?: string;
+  ogImage?: string;
+  ogPrice?: number;
+  metaPrice?: number;
+  jsonLdName?: string;
+  jsonLdPrice?: number;
+  jsonLdImage?: string;
+  jsonLdAvailability?: string;
+  twitterImage?: string;
+  metaName?: string;
+  metaImage?: string;
+}
+
+function cleanProductName(name: string): string {
+  if (!name) return "";
+  let n = name.replace(/\s+/g, " ").trim();
+  n = n.replace(/\s*[|–—]\s*[A-Za-zÀ-ú0-9&.'" ]{2,40}$/i, "").trim();
+  n = n.replace(/\s+[|:]\s+[A-Za-zÀ-ú0-9&.'" ]{2,40}$/i, "").trim();
+  return n;
+}
+
+// Parse de HTML bruto (server-side, sem browser) — usado pelo FETCH_FALLBACK.
+// Extrai nome/preço/foto de múltiplas fontes: JSON-LD, og:, meta itemprop.
+// O preço só ganha priceConfirmed=true quando 2+ fontes independentes concordam.
+function extractFromRawHtml(html: string): RawProductData {
+  const data: RawProductData = { title: "" };
+
+  const titleMatch = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  data.title = cleanProductName(htmlDecode(titleMatch?.[1]?.trim() || ""));
+
+  const ogTitle = html.match(/<meta[^>]*property=["']og:title["'][^>]*content=["']([^"']+)["']/i);
+  if (ogTitle) data.ogTitle = cleanProductName(htmlDecode(ogTitle[1]));
+
+  const ogImage = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+  if (ogImage) data.ogImage = ogImage[1];
+
+  const tImage = html.match(/<meta[^>]*name=["']twitter:image["'][^>]*content=["']([^"']+)["']/i);
+  if (tImage) data.twitterImage = tImage[1];
+
+  const ogPrice = html.match(/<meta[^>]*property=["'](?:og:price:amount|product:price:amount|og:product:price)["'][^>]*content=["']([^"']+)["']/i);
+  if (ogPrice) data.ogPrice = parseFloat(htmlDecode(ogPrice[1])) || undefined;
+
+  const metaPrice = html.match(/<meta[^>]*itemprop=["']price["'][^>]*content=["']([^"']+)["']/i);
+  if (metaPrice) data.metaPrice = parseFloat(htmlDecode(metaPrice[1])) || undefined;
+
+  const metaName = html.match(/<meta[^>]*itemprop=["']name["'][^>]*content=["']([^"']+)["']/i);
+  if (metaName) data.metaName = cleanProductName(htmlDecode(metaName[1]));
+
+  const metaImage = html.match(/<meta[^>]*itemprop=["']image["'][^>]*content=["']([^"']+)["']/i);
+  if (metaImage) data.metaImage = metaImage[1];
+
+  // JSON-LD — procura o primeiro @type Product (ou produto dentro de @graph)
+  const ldBlocks = html.match(/<script[^>]*type=["']application\/ld\+json["'][^>]*>([\s\S]*?)<\/script>/gi) || [];
+  for (const blockRaw of ldBlocks) {
+    const block = blockRaw.replace(/^<script[^>]*>/i, "").replace(/<\/script>$/i, "").trim();
+    let parsed: any;
+    try { parsed = JSON.parse(block); } catch { continue; }
+    const candidates = Array.isArray(parsed) ? parsed : parsed["@graph"] || [parsed];
+    for (const cand of candidates) {
+      if (!cand || typeof cand !== "object") continue;
+      if (cand["@type"] === "Product" || (Array.isArray(cand["@type"]) && cand["@type"].includes("Product"))) {
+        if (!data.jsonLdName && cand.name) data.jsonLdName = cleanProductName(String(cand.name));
+        if (!data.jsonLdImage) {
+          const img = cand.image;
+          if (Array.isArray(img)) {
+            const first = img.find((x: any) => typeof x === "string") || (img[0] && img[0].url);
+            if (first) data.jsonLdImage = first;
+          } else if (typeof img === "string") {
+            data.jsonLdImage = img;
+          } else if (img && img.url) {
+            data.jsonLdImage = img.url;
+          }
+        }
+        const offersData = cand.offers;
+        let lowPrice = 0;
+        let currency = "";
+        let availability = "";
+        if (offersData) {
+          const offersList = Array.isArray(offersData) ? offersData : [offersData];
+          let minPrice = 0;
+          for (const o of offersList) {
+            const priceRaw = o && (o.price || (o.lowPrice ?? o.highPrice) || (o.priceSpecification && o.priceSpecification.price));
+            if (!priceRaw) continue;
+            const p = parseFloat(priceRaw);
+            if (!isValidPrice(p)) continue;
+            if (!minPrice || p < minPrice) minPrice = p;
+            if (o.priceCurrency && !currency) currency = o.priceCurrency;
+            if (o.availability && !availability) availability = String(o.availability);
+          }
+          if (minPrice) lowPrice = minPrice;
+        }
+        if (lowPrice && !data.jsonLdPrice) {
+          data.jsonLdPrice = sanitizePrice(lowPrice);
+          data.jsonLdAvailability = availability;
+        }
+        if (data.jsonLdName && (data.jsonLdPrice || lowPrice)) break;
+      }
+    }
+    if (data.jsonLdName) break;
+  }
+
+  return data;
+}
+
+function htmlDecode(text: string): string {
+  return text
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;|&apos;/g, "'")
+    .replace(/&nbsp;/g, " ");
+}
+
+function pickBestName(data: RawProductData): { name: string; source: string } {
+  const order: Array<{ v: string | undefined; s: string }> = [
+    { v: data.jsonLdName, s: "JSONLD" },
+    { v: data.ogTitle, s: "OG" },
+    { v: data.metaName, s: "META" },
+    { v: data.title, s: "TITLE" },
+  ];
+  const longest = { v: "", s: "" , len: 0};
+  for (const o of order) {
+    if (o.v && o.v.length > longest.len) {
+      longest.v = o.v;
+      longest.s = o.s;
+      longest.len = o.v.length;
+    }
+  }
+  return { name: longest.v, source: longest.s };
+}
+
+function pickBestImage(data: RawProductData): string | undefined {
+  for (const img of [data.jsonLdImage, data.ogImage, data.metaImage, data.twitterImage]) {
+    if (img && /^https?:\/\//i.test(img) && !/\.svg(\?|$)/i.test(img)) return img;
+  }
+  return data.ogImage || data.jsonLdImage || data.metaImage;
+}
+
 function parseBrazilianPrice(text: string): number {
   if (!text) return 0;
 
@@ -294,11 +444,78 @@ function parseBrazilianPrice(text: string): number {
   return sanitizePrice(result);
 }
 
-export async function advancedScrape(rawUrl: string, options: {
+export interface ScrapeOptions {
   lmStudioUrl?: string;
   nvidiaApiKey?: string;
   geminiApiKey?: string;
-}): Promise<ScrapeResult> {
+  serperApiKey?: string;
+  tavilyApiKey?: string;
+}
+
+type ScrapeStrategy = {
+  name: string;
+  fn: () => Promise<ScrapeResult | null>;
+};
+
+// FASE 14 — compõe o melhor resultado entre estratégias:
+// melhor nome + melhor preço (confirmado/prioridade) + melhor foto.
+function mergeResults(partials: ScrapeResult[]): ScrapeResult | null {
+  const all = partials.filter((p) => p && typeof p === "object" && isValidPrice(p.price));
+  if (all.length === 0) return null;
+
+  // MELHOR NOME
+  let bestName = "";
+  let bestNameSource = "";
+  for (const r of all) {
+    const n = (r.name || "").trim();
+    if (n.length > bestName.length && n.length >= 5) {
+      bestName = n;
+      bestNameSource = r.nameSource || r.method || "";
+    }
+  }
+
+  // MELHOR PREÇO — prioridade: confirmado > STEALTH/NVIDIA/GEMINI > FETCH
+  const priceCandidates = [...all].sort((a, b) => {
+    const quality = (r: ScrapeResult) => {
+      let q = 0;
+      if (r.priceConfirmed) q += 4;
+      if ((r.method || "").includes("STEALTH")) q += 2;
+      if ((r.method || "").includes("NVIDIA")) q += 1;
+      if ((r.method || "").includes("GEMINI")) q += 1;
+      if ((r.method || "").includes("FETCH")) q -= 2;
+      return q;
+    };
+    return quality(b) - quality(a);
+  });
+  const priceSrc = priceCandidates.find((r) => r.available !== false) || priceCandidates[0];
+
+  // MELHOR FOTO
+  let bestImage: string | undefined;
+  for (const r of all) {
+    if (!r.imageUrl) continue;
+    if (/^https?:\/\//i.test(r.imageUrl) && !/\.svg(\?|$)/i.test(r.imageUrl)) {
+      bestImage = r.imageUrl;
+      break;
+    }
+  }
+
+  const method = priceSrc.method
+    ? `MERGED_${priceSrc.method}${bestNameSource ? `+${bestNameSource}` : ""}`
+    : `MERGED+${bestNameSource}`;
+
+  return {
+    name: bestName || priceSrc.name || "",
+    price: priceSrc.price,
+    currency: "BRL",
+    available: priceSrc.available !== false,
+    imageUrl: bestImage || priceSrc.imageUrl,
+    method,
+    priceConfirmed: priceSrc.priceConfirmed,
+    nameSource: bestNameSource,
+  };
+}
+
+export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Promise<ScrapeResult> {
   // Normalizar URL: adicionar https:// se ausente
   const url = (() => {
     let u = rawUrl.trim();
@@ -311,16 +528,16 @@ export async function advancedScrape(rawUrl: string, options: {
   const urlHash = simpleHash(url);
   const cacheFile = path.join(CACHE_DIR, `${urlHash}.json`);
 
-  // Verificar cache com expiração de 1 hora
+  // Verificar cache com expiração de 30 minutos (FASE 14)
   if (fs.existsSync(cacheFile)) {
     const stats = fs.statSync(cacheFile);
     const cacheAge = Date.now() - stats.mtimeMs;
-    const MAX_CACHE_AGE = 60 * 60 * 1000; // 1 hora
-    
+    const MAX_CACHE_AGE = 30 * 60 * 1000;
+
     if (cacheAge < MAX_CACHE_AGE) {
       console.log(`[Scraper] Cache hit (${Math.round(cacheAge/1000)}s old): ${url.substring(0, 60)}...`);
       const cached = JSON.parse(fs.readFileSync(cacheFile, "utf-8")) as ScrapeResult;
-      
+
       // Validar cache: deve ter preço E nome válidos E realistas
       if (cached && cached.price && cached.price > 0 && cached.name && cached.name.length > 5
           && isProductNameValid(cached.name) && isPriceRealistic(cached.price, cached.name)) {
@@ -338,11 +555,13 @@ export async function advancedScrape(rawUrl: string, options: {
 
   console.log(`[Scraper] Starting fresh scrape for: ${url.substring(0, 80)}...`);
   console.log(`[Scraper] Options available:`);
-  console.log(`  - LMStudio: ${options.lmStudioUrl ? "YES (" + options.lmStudioUrl + ")" : "NO"}`);
-  console.log(`  - NVIDIA: ${options.nvidiaApiKey ? "YES (len=" + options.nvidiaApiKey.length + ")" : "NO"}`);
+  console.log(`  - LMStudio: ${options.lmStudioUrl ? "YES" : "NO"}`);
+  console.log(`  - NVIDIA: ${options.nvidiaApiKey ? "YES" : "NO"}`);
   console.log(`  - Gemini: ${options.geminiApiKey ? "YES" : "NO"}`);
+  console.log(`  - Serper: ${options.serperApiKey ? "YES" : "NO"}`);
+  console.log(`  - Tavily: ${options.tavilyApiKey ? "YES" : "NO"}`);
 
-  const strategies: { name: string; fn: () => Promise<ScrapeResult | null> }[] = [];
+  const strategies: ScrapeStrategy[] = [];
 
   // Circuit breaker por domínio (FASE 3): se a loja está caindo/bloqueando,
   // pula as estratégias Playwright (caras) e só tenta as baratas.
@@ -382,33 +601,50 @@ export async function advancedScrape(rawUrl: string, options: {
       }
     }
 
-    // 3a. Fallbacks Playwright (sem IA)
-    console.log("[Scraper] Adding basic Playwright fallback strategies");
+    // 3a. Fallback Playwright (sem IA)
     strategies.push(
       { name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) }
     );
+
+    // 3b. NVIDIA NIM (extração LLM sobre o corpo da página)
+    if (options.nvidiaApiKey) {
+      strategies.push({ name: "NVIDIA_NIM", fn: () => scrapeWithNvidiaNim(url, options.nvidiaApiKey!) });
+    }
+
+    // 3c. GEMINI_VISION: screenshot + visão (quando o HTML é ilegível)
+    if (options.geminiApiKey) {
+      strategies.push({ name: "GEMINI_VISION", fn: () => scrapeWithGeminiVision(url, options.geminiApiKey!) });
+    }
+
+    // 4. SEARCH_VERIFY: snippet de busca (Serper/Tavily) + NVIDIA/Gemini
+    if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey)) {
+      strategies.push({
+        name: "SEARCH_VERIFY",
+        fn: () => scrapeWithSearchVerify(url, (mergeResults(partials)?.name || ""), options),
+      });
+    }
+
+    // 5. Gemini como ÚLTIMO recurso (grounding via urlContext) — fora do circuit
   }
 
-  // 3b. FETCH_FALLBACK é barato (sem browser) — sempre tentado
+  // 4b. FETCH_FALLBACK é barato (sem browser) — sempre tentado
   strategies.push({ name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) });
 
-  // 4. Gemini como ÚLTIMO recurso (apenas se configurado)
+  // 5. Gemini grounding (apenas se configurado) — sempre tentado
   if (options.geminiApiKey) {
-    console.log("[Scraper] Adding GEMINI_FALLBACK as last resort");
-    strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, "", options.geminiApiKey) });
+    strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, "", options.geminiApiKey!) });
   }
 
   console.log(`[Scraper] Total strategies: ${strategies.length}`);
   console.log(`[Scraper] Strategy order: ${strategies.map(s => s.name).join(" -> ")}`);
 
-  // Guardar melhor resultado "imperfeito" para usar como fallback
-  let bestFallback: ScrapeResult | null = null;
+  const partials: ScrapeResult[] = [];
 
-for (const strategy of strategies) {
+  for (const strategy of strategies) {
     let strategyBrowser: any = null;
     try {
       console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
-      
+
       const strategyPromise = (async () => {
         const res = await strategy.fn();
         return res;
@@ -417,63 +653,52 @@ for (const strategy of strategies) {
       const timeoutPromise = new Promise<null>((_, reject) => {
         setTimeout(() => reject(new Error('Strategy timeout (90s)')), 90000);
       });
-      
+
       const result = await Promise.race([
         strategyPromise,
         timeoutPromise
       ]) as ScrapeResult | null;
 
       if (result && isValidPrice(result.price)) {
-      result.price = sanitizePrice(result.price);
-      result.method = strategy.name;
-      result.name = result.name || "";
+        result.price = sanitizePrice(result.price);
+        result.method = strategy.name;
+        result.name = result.name || "";
+        partials.push(result);
 
-      // Rejeitar produtos indisponíveis
-      if (result.available === false) {
-        console.log(`[Scraper] ✗ Product not available (available: false), trying next strategy...`);
-        continue;
-      }
+        const merged = mergeResults(partials);
+        if (!merged) continue;
 
-      // Validar se o nome faz sentido antes de salvar
-      if (result.name && result.name.length > 5 && isProductNameValid(result.name)) {
-        // Validar se o preço é realista
-        if (!isPriceRealistic(result.price, result.name)) {
-          console.log(`[Scraper] ⚠️ WARNING: Price R$ ${result.price} seems unrealistic for "${result.name?.substring(0, 40)}"`);
-          // Guardar como fallback se for o melhor até agora
-          if (!bestFallback || result.price > bestFallback.price) {
-            bestFallback = result;
-            console.log(`[Scraper] Saved as fallback candidate (R$ ${result.price})`);
+        console.log(`[Scraper] Merged so far: price=${merged.price}, name="${merged.name?.substring(0, 50)}", img=${merged.imageUrl ? "yes" : "no"} (confirmed=${!!merged.priceConfirmed})`);
+
+        if (merged.name.length > 5 && isProductNameValid(merged.name) && isPriceRealistic(merged.price, merged.name)) {
+          console.log(`[Scraper] ✓ SUCCESS (${strategy.name}, merged): price=${merged.price}, name="${merged.name?.substring(0, 50)}"`);
+
+          fs.writeFileSync(cacheFile, JSON.stringify(merged));
+          scraperBreaker.recordSuccess(domain);
+          if (circuitOpen) {
+            console.log(`[Scraper] ✅ Circuit CLOSED for ${domain} (probe ok)`);
           }
-          console.log(`[Scraper] Trying next strategy for confirmation...`);
-          continue;
+          return merged;
+        } else if (merged.name.length <= 5 || !isProductNameValid(merged.name)) {
+          console.log(`[Scraper] ✗ Strategy ${strategy.name} returned invalid/weak name:`, JSON.stringify(merged.name));
+        } else {
+          console.log(`[Scraper] ⚠️ Merged price R$ ${merged.price} seems unrealistic for "${merged.name.substring(0, 40)}"`);
         }
-
-        console.log(`[Scraper] ✓ SUCCESS with ${strategy.name}: price=${result.price}, name="${result.name?.substring(0, 50) || "N/A"}"`);
-
-        // Salvar no cache apenas se tiver dados válidos
-        fs.writeFileSync(cacheFile, JSON.stringify(result));
-        scraperBreaker.recordSuccess(domain);
-        if (circuitOpen) {
-          console.log(`[Scraper] ✅ Circuit CLOSED for ${domain} (probe ok)`);
-        }
-        return result;
       } else {
-        console.log(`[Scraper] ✗ Strategy ${strategy.name} returned invalid name:`, result.name);
+        console.log(`[Scraper] ✗ Strategy ${strategy.name} returned invalid data:`, result);
       }
-    } else {
-      console.log(`[Scraper] ✗ Strategy ${strategy.name} returned invalid data:`, result);
+    } catch (error: any) {
+      console.error(`[Scraper] ✗ Strategy ${strategy.name} failed:`, error.message || error);
+      console.error(`[Scraper] Error stack:`, error.stack?.split("\n").slice(0, 3).join("\n"));
     }
-  } catch (error: any) {
-    console.error(`[Scraper] ✗ Strategy ${strategy.name} failed:`, error.message || error);
-    console.error(`[Scraper] Error stack:`, error.stack?.split("\n").slice(0, 3).join("\n"));
   }
-}
 
-  // Se todas as estratégias falharam mas temos um fallback válido, usar ele
-  if (bestFallback && isProductNameValid(bestFallback.name)) {
-    console.log(`[Scraper] ⚠️ Using best available fallback: R$ ${bestFallback.price} — "${bestFallback.name?.substring(0, 50)}" (${bestFallback.method})`);
-    fs.writeFileSync(cacheFile, JSON.stringify(bestFallback));
-    return bestFallback;
+  // Se todas as estratégias falharam mas temos um resultado composto válido (nome ok)
+  const mergedFinal = mergeResults(partials);
+  if (mergedFinal && mergedFinal.name && mergedFinal.name.length > 5 && isProductNameValid(mergedFinal.name)) {
+    console.log(`[Scraper] ⚠️ Using best available merged result: R$ ${mergedFinal.price} — "${mergedFinal.name.substring(0, 50)}" (${mergedFinal.method})`);
+    fs.writeFileSync(cacheFile, JSON.stringify(mergedFinal));
+    return mergedFinal;
   }
 
   console.error("[Scraper] ✗✗✗ All strategies failed ✗✗✗");
@@ -482,7 +707,6 @@ for (const strategy of strategies) {
   scraperBreaker.recordFailure(domain);
   throw new Error(`Failed to scrape product data from all strategies (tried: ${strategies.map(s => s.name).join(", ")})`);
 }
-
 async function scrapeWithLLMLocal(
 	page: any,
 	lmStudioUrl: string,
@@ -933,170 +1157,226 @@ await page.waitForTimeout(2000);
 
 async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> {
 	const evaluateCode = `
-		(function() {
-			var body = document.body.innerText;
-			var bodyLower = body.toLowerCase();
+(function() {
+	var body = document.body ? document.body.innerText : "";
+	var bodyLower = body ? body.toLowerCase() : "";
 
-			function parseBrazilianPrice(text) {
-				if (!text) return 0;
-				text = text.replace(/R\\$\\s?/gi, '').trim();
-				if (/[eE][+-]?\\d+/i.test(text)) return 0;
-				text = text.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
-				var price = parseFloat(text);
-				return isNaN(price) ? 0 : price;
-			}
+	function parseBrazilianPrice(text) {
+		if (!text) return 0;
+		text = text.replace(/R\\$\\s?/gi, '').trim();
+		if (/[eE][+-]?\\d+/i.test(text)) return 0;
+		text = text.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
+		var price = parseFloat(text);
+		return isNaN(price) ? 0 : price;
+	}
 
-			function isValidPrice(p) {
-				return p >= 10 && p <= 5000000 && Number.isFinite(p);
-			}
+	function isValidPrice(p) {
+		return p >= 10 && p <= 5000000 && Number.isFinite(p);
+	}
 
-			var priceSelectors = [
-				'[class*="price"]',
-				'[data-price]',
-				'[itemprop="price"]',
-				'[class*="Price"]',
-				'.product-price',
-				'#price',
-				'.price',
-				'.preco'
-			];
+	function cleanName(n) {
+		if (!n) return "";
+		n = n.replace(/\\s+/g, ' ').trim();
+		n = n.replace(/\\s*[|–—]\\s*[^|–—]{2,40}$/i, '').trim();
+		n = n.replace(/\\s*\\|\\s*[A-Za-zÀ-ú0-9&.'" ]{2,30}$/i, '').trim();
+		return n;
+	}
 
-			var price = 0;
-			var foundSelector = "";
-
-			for (var i = 0; i < priceSelectors.length; i++) {
-				var selector = priceSelectors[i];
-				var el = document.querySelector(selector);
-				if (el) {
-					var text = el.textContent || "";
-					var parsed = parseBrazilianPrice(text);
-					if (isValidPrice(parsed)) {
-						price = parsed;
-						foundSelector = selector;
-						break;
-					}
-				}
-			}
-
-			if (!isValidPrice(price)) {
-				var patterns = [
-					/R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi,
-					/R\\$\\s*\\d+,\\d{2}/gi,
-					/\\d{1,3}(?:\\.\\d{3})*,\\d{2}/g,
-					/R\\$\\s*[\\d.]+/gi
-				];
-
-				var allPrices = [];
-
-				for (var p = 0; p < patterns.length; p++) {
-					var matches = body.match(patterns[p]) || [];
-					for (var m = 0; m < matches.length; m++) {
-						var parsed = parseBrazilianPrice(matches[m]);
-						if (isValidPrice(parsed)) {
-							allPrices.push(parsed);
+	// ---- JSON-LD ----
+	var jsonLdName = "", jsonLdPrice = 0, jsonLdImage = "", jsonLdAvail = "";
+	var ldScripts = document.querySelectorAll('script[type="application/ld+json"]');
+	for (var li = 0; li < ldScripts.length; li++) {
+		try {
+			var ld = JSON.parse(ldScripts[li].textContent || "{}");
+			var cands = Array.isArray(ld) ? ld : (ld['@graph'] || [ld]);
+			for (var ci = 0; ci < cands.length; ci++) {
+				var c = cands[ci];
+				if (!c || typeof c !== 'object' || c['@type'] !== 'Product') continue;
+				if (!jsonLdName && c.name) jsonLdName = cleanName(c.name);
+				var img = c.image;
+				if (!jsonLdImage) {
+					if (Array.isArray(img)) {
+						for (var ii = 0; ii < img.length; ii++) {
+							if (typeof img[ii] === 'string') { jsonLdImage = img[ii]; break; }
+							if (img[ii] && img[ii].url) { jsonLdImage = img[ii].url; break; }
 						}
+					} else if (typeof img === 'string') jsonLdImage = img;
+					else if (img && img.url) jsonLdImage = img.url;
+				}
+				var offers = c.offers;
+				if (offers && !jsonLdPrice) {
+					var list = Array.isArray(offers) ? offers : [offers];
+					var minP = 0;
+					for (var oi = 0; oi < list.length; oi++) {
+						var o = list[oi];
+						var pr = o && (o.price || (o.lowPrice != null ? o.lowPrice : (o.highPrice != null ? o.highPrice : (o.priceSpecification && o.priceSpecification.price))));
+						var pp = parseFloat(pr);
+						if (!isNaN(pp) && isValidPrice(pp)) {
+							if (!minP || pp < minP) minP = pp;
+						}
+						if (o && o.availability && !jsonLdAvail) jsonLdAvail = String(o.availability);
 					}
+					if (minP) jsonLdPrice = Math.round(minP * 100) / 100;
 				}
-
-			var uniquePrices = [];
-			for (var i = 0; i < allPrices.length; i++) {
-				if (uniquePrices.indexOf(allPrices[i]) === -1) {
-					uniquePrices.push(allPrices[i]);
-				}
+				if (jsonLdName && jsonLdPrice) break;
 			}
+			if (jsonLdName) break;
+		} catch (e) { continue; }
+	}
 
-			// Prefer "Por R$" prices (current sale price) over "De R$" prices (old price)
-			var porPrices = [];
-			var bodyLines = body.split(/\\n/);
-			for (var i = 0; i < bodyLines.length; i++) {
-				var line = bodyLines[i];
-				if (/\\bpor\\b/i.test(line) && /\\$/.test(line)) {
-					var parsed = parseBrazilianPrice(line);
-					if (isValidPrice(parsed)) {
-						porPrices.push(parsed);
-					}
-				}
+	// ---- og / meta ----
+	function metaContent(selectors) {
+		for (var i = 0; i < selectors.length; i++) {
+			var el = document.querySelector(selectors[i]);
+			if (el) {
+				var v = el.getAttribute("content");
+				if (v && v.trim()) return v.trim();
 			}
-			if (porPrices.length > 0) {
-				// Take the most frequent "Por" price, or the lowest
-				var porFreqMap = {};
-				for (var i = 0; i < porPrices.length; i++) {
-					porFreqMap[porPrices[i]] = (porFreqMap[porPrices[i]] || 0) + 1;
-				}
-				var bestPorPrice = porPrices[0];
-				var bestPorFreq = 1;
-				for (var i = 0; i < porPrices.length; i++) {
-					if ((porFreqMap[porPrices[i]] || 0) > bestPorFreq) {
-						bestPorFreq = porFreqMap[porPrices[i]];
-						bestPorPrice = porPrices[i];
-					}
-				}
-				price = bestPorFreq > 1 ? bestPorPrice : Math.min.apply(null, porPrices);
-			} else {
-				// Fallback: Use the most frequently occurring price (not the highest)
-				var freqMap = {};
-				for (var i = 0; i < allPrices.length; i++) {
-					var p = allPrices[i];
-					freqMap[p] = (freqMap[p] || 0) + 1;
-				}
-				var bestFreq = 0;
-				for (var i = 0; i < uniquePrices.length; i++) {
-					if ((freqMap[uniquePrices[i]] || 0) > bestFreq) {
-						bestFreq = freqMap[uniquePrices[i]];
-						price = uniquePrices[i];
-					}
-				}
-				// If no frequency winner, take the lowest (sale price, not "De" price)
-				if (!isValidPrice(price) && uniquePrices.length > 0) {
-					uniquePrices.sort(function(a, b) { return a - b; });
-					price = uniquePrices[0];
-				}
+		}
+		return "";
+	}
+	var ogTitle = cleanName(metaContent(['meta[property="og:title"]', 'meta[name="twitter:title"]']));
+	var metaName = cleanName(metaContent(['meta[itemprop="name"]']));
+	var ogPriceText = metaContent(['meta[property="og:price:amount"]', 'meta[property="product:price:amount"]', 'meta[itemprop="price"]']);
+	var ogPrice = parseFloat((ogPriceText || "").replace(',', '.'));
+	if (isNaN(ogPrice)) ogPrice = 0;
+	var ogImage = metaContent(['meta[property="og:image"]', 'meta[name="twitter:image"]', 'meta[itemprop="image"]']);
+
+	// ---- Nome ----
+	var name = jsonLdName || ogTitle || metaName || "";
+	var nameSource = jsonLdName ? "JSONLD" : (ogTitle ? "OG" : (metaName ? "META" : ""));
+	if (!name) {
+		var h1 = document.querySelector("h1");
+		if (h1 && h1.textContent && h1.textContent.trim()) name = cleanName(h1.textContent);
+		else {
+			var titleEl = document.querySelector("title");
+			if (titleEl && titleEl.textContent) name = cleanName(titleEl.textContent);
+		}
+		if (!nameSource) nameSource = h1 ? "H1" : "TITLE";
+	}
+
+	// ---- Preço ----
+	var priceSelectors = [
+		'[itemprop="price"]:not(meta)',
+		'[class*="price"]',
+		'[data-price]',
+		'.product-price',
+		'#price',
+		'.price',
+		'.preco'
+	];
+	var domPrice = 0;
+	for (var i = 0; i < priceSelectors.length; i++) {
+		var el = document.querySelector(priceSelectors[i]);
+		if (el) {
+			var txt = el.textContent || "";
+			if (/[eE][+-]?\\d+/i.test(txt)) continue;
+			var parsed = parseBrazilianPrice(txt);
+			if (isValidPrice(parsed)) { domPrice = parsed; break; }
+		}
+	}
+
+	function nearNamePrices() {
+		var idx = body.indexOf(name);
+		if (idx < 0) return [];
+		var start = Math.max(0, idx - 1200);
+		var end = Math.min(body.length, idx + 1800);
+		var region = body.slice(start, end);
+		var res = [];
+		var re = /R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi;
+		var m;
+		while ((m = re.exec(region))) {
+			var p = parseBrazilianPrice(m[0]);
+			if (isValidPrice(p)) res.push(p);
+		}
+		return res;
+	}
+
+	var price = 0;
+	var confirmed = false;
+	var usedSource = "";
+
+	// 1) JSON-LD (estruturado) — confiável; confirmado se DOM/og concordar
+	if (jsonLdPrice && isValidPrice(jsonLdPrice)) {
+		price = jsonLdPrice;
+		usedSource = "JSONLD";
+		if (domPrice && Math.abs(domPrice - jsonLdPrice) <= jsonLdPrice * 0.02) confirmed = true;
+		else if (ogPrice && Math.abs(ogPrice - jsonLdPrice) <= jsonLdPrice * 0.02) { confirmed = true; price = jsonLdPrice; }
+	}
+	// 2) Confirmação DOM + og/meta
+	if (!isValidPrice(price)) {
+		if (domPrice && ogPrice && Math.abs(domPrice - ogPrice) <= ogPrice * 0.02) {
+			price = Math.min(domPrice, ogPrice);
+			confirmed = true;
+			usedSource = "DOM_CONFIRMED";
+		}
+	}
+	// 3) DOM sozinho
+	if (!isValidPrice(price) && domPrice) { price = domPrice; usedSource = "DOM"; }
+	// 4) preços próximos ao nome
+	if (!isValidPrice(price)) {
+		var near = nearNamePrices();
+		if (near.length > 0) { price = near[0]; usedSource = "NEAR_NAME"; }
+	}
+	// 5) last resort: por > frequência > menor
+	if (!isValidPrice(price)) {
+		var allPrices = [];
+		var matches = body.match(/R\\$\\s*\\d{1,3}(?:\\.\\d{3})*,\\d{2}/gi) || [];
+		for (var mi = 0; mi < matches.length; mi++) {
+			var pp = parseBrazilianPrice(matches[mi]);
+			if (isValidPrice(pp)) allPrices.push(pp);
+		}
+		var porPrices = [];
+		var bodyLines = body.split(/\\n/);
+		for (var li2 = 0; li2 < bodyLines.length; li2++) {
+			var line = bodyLines[li2];
+			if (/\\bpor\\b/i.test(line) && /\\$/.test(line)) {
+				var lp = parseBrazilianPrice(line);
+				if (isValidPrice(lp)) porPrices.push(lp);
 			}
-			}
+		}
+		if (porPrices.length > 0) price = Math.min.apply(null, porPrices);
+		else if (allPrices.length > 0) {
+			var freqMap = {};
+			for (var fi = 0; fi < allPrices.length; fi++) freqMap[allPrices[fi]] = (freqMap[allPrices[fi]] || 0) + 1;
+			var bestP = allPrices[0], bestF = 0;
+			for (var fi2 = 0; fi2 < allPrices.length; fi2++) if ((freqMap[allPrices[fi2]] || 0) > bestF) { bestF = freqMap[allPrices[fi2]]; bestP = allPrices[fi2]; }
+			price = bestF > 1 ? bestP : Math.min.apply(null, allPrices);
+		}
+		if (!usedSource) usedSource = "FREQ";
+	}
 
-			price = Math.round(price * 100) / 100;
+	price = Math.round(price * 100) / 100;
 
-			var nameSelectors = ["h1", '[itemprop="name"]', '[class*="title"]', "title"];
-			var name = "";
-			for (var i = 0; i < nameSelectors.length; i++) {
-				var selector = nameSelectors[i];
-				var el = document.querySelector(selector);
-				if (el && el.textContent && el.textContent.trim()) {
-					name = el.textContent.trim();
-					break;
-				}
-			}
+	// ---- Foto ----
+	var imageUrl = jsonLdImage || ogImage || undefined;
+	if (!imageUrl) {
+		var imageEl = document.querySelector("img[class*='product']") ||
+			document.querySelector("img[class*='Product']") ||
+			document.querySelector("img[itemprop='image']") ||
+			document.querySelector("#product-gallery img") ||
+			document.querySelector("img[class*='main']");
+		if (imageEl) imageUrl = imageEl.getAttribute("src") || imageEl.getAttribute("data-src") || undefined;
+	}
+	if (imageUrl && imageUrl.indexOf("//") === 0 && window.location) imageUrl = window.location.protocol + imageUrl;
 
-			var imageEl =
-				document.querySelector('meta[property="og:image"]') ||
-				document.querySelector('meta[name="twitter:image"]') ||
-				document.querySelector("img[class*='product']") ||
-				document.querySelector("img[class*='main']");
+	// ---- Disponível ----
+	var unavailableKeywords = ["esgotado", "indisponível", "sem estoque", "fora de estoque", "sold out", "unavailable"];
+	var available = true;
+	if (jsonLdAvail && jsonLdAvail.indexOf("OutOfStock") !== -1) available = false;
+	for (var ki = 0; ki < unavailableKeywords.length; ki++) {
+		if (bodyLower.indexOf(unavailableKeywords[ki]) !== -1) { available = false; break; }
+	}
 
-			var imageUrl = undefined;
-			if (imageEl) {
-				imageUrl = imageEl.getAttribute("content") || imageEl.getAttribute("src") || undefined;
-			}
-
-			var unavailableKeywords = ["esgotado", "indisponível", "sem estoque", "fora de estoque", "sold out", "unavailable"];
-			var available = true;
-			for (var i = 0; i < unavailableKeywords.length; i++) {
-				if (bodyLower.indexOf(unavailableKeywords[i]) !== -1) {
-					available = false;
-					break;
-				}
-			}
-
-	return { name: name, price: price, currency: "BRL", available: available, imageUrl: imageUrl };
-	})()
+	return { name: name, price: price, currency: "BRL", available: available, imageUrl: imageUrl, nameSource: nameSource, priceConfirmed: confirmed };
+})()
 	`;
 	const data = await page.evaluate(evaluateCode) as ScrapeResult;
 
   var namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
-  console.log("[Generic] Extracted: name=\"" + namePreview + "\", price=" + data.price);
+  console.log(`[Generic] Extracted: name="${namePreview}" (${data.nameSource || "?"}), price=${data.price}${data.priceConfirmed ? " (confirmed)" : ""}, img=${data.imageUrl ? "yes" : "no"}`);
   return data;
 }
-
 async function scrapeWithPlaywrightBasic(url: string, options: any): Promise<ScrapeResult | null> {
   const userAgent = getRandomUserAgent();
   let browser;
@@ -1143,27 +1423,46 @@ async function scrapeWithFetch(url: string): Promise<ScrapeResult | null> {
     }
 
     const html = await response.text();
-    const nameMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-    const ogImageMatch = html.match(/<meta[^>]*property=["']og:image["'][^>]*content=["']([^"']+)["']/i);
+    const data = extractFromRawHtml(html);
 
-    const priceMatches = html.match(/R?\$?\s*[\d.,]+/gi) || [];
-    const prices = priceMatches.map(m => {
-      const num = m.replace(/[^\d.,]/g, "");
-      const parts = num.split(/[.,]/);
-      if (parts.length >= 2) {
-        return parseFloat(parts.slice(0, -1).join("")) + parseFloat(parts[parts.length - 1]) / 100;
+    const { name, source } = pickBestName(data);
+    if (!name) return null;
+
+    // Preço: JSON-LD é a fonte mais confiável. Meta/og confirmam (dupla fonte).
+    let price = data.jsonLdPrice || data.metaPrice || data.ogPrice || 0;
+    let confirmed = false;
+    const sources: number[] = [];
+    if (data.jsonLdPrice) sources.push(data.jsonLdPrice);
+    if (data.metaPrice) sources.push(data.metaPrice);
+    if (data.ogPrice) sources.push(data.ogPrice);
+    if (sources.length >= 2) {
+      const min = Math.min(...sources);
+      const max = Math.max(...sources);
+      if (max - min <= max * 0.02 || min === max) {
+        price = min;
+        confirmed = true;
+      } else {
+        price = data.jsonLdPrice || data.metaPrice || 0;
       }
-      return parseFloat(num) || 0;
-    }).filter(p => p > 10 && p < 100000);
+    }
 
-    const price = prices.length > 0 ? Math.min(...prices) : 0;
+    if (!isValidPrice(price)) {
+      // Último recurso: preços do body (menor válido), sem confirmação
+      const priceMatches = html.match(/R?\$?\s*[\d.,]+/gi) || [];
+      const prices = priceMatches.map((m) => parseBrazilianPrice(m)).filter(isValidPrice);
+      if (prices.length > 0) price = Math.min(...prices);
+    }
+
+    console.log(`[Fetch] name="${name.substring(0, 50)}", price=${price}${confirmed ? " (confirmed)" : ""}, img=${data.ogImage ? "yes" : "no"}`);
 
     return {
-      name: nameMatch?.[1]?.trim() || "",
-      price,
+      name,
+      price: sanitizePrice(price),
       currency: "BRL",
-      available: true,
-      imageUrl: ogImageMatch?.[1],
+      available: price > 0,
+      imageUrl: pickBestImage(data),
+      nameSource: source,
+      priceConfirmed: confirmed,
     };
   } catch (error) {
     console.error("[Fetch] Error:", error);
@@ -1359,6 +1658,198 @@ Return ONLY valid JSON, no explanation.`
       }
       console.error("[Gemini] Error:", error.message || error);
       return null;
+    }
+  }
+
+  return null;
+}
+
+// FASE 14 — GEMINI_VISION: screenshot via Playwright + modelo de visão,
+// usado quando o HTML é ilegível (paywall/JS pesado/bot).
+async function scrapeWithGeminiVision(url: string, apiKey: string): Promise<ScrapeResult | null> {
+  if (!apiKey) return null;
+  console.log("[GEMINI_VISION] Starting vision extraction...");
+
+  const ai = new GoogleGenAI({ apiKey });
+  let browser: any = null;
+  try {
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
+    });
+    const context = await browser.newContext({
+      userAgent: getRandomUserAgent(),
+      viewport: { width: 1280, height: 960 },
+      locale: "pt-BR",
+    });
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(3000);
+    await page.evaluate(`window.scrollTo(0, 300)`);
+    await page.waitForTimeout(1500);
+    await page.evaluate(`window.scrollTo(0, 0)`);
+    await page.waitForTimeout(800);
+
+    const shot: any = await page.screenshot({ type: "png" });
+    const data = Buffer.isBuffer(shot) ? shot.toString("base64") : shot.data;
+
+    await browser.close();
+    browser = null;
+
+    if (!data) {
+      console.log("[GEMINI_VISION] Screenshot vazio");
+      return null;
+    }
+
+    const response = await ai.models.generateContent({
+      model: AI_MODELS.VISION,
+      contents: [
+        {
+          role: "user",
+          parts: [
+            {
+              text: "Esta é uma captura de tela de uma página de produto. Extraia: 1) o NOME COMPLETO do produto (sem nome do site); 2) o MENOR preço à vista em reais (ignore parcelas/'de R$', juros e custos de frete); 3) a URL da imagem principal do produto se estiver visível. Responda APENAS JSON válido: {name: string, price: number, imageUrl: string}.",
+            },
+            { inlineData: { mimeType: "image/png", data } },
+          ],
+        },
+      ],
+      config: {
+        responseMimeType: "application/json",
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            name: { type: Type.STRING },
+            price: { type: Type.NUMBER },
+            imageUrl: { type: Type.STRING },
+          },
+          required: ["name", "price"],
+        },
+      },
+    });
+
+    const result = JSON.parse(response.text || "{}");
+    if (!isValidPrice(Number(result.price)) || !result.name) {
+      console.log("[GEMINI_VISION] Resposta sem dados válidos:", result.name || "sem nome");
+      return null;
+    }
+    result.price = sanitizePrice(Number(result.price));
+    result.currency = "BRL";
+    result.available = true;
+    result.imageUrl = result.imageUrl || undefined;
+    console.log(`[GEMINI_VISION] ✓ name="${(result.name || "").substring(0, 50)}", price=${result.price}`);
+    return result as ScrapeResult;
+  } catch (error: any) {
+    console.error("[GEMINI_VISION] Error:", error.message || error);
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
+    return null;
+  }
+}
+
+// FASE 14 — SEARCH_VERIFY: quando a página não renderiza, usa Serper/Tavily
+// + NVIDIA para extrair nome/preço a partir dos snippets de busca.
+async function scrapeWithSearchVerify(
+  url: string,
+  nameHint: string,
+  options: ScrapeOptions
+): Promise<ScrapeResult | null> {
+  if (nameHint.length < 5) {
+    // sem nome confiável — grounding via Gemini urlContext é a melhor aposta
+    if (options.geminiApiKey) {
+      return scrapeWithGemini(url, "", options.geminiApiKey);
+    }
+    return null;
+  }
+
+  console.log(`[SEARCH_VERIFY] Buscando "${nameHint}" para validar...`);
+
+  let snippet = "";
+  if (options.tavilyApiKey) {
+    try {
+      const res = await fetch("https://api.tavily.com/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          api_key: options.tavilyApiKey,
+          query: `"${nameHint}"`,
+          search_depth: "basic",
+          max_results: 3,
+          include_answer: true,
+          language: "pt",
+        }),
+      });
+      const j = await res.json();
+      const answer = j.answer && typeof j.answer === "string" ? j.answer : "";
+      const results = Array.isArray(j.results) ? j.results.slice(0, 3) : [];
+      snippet = (answer + " " + results.map((x: any) => `${x.title || ""} ${x.content || ""}`).join(" ")).trim();
+      console.log(`[SEARCH_VERIFY] Tavily snippet (${snippet.length} chars)`);
+    } catch (e: any) {
+      console.log("[SEARCH_VERIFY] Tavily falhou:", e.message || e);
+    }
+  } else if (options.serperApiKey) {
+    try {
+      const res = await fetch("https://google.serper.dev/search", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-KEY": options.serperApiKey },
+        body: JSON.stringify({ q: `"${nameHint}"`, gl: "br", hl: "pt-br" }),
+      });
+      const j = await res.json();
+      const results = Array.isArray(j.organic) ? j.organic.slice(0, 3) : [];
+      snippet = results.map((x: any) => `${x.title || ""} ${x.snippet || ""}`).join(" ");
+      console.log(`[SEARCH_VERIFY] Serper snippet (${snippet.length} chars)`);
+    } catch (e: any) {
+      console.log("[SEARCH_VERIFY] Serper falhou:", e.message || e);
+    }
+  }
+
+  if (!snippet || snippet.length < 40) return null;
+
+  // 1) NVIDIA (grátis) extrai do snippet
+  if (options.nvidiaApiKey) {
+    try {
+      const client = new OpenAI({
+        baseURL: "https://integrate.api.nvidia.com/v1",
+        apiKey: options.nvidiaApiKey,
+      });
+      const resp = await client.chat.completions.create({
+        model: "meta/llama-3.1-8b-instruct",
+        messages: [
+          { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
+          { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
+        ],
+        max_tokens: 300,
+        temperature: 0,
+      });
+      const text = resp.choices[0].message?.content || "";
+      const jm = text.match(/\{[\s\S]*\}/);
+      if (jm) {
+        const out = JSON.parse(jm[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
+        const price = sanitizePrice(Number(out.price));
+        if (isValidPrice(price) && out.name && String(out.name).length > 5) {
+          console.log(`[SEARCH_VERIFY] ✓ NVIDIA: "${String(out.name).substring(0, 40)}" R$ ${price}`);
+          return {
+            name: cleanProductName(String(out.name)),
+            price,
+            currency: "BRL",
+            available: true,
+            priceConfirmed: false,
+            nameSource: "SEARCH",
+          } as ScrapeResult;
+        }
+      }
+    } catch (e: any) {
+      console.log("[SEARCH_VERIFY] NVIDIA falhou:", e.message || e);
+    }
+  }
+
+  // 2) Gemini grounding na página original como validação
+  if (options.geminiApiKey) {
+    const viaGemini = await scrapeWithGemini(url, "", options.geminiApiKey);
+    if (viaGemini && isValidPrice(viaGemini.price) && (viaGemini.name || "").length > 5) {
+      console.log(`[SEARCH_VERIFY] ✓ Gemini grounding: "${viaGemini.name.substring(0, 40)}" R$ ${viaGemini.price}`);
+      return viaGemini;
     }
   }
 

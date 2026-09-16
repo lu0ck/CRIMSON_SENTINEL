@@ -31,6 +31,7 @@ import { PromotionSiteRepository } from "./src/repositories/promotionSiteReposit
 import {
   alertShoppingItemTargetReached,
   alertActivePromotion,
+  recordInAppAlert,
 } from "./src/lib/notify.ts";
 import { buildLocalInsights, summarizeInsights } from "./src/lib/localInsights.ts";
 import { isTrustedHost } from "./src/lib/trustedDomains.ts";
@@ -259,12 +260,17 @@ app.post("/api/scrape", async (req, res) => {
       lmStudioUrl: profile?.lmStudioUrl,
       nvidiaApiKey: profile?.nvidiaApiKey,
       geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+      serperApiKey: profile?.serperApiKey,
+      tavilyApiKey: profile?.tavilyApiKey,
     });
     safeLog(`[scrape] scraping direto OK via ${result.method} para ${url}`);
     updateLastScanTimestamp();
     res.json({ jobId: null, status: "direct", result });
   } catch (error: any) {
     safeLog("[scrape] erro: " + error.message);
+    if (url) {
+      recordInAppAlert("scrape", url, "✗ SCRAPE FALHOU", `${url}\n\n${error.message || "Falha no scraping"}`, 1);
+    }
     res.status(500).json({ error: error.message || "Failed to scrape" });
   }
 });
@@ -1010,6 +1016,21 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     try {
       const limit = Number(req.query.limit) || 50;
       res.json(NotificationRepository.getAll(limit));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // FASE 15: registra um alerta apenas in-app (Central de Alertas) com dedup
+  // por URL (default 1h) — usado p/ erros de scrape e observações internas.
+  app.post("/api/notifications", (req, res) => {
+    try {
+      const { entityType, entityId, title, message, cooldownHours } = req.body || {};
+      if (!entityType || !entityId || !title) {
+        return res.status(400).json({ error: "entityType, entityId e title são obrigatórios" });
+      }
+      const recorded = recordInAppAlert(entityType, entityId, title, String(message || ""), Number(cooldownHours) || 1);
+      res.json({ recorded });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

@@ -21,7 +21,7 @@ import { SettingsRepository } from "../repositories/settingsRepository";
 import { scanEstablishmentPrices, type LocalPriceScanOutcome } from "../lib/localPriceScrape";
 import { overpassDiscoverEstablishments, haversineKm, type GeoPoint } from "../lib/geo";
 import { isFlashPrice, createFlashPromotion } from "../lib/flashDetect";
-import { alertFlashPromotion } from "../lib/notify";
+import { alertFlashPromotion, recordInAppAlert } from "../lib/notify";
 import { TRUSTED_DOMAINS } from "../lib/trustedDomains";
 import { AI_MODELS } from "../lib/aiModels";
 
@@ -35,6 +35,8 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
     lmStudioUrl: profile?.lmStudioUrl,
     nvidiaApiKey: profile?.nvidiaApiKey,
     geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+    serperApiKey: profile?.serperApiKey,
+    tavilyApiKey: profile?.tavilyApiKey,
   });
 
   if (productId && info?.price) {
@@ -104,6 +106,8 @@ async function handleScanAll() {
         lmStudioUrl: profile?.lmStudioUrl,
         nvidiaApiKey: profile?.nvidiaApiKey,
         geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+        serperApiKey: profile?.serperApiKey,
+        tavilyApiKey: profile?.tavilyApiKey,
       });
       if (info && info.price) {
         const now = new Date().toISOString();
@@ -135,6 +139,9 @@ async function handleScanAll() {
     } catch (err) {
       errors++;
       safeLog(`[scan-worker] erro ${product.name}: ${err}`);
+      if (product.url) {
+        recordInAppAlert("scrape", product.url, `✗ FALHA NO RASTREIO: ${product.name}`, `${product.url}\n\n${err}`, 1);
+      }
     }
   }
 
@@ -223,6 +230,8 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
             lmStudioUrl: profile.lmStudioUrl,
             nvidiaApiKey: profile.nvidiaApiKey,
             geminiApiKey: finalApiKey,
+            serperApiKey: profile.serperApiKey,
+            tavilyApiKey: profile.tavilyApiKey,
           });
           if (info && info.price && info.name) {
             scraped.push({ site: new URL(url).hostname, price: info.price, url });
@@ -556,6 +565,9 @@ export function startScanWorker() {
   });
   worker.on("failed", (job, err) => {
     safeLog(`[scan-worker] ${job?.id} falhou: ${err.message}`);
+    if (job?.data?.type === "scrape" && job?.data?.url) {
+      recordInAppAlert("scrape", job.data.url, "✗ SCRAPE FALHOU", `${job.data.url}\n\n${err.message}`, 1);
+    }
   });
   worker.on("error", (err) => {
     safeLog(`[scan-worker] erro: ${err.message}`);

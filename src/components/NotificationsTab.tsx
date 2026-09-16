@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion } from "motion/react";
-import { Bell, ShieldAlert, Store, ShoppingCart, Percent, Loader2 } from "lucide-react";
+import { Bell, ShieldAlert, Store, ShoppingCart, Percent, Loader2, XCircle } from "lucide-react";
 import type { NotificationLogEntry } from "../repositories/notificationRepository";
 
 interface NotificationsTabProps {
@@ -25,6 +25,8 @@ const entityMeta = (entityType: string) => {
       return { icon: <ShoppingCart size={14} />, label: "LISTA LOCAL", color: "text-green-500" };
     case "promotion":
       return { icon: <Percent size={14} />, label: "PROMOÇÃO", color: "text-amber-500" };
+    case "scrape":
+      return { icon: <XCircle size={14} />, label: "SCRAPE", color: "text-red-500" };
     default:
       return { icon: <Bell size={14} />, label: entityType.toUpperCase(), color: "text-crimson" };
   }
@@ -73,7 +75,7 @@ export function NotificationsTab({ addToast, playSound }: NotificationsTabProps)
           <div className="text-crimson/40 font-mono italic">NENHUM ALERTA ENVIADO AINDA</div>
           <div className="text-[10px] font-mono text-crimson/30 mt-2">
             OS ALERTAS APARECEM AQUI QUANDO UM PRODUTO ATINGE O PREÇO-ALVO, UMA OBSERVAÇÃO LOCAL
-            ENTRA NO ALVO OU UMA PROMOÇÃO ATIVA É CADASTRADA.
+            ENTRA NO ALVO, UMA PROMOÇÃO ATIVA É CADASTRADA OU UM RASTREIO DE LINK FALHA.
           </div>
         </div>
       ) : (

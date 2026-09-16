@@ -43,11 +43,14 @@ import {
   MapPin,
   Radio,
   Copy,
-  Check
+  Check,
+  Store
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId } from "./lib/url";
 import { LocalTab } from "./components/LocalTab";
+import { MercadoTab } from "./components/MercadoTab";
+import { BackupPanel } from "./components/BackupPanel";
 import { NotificationsTab } from "./components/NotificationsTab";
 import { SocialTab } from "./components/SocialTab";
 import { PriceHistoryTab } from "./components/PriceHistoryTab";
@@ -77,6 +80,8 @@ import {
   Tooltip, 
   ResponsiveContainer 
 } from 'recharts';
+
+const ERROR_TOAST_SECONDS = 45;
 
 // Sound Service
 const playSound = (type: 'click' | 'success' | 'error' | 'scan' | 'notify') => {
@@ -159,7 +164,7 @@ export default function App() {
   }, [activeProfileId]);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "settings" | "local" | "alerts" | "social" | "history">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "mercado" | "settings" | "local" | "alerts" | "social" | "history">("dashboard");
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [isAddingList, setIsAddingList] = useState(false);
@@ -302,7 +307,7 @@ export default function App() {
 		const id = Math.random().toString(36).substr(2, 9);
 		setToasts(prev => [...prev, { id, message, type, details }]);
 		playSound(type === 'success' ? 'success' : type === 'error' ? 'error' : 'notify');
-		const autoRemove = type === 'error' ? 15000 : type === 'success' ? 5000 : 8000;
+		const autoRemove = type === 'error' ? ERROR_TOAST_SECONDS * 1000 : type === 'success' ? 5000 : 8000;
 		setTimeout(() => {
 			setToasts(prev => prev.filter(t => t.id !== id));
 		}, autoRemove);
@@ -957,6 +962,7 @@ const queued = await response.json();
         setSystemMessage(`SEQUENCE COMPLETE: ${successCount} ACQUIRED, ${failCount} FAILED`);
         if (successCount > 0) addToast(`${successCount} TARGETS LOGGED TO ARCHIVE`, "success");
         if (failCount > 0) addToast(`${failCount} TARGETS FAILED TO RESOLVE`, "error");
+        loadNotificationsCount();
       }
     } catch (error) {
       setSystemMessage("ERROR: CORE SEQUENCE FAILURE");
@@ -1495,16 +1501,22 @@ const queued = await response.json();
             label="LISTS"
           />
           <NavButton 
-            active={activeTab === "settings"} 
-            onClick={() => { playSound('click'); setActiveTab("settings"); }}
-            icon={<Settings size={24} />}
-            label="CONFIG"
+            active={activeTab === "mercado"} 
+            onClick={() => { playSound('click'); setActiveTab("mercado"); }}
+            icon={<Store size={24} />}
+            label="MERCADO"
           />
           <NavButton 
             active={activeTab === "local"} 
             onClick={() => { playSound('click'); setActiveTab("local"); }}
             icon={<MapPin size={24} />}
             label="LOCAL"
+          />
+          <NavButton 
+            active={activeTab === "social"} 
+            onClick={() => { playSound('click'); setActiveTab("social"); }}
+            icon={<Radio size={24} />}
+            label="SOCIAL"
           />
           <NavButton 
             active={activeTab === "alerts"} 
@@ -1514,16 +1526,16 @@ const queued = await response.json();
             badge={notificationsCount}
           />
           <NavButton 
-            active={activeTab === "social"} 
-            onClick={() => { playSound('click'); setActiveTab("social"); }}
-            icon={<Radio size={24} />}
-            label="SOCIAL"
-          />
-          <NavButton 
             active={activeTab === "history"} 
             onClick={() => { playSound('click'); setActiveTab("history"); }}
             icon={<Activity size={24} />}
             label="HISTÓRICO"
+          />
+          <NavButton 
+            active={activeTab === "settings"} 
+            onClick={() => { playSound('click'); setActiveTab("settings"); }}
+            icon={<Settings size={24} />}
+            label="CONFIG"
           />
           <div className="mt-auto flex flex-col gap-4">
             <NavButton 
@@ -1778,6 +1790,23 @@ const queued = await response.json();
               </motion.div>
             )}
 
+            {activeTab === "mercado" && (
+              <motion.div
+                key="mercado"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+              >
+                <ErrorBoundary fallbackLabel="ERRO NA ABA MERCADO">
+                  <MercadoTab
+                    addToast={addToast}
+                    playSound={playSound}
+                    pollJob={pollJob}
+                  />
+                </ErrorBoundary>
+              </motion.div>
+            )}
+
             {activeTab === "settings" && (
               <motion.div 
                 key="settings"
@@ -1975,6 +2004,13 @@ const queued = await response.json();
                   </div>
                 </div>
               )}
+            </ConfigSection>
+
+            <ConfigSection title="BACKUP E RESTAURAÇÃO">
+              <BackupPanel
+                addToast={addToast}
+                playSound={playSound}
+              />
             </ConfigSection>
 
 <button onClick={() => { saveData(data); addToast("CONFIGURATION SAVED", "success"); }} className="hud-button w-full py-4 text-sm">SAVE CONFIGURATION</button>
@@ -3049,7 +3085,7 @@ function InputGroup({ label, placeholder, value, onChange, type = "text", onTest
 }
 
 function ToastWithTimer({ toast, onClose, onCopy }: { toast: { id: string, message: string, type: 'success' | 'error' | 'info', details?: string }, onClose: () => void, onCopy: () => void }) {
-  const duration = toast.type === 'error' ? 15 : toast.type === 'success' ? 5 : 8;
+  const duration = toast.type === 'error' ? ERROR_TOAST_SECONDS : toast.type === 'success' ? 5 : 8;
   const [timeLeft, setTimeLeft] = useState(duration);
   const [isExpanded, setIsExpanded] = useState(false);
   const [isPaused, setIsPaused] = useState(false);

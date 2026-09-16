@@ -8,7 +8,7 @@ export const AI_MODELS = {
   // Extração de produto via URL context (gemini.ts)
   URL_CONTEXT: "gemini-3.6-flash",
   // Visão (Instagram Stories / imagens)
-  VISION: "gemini-2.0-flash",
+  VISION: "gemini-3.6-flash",
   // LM Studio local fallback
   LOCAL_LLM: "qwen",
 } as const;
