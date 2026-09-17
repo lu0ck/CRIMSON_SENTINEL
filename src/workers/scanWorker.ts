@@ -243,6 +243,8 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       const results = await filterAndDedupe(rawResults, productName);
       if (results.length > 0) {
         safeLog(`[scan-worker] compare via Gemini: ${results.length} resultados para "${productName}"`);
+        const best = results.reduce((a, b) => a.price < b.price ? a : b);
+        recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Gemini)", `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
         return { jobKey, results };
       }
       safeLog(`[scan-worker] compare Gemini: ${rawResults.length}/${Array.isArray(parsed) ? parsed.length : 0} válidos — baixando para busca+scrape`);
@@ -362,7 +364,11 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       if (s.status === "fulfilled" && s.value) scraped.push(s.value);
     }
     safeLog(`[scan-worker] compare scrape: ${scraped.length}/${urls.length} URLs com preço do MESMO produto`);
-    if (scraped.length > 0) return { jobKey, results: scraped };
+    if (scraped.length > 0) {
+      const best = scraped.reduce((a, b) => a.price < b.price ? a : b);
+      recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Scrape)", `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
+      return { jobKey, results: scraped };
+    }
   }
 
   // 4) NVIDIA — último recurso: extrai preços dos snippets (sem abrir páginas).
@@ -411,6 +417,8 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
             const results = await filterAndDedupe(rawResults, productName);
             if (results.length > 0) {
               safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados após filtro`);
+              const best = results.reduce((a, b) => a.price < b.price ? a : b);
+              recordInAppAlert("compare", productName, `MERCADO ENCONTRADO (NVIDIA/${model})`, `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
               return { jobKey, results };
             }
           }
@@ -426,6 +434,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     }
   }
 
+  recordInAppAlert("compare", productName, "MERCADO SEM RESULTADOS", `Nenhum preço encontrado para "${productName}" nas lojas pesquisadas.`, 6);
   return { jobKey, results: [] };
 }
 

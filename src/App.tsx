@@ -1089,7 +1089,11 @@ const queued = await response.json();
         if (currentId === product.id) {
           setComparisonResults(results);
           setSystemMessage("COMPARISON DATA RETRIEVED");
-          addToast("MARKET TELEMETRY ACQUIRED", "success");
+          if (results.length > 0) {
+            addToast("MARKET TELEMETRY ACQUIRED", "success");
+          } else {
+            addToast("NENHUM DADO DE MERCADO ENCONTRADO", "info");
+          }
         }
         return currentId;
       });
