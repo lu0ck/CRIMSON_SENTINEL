@@ -108,13 +108,15 @@ export async function alertProductTargetReached(
   productName: string,
   productId: string,
   currentPrice: number,
-  targetPrice: number
+  targetPrice: number,
+  productUrl?: string
 ): Promise<boolean> {
+  const link = productUrl ? `\n\n🔗 Comprar agora: ${productUrl}` : "";
   return sendAlertWithDedup(profile, {
     entityType: "product",
     entityId: productId,
     subject: `🎯 ALVO ATINGIDO: ${productName}`,
-    message: `🛡️ [SENTINEL] O produto *${productName}* atingiu o preço-alvo!\n\n💵 Preço atual: R$ ${currentPrice}\n🎯 Alvo: R$ ${targetPrice}\n\nAproveite antes que suba de novo.`,
+    message: `🛡️ [SENTINEL] O produto *${productName}* atingiu o preço-alvo!\n\n💵 Preço atual: R$ ${currentPrice}\n🎯 Alvo: R$ ${targetPrice}${link}`,
   });
 }
 
@@ -167,16 +169,18 @@ export async function alertActivePromotion(
   productName: string,
   establishmentName: string,
   promoPrice: number,
-  regularPrice?: number
+  regularPrice?: number,
+  productUrl?: string
 ): Promise<number> {
   const discount = regularPrice && regularPrice > 0 && promoPrice < regularPrice
     ? ` (${Math.round(((regularPrice - promoPrice) / regularPrice) * 100)}% OFF)`
     : "";
+  const link = productUrl ? `\n\n🔗 Ver oferta: ${productUrl}` : "";
   return notifyAllConfiguredProfilesWithDedup({
     entityType: "promotion",
     entityId: promotionId,
     subject: `🔥 PROMOÇÃO: ${productName}`,
-    message: `🏷️ [SENTINEL] Nova promoção em ${establishmentName}:\n\n📦 *${productName}*\n🔥 De R$ ${regularPrice ?? "—"} por R$ ${promoPrice}${discount}\n\nConfira na aba LOCAL.`,
+    message: `🏷️ [SENTINEL] Nova promoção em ${establishmentName}:\n\n📦 *${productName}*\n🔥 De R$ ${regularPrice ?? "—"} por R$ ${promoPrice}${discount}${link}`,
   });
 }
 
@@ -191,7 +195,8 @@ export async function alertFlashPromotion(
     regularPrice?: number;
   },
   establishmentName: string,
-  reason?: string
+  reason?: string,
+  productUrl?: string
 ): Promise<number> {
   if (!alertsEnabled()) return 0;
   // Dedup curto: 1h
@@ -207,7 +212,8 @@ export async function alertFlashPromotion(
     : profiles;
   if (targetProfiles.length === 0 && telegramOnly) return 0;
 
-  const msg = `⚡ [SENTINEL] PROMOÇÃO RELÂMPAGO!\n\n📦 *${promotion.productName}*\n🔥 R$ ${promotion.promoPrice}${promotion.regularPrice ? ` (era R$ ${promotion.regularPrice})` : ""}\n📍 ${establishmentName}${reason ? `\n📉 Motivo: ${reason}` : ""}\n\n⚠️ Válido por ~24h ou até o fim do estoque.`;
+  const link = productUrl ? `\n\n🔗 Comprar agora: ${productUrl}` : "";
+  const msg = `⚡ [SENTINEL] PROMOÇÃO RELÂMPAGO!\n\n📦 *${promotion.productName}*\n🔥 R$ ${promotion.promoPrice}${promotion.regularPrice ? ` (era R$ ${promotion.regularPrice})` : ""}\n📍 ${establishmentName}${reason ? `\n📉 Motivo: ${reason}` : ""}${link}\n\n⚠️ Válido por ~24h ou até o fim do estoque.`;
 
   await Promise.allSettled(
     targetProfiles.map((p) =>

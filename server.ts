@@ -953,7 +953,8 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
           promo.productName,
           est?.name ?? "estabelecimento",
           promo.promoPrice,
-          promo.regularPrice
+          promo.regularPrice,
+          promo.sourceUrl
         ).catch((e) => safeLog(`[alerts] erro promoção: ${e}`));
       }
     } catch (error: any) {

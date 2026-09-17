@@ -88,7 +88,8 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
             product.name || product.url,
             product.id,
             product.currentPrice,
-            product.targetPrice
+            product.targetPrice,
+            product.url
           );
           if (alerted) safeLog(`[scan-worker] ALERTA enviado: ${product.name} atingiu alvo`);
         } catch (err) {
@@ -109,7 +110,7 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
             detectedAt: now,
           });
           if (promo) {
-            await alertFlashPromotion(promo, "E-commerce", flash.reason);
+            await alertFlashPromotion(promo, "E-commerce", flash.reason, product.url);
             safeLog(`[scan-worker] FLASH detectado em ${product.name}: ${flash.reason}`);
           }
         }
@@ -155,7 +156,8 @@ async function handleScanAll() {
               product.name || product.url,
               product.id,
               product.currentPrice,
-              product.targetPrice
+              product.targetPrice,
+              product.url
             );
             if (alerted) safeLog(`[scan-worker] ALERTA enviado: ${product.name} atingiu alvo`);
           } catch (err) {
@@ -657,7 +659,7 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
             detectedAt: new Date().toISOString(),
           });
           if (promo) {
-            await alertFlashPromotion(promo, est.name, flash.reason);
+            await alertFlashPromotion(promo, est.name, flash.reason, est.priceUrl);
             safeLog(`[scan-worker] FLASH detectado em ${item.name} @ ${est.name}: ${flash.reason}`);
           }
         }

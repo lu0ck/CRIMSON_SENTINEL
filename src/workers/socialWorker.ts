@@ -86,7 +86,7 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
     saved.push({ id, productName: promo.productName, promoPrice: promo.promoPrice });
 
     const est = promo.establishmentName ?? "estabelecimento";
-    alertActivePromotion(id, promo.productName, est, promo.promoPrice, promo.regularPrice)
+    alertActivePromotion(id, promo.productName, est, promo.promoPrice, promo.regularPrice, url)
       .catch((e: any) => safeLog(`[social-worker] erro alerta promo: ${e}`));
   }
 
@@ -264,7 +264,7 @@ async function handleWhatsappStatusScan(job: Job<SocialMonitorJobPayload & { typ
             expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           });
           saved++;
-          alertActivePromotion(id, p.productName, est.name, p.promoPrice, p.regularPrice)
+          alertActivePromotion(id, p.productName, est.name, p.promoPrice, p.regularPrice, est.priceUrl)
             .catch((e) => safeLog(`[social-worker] erro alerta whatsapp: ${e}`));
         }
       }
@@ -414,7 +414,7 @@ async function handleInstagramStoriesScan(
             expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
           });
           saved++;
-          alertActivePromotion(id, p.productName, est.name, p.promoPrice, p.regularPrice)
+          alertActivePromotion(id, p.productName, est.name, p.promoPrice, p.regularPrice, est.priceUrl)
             .catch((e) => safeLog(`[social-worker] erro alerta instagram: ${e}`));
         }
       }
