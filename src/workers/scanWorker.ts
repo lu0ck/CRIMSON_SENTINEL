@@ -28,12 +28,15 @@ import { normalizeProductUrl } from "../lib/url";
 import { AI_MODELS } from "../lib/aiModels";
 
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
-const COMPARE_SCRAPE_TIMEOUT_MS = 45_000;
-const COMPARE_NVIDIA_TIMEOUT_MS = 90_000;
-const NVIDIA_MAX_RETRIES = 3;
-const NVIDIA_RETRY_DELAY_MS = 3_000;
+const COMPARE_SCRAPE_TIMEOUT_MS = 30_000;
+const COMPARE_NVIDIA_TIMEOUT_MS = 30_000;
+const NVIDIA_MAX_RETRIES = 2;
+const NVIDIA_RETRY_DELAY_MS = 2_000;
 const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
 const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
+const LM_STUDIO_TIMEOUT_MS = 120_000;
+const LM_STUDIO_DEFAULT_URL = "http://127.0.0.1:44277/v1";
+const LM_STUDIO_API_KEY = process.env.LM_STUDIO_API_KEY || "lm-studio";
 
 // Corrida com timeout: rejeita a promise após `ms` sem travar o worker.
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -244,7 +247,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       if (results.length > 0) {
         safeLog(`[scan-worker] compare via Gemini: ${results.length} resultados para "${productName}"`);
         const best = results.reduce((a, b) => a.price < b.price ? a : b);
-        recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Gemini)", `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
+        recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Gemini)", `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
         return { jobKey, results };
       }
       safeLog(`[scan-worker] compare Gemini: ${rawResults.length}/${Array.isArray(parsed) ? parsed.length : 0} válidos — baixando para busca+scrape`);
@@ -289,7 +292,9 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         try {
           const h = new URL(i.url).hostname;
           if (/^(?!www\.|pt\.)[a-z]{2}\.aliexpress\.com$/.test(h)) return false;
-        } catch {}
+    } catch (e: any) {
+      safeLog(`[scan-worker] compare LM Studio check falhou: ${e?.message || e}`);
+    }
         return true;
       });
       safeLog(`[scan-worker] compare Tavily (site-operator): ${items.length} URLs de produto`);
@@ -414,7 +419,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
             if (results.length > 0) {
               safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados após filtro`);
               const best = results.reduce((a, b) => a.price < b.price ? a : b);
-              recordInAppAlert("compare", productName, `MERCADO ENCONTRADO (NVIDIA/${model})`, `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
+              recordInAppAlert("compare", productName, `MERCADO ENCONTRADO (NVIDIA/${model})`, `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
               return { jobKey, results };
             }
           }
@@ -427,6 +432,103 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           }
         }
       }
+    }
+  }
+
+  // 5) LM STUDIO — fallback local: envia snippets de busca para o LLM local.
+  const lmStudioUrl = profile?.lmStudioUrl || LM_STUDIO_DEFAULT_URL;
+  if (items.length > 0) {
+    let lmStudioAvailable = false;
+    let detectedModel = "local-model";
+    try {
+      const checkResp = await withTimeout(
+        fetch(`${lmStudioUrl}/models`, {
+          method: "GET",
+          headers: { "Content-Type": "application/json", "Authorization": `Bearer ${LM_STUDIO_API_KEY}` },
+        }),
+        3_000
+      );
+      if (checkResp.ok) {
+        const checkData = await checkResp.json();
+        if (checkData.data && checkData.data.length > 0) {
+          detectedModel = checkData.data[0].id;
+          lmStudioAvailable = true;
+        } else if (checkData.models && checkData.models.length > 0) {
+          detectedModel = checkData.models[0].model || checkData.models[0].name || "local-model";
+          lmStudioAvailable = true;
+        }
+      }
+    } catch (e: any) {
+      safeLog(`[scan-worker] compare LM Studio check falhou: ${e?.message || e}`);
+    }
+    if (lmStudioAvailable) {
+      try {
+        const OpenAI = (await import("openai")).default;
+        const client = new OpenAI({ baseURL: lmStudioUrl, apiKey: LM_STUDIO_API_KEY });
+        const snippet = items
+          .slice(0, 5)
+          .map((i) => `${i.url}\n${i.snippet}`)
+          .join("\n---\n")
+          .slice(0, 1500);
+        safeLog(`[scan-worker] compare LM Studio: modelo=${detectedModel}, tentando extrair preços (timeout=${LM_STUDIO_TIMEOUT_MS / 1000}s)`);
+        const lmStart = Date.now();
+        const resp = await withTimeout(
+          client.chat.completions.create({
+            model: detectedModel,
+            messages: [
+              {
+                role: "system",
+                content:
+                  'Retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string"}]. Só inclua o produto pesquisado se for EXATAMENTE o mesmo modelo. Preço à vista BRL. Se nada correspondente, retorne [].',
+              },
+              {
+                role: "user",
+                content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:`,
+              },
+            ],
+            max_tokens: 2048,
+            temperature: 0,
+          }),
+          LM_STUDIO_TIMEOUT_MS
+        );
+        const lmElapsed = ((Date.now() - lmStart) / 1000).toFixed(1);
+        const msg = resp.choices[0]?.message as any;
+        const rawText = (msg?.content || msg?.reasoning_content || "")
+          .replace(/```json\s*/g, "")
+          .replace(/```\s*/g, "")
+          .trim();
+        safeLog(`[scan-worker] compare LM Studio raw (${lmElapsed}s): ${rawText.slice(0, 300)}`);
+        const jm = rawText.match(/\[[\s\S]*\]/);
+        if (jm) {
+          const parsed = JSON.parse(jm[0]);
+          const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
+          const rawResults = (Array.isArray(parsed) ? parsed : [])
+            .map((r: any) => ({
+              ...r,
+              title: r.title || r.site || snippetMap.get(r.url) || productName,
+            }))
+            .filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000);
+          safeLog(`[scan-worker] compare LM Studio: ${rawResults.length} resultados brutos (${lmElapsed}s)`);
+          const results = await filterAndDedupe(rawResults, productName);
+          if (results.length > 0) {
+            safeLog(`[scan-worker] compare LM Studio: ${results.length} resultados após filtro`);
+            const best = results.reduce((a: any, b: any) => (a.price < b.price ? a : b));
+            recordInAppAlert(
+              "compare",
+              productName,
+              `MERCADO ENCONTRADO (LM Studio)`,
+              `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`,
+              1
+            );
+            return { jobKey, results };
+          }
+        }
+        safeLog(`[scan-worker] compare LM Studio: resposta sem resultados válidos (${lmElapsed}s)`);
+      } catch (err: any) {
+        safeLog(`[scan-worker] compare LM Studio falhou: ${err.message || err}`);
+      }
+    } else {
+      safeLog(`[scan-worker] compare LM Studio indisponível, pulando`);
     }
   }
 

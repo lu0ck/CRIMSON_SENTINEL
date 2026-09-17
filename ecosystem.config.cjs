@@ -46,6 +46,7 @@ module.exports = {
       env: {
         NODE_ENV: "development",
         USER_DATA_PATH,
+        LM_STUDIO_API_KEY: "RGroFhc4b2ESmq87Yrf469iOkW-T2DvQW4a1iYvOEIc",
       },
       max_restarts: 10,
       min_uptime: "5s",
