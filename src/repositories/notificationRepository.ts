@@ -7,6 +7,7 @@ export interface NotificationLogEntry {
   channel: string;
   title: string;
   message: string;
+  details?: string | null;
   sentAt: string;
 }
 
@@ -17,6 +18,7 @@ export interface NotificationLogRow {
   channel: string;
   title: string;
   message: string;
+  details: string | null;
   sent_at: string;
 }
 
@@ -28,6 +30,7 @@ function rowToEntry(row: NotificationLogRow): NotificationLogEntry {
     channel: row.channel,
     title: row.title,
     message: row.message,
+    details: row.details ?? null,
     sentAt: row.sent_at,
   };
 }
@@ -50,14 +53,15 @@ export const NotificationRepository = {
   record(entry: Omit<NotificationLogEntry, "id" | "sentAt">): void {
     const db = getDb();
     db.prepare(
-      `INSERT INTO notification_log (entity_type, entity_id, channel, title, message)
-       VALUES (@entity_type, @entity_id, @channel, @title, @message)`
+      `INSERT INTO notification_log (entity_type, entity_id, channel, title, message, details)
+       VALUES (@entity_type, @entity_id, @channel, @title, @message, @details)`
     ).run({
       entity_type: entry.entityType,
       entity_id: entry.entityId,
       channel: entry.channel,
       title: entry.title,
       message: entry.message,
+      details: entry.details ?? null,
     });
   },
 

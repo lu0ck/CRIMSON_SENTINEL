@@ -539,7 +539,23 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
   if (rejectedNoData > 0) parts.push(`${rejectedNoData} falha no scrape`);
   if (rejectedLowPrice > 0) parts.push(`${rejectedLowPrice} preço muito baixo`);
   const detail = parts.length > 0 ? `\n\nDetalhes: ${parts.join(", ")}` : "";
-  recordInAppAlert("compare", productName, "MERCADO SEM RESULTADOS", `Nenhum preço compatível encontrado para "${productName}" nas lojas pesquisadas.${detail}`, 6);
+
+  const detailsPayload = {
+    searchItems: items.slice(0, 10).map((i) => ({ url: i.url, snippet: i.snippet.slice(0, 200) })),
+    scrapedUrls: urls,
+    rejectedSameProduct,
+    rejectedNoData,
+    rejectedLowPrice,
+  };
+
+  recordInAppAlert(
+    "compare",
+    productName,
+    "MERCADO SEM RESULTADOS",
+    `Nenhum preço compatível encontrado para "${productName}" nas lojas pesquisadas.${detail}`,
+    6,
+    JSON.stringify(detailsPayload)
+  );
   return { jobKey, results: [] };
 }
 

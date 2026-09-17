@@ -188,6 +188,7 @@ CREATE TABLE IF NOT EXISTS notification_log (
   channel TEXT NOT NULL,     -- "discord" | "telegram" | "email"
   title TEXT NOT NULL,
   message TEXT NOT NULL,
+  details TEXT,              -- JSON extra (URLs, snippets, etc.)
   sent_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

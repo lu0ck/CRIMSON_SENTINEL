@@ -144,7 +144,8 @@ export function recordInAppAlert(
   entityId: string,
   title: string,
   message: string,
-  cooldownHours = 1
+  cooldownHours = 1,
+  details?: string
 ): boolean {
   if (NotificationRepository.hasSentWithin(entityType, entityId, cooldownHours)) {
     return false;
@@ -155,6 +156,7 @@ export function recordInAppAlert(
     channel: "in-app",
     title,
     message,
+    details: details ?? null,
   });
   return true;
 }
