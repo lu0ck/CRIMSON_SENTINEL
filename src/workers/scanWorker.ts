@@ -332,6 +332,9 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     .slice(0, 5);
   safeLog(`[scan-worker] compare scrape: ${urls.length} URLs para escrapar: ${urls.join(", ")}`);
   const scraped: { site: string; price: number; url: string }[] = [];
+  let rejectedSameProduct = 0;
+  let rejectedNoData = 0;
+  let rejectedLowPrice = 0;
   if (urls.length > 0) {
     const settled = await Promise.allSettled(
       urls.map((url) =>
@@ -345,10 +348,10 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           }),
           COMPARE_SCRAPE_TIMEOUT_MS
         ).then((info: any) => {
-          if (!info || !info.price || !info.name) { safeLog(`[scan-worker] compare scrape skip ${url}: no data (price=${info?.price}, name=${info?.name})`); return null; }
-          if (!sameProduct(productName, info.name)) { safeLog(`[scan-worker] compare scrape skip ${url}: sameProduct=false (name="${info.name}")`); return null; }
+          if (!info || !info.price || !info.name) { rejectedNoData++; safeLog(`[scan-worker] compare scrape skip ${url}: no data (price=${info?.price}, name=${info?.name})`); return null; }
+          if (!sameProduct(productName, info.name)) { rejectedSameProduct++; safeLog(`[scan-worker] compare scrape skip ${url}: sameProduct=false (name="${info.name}")`); return null; }
           // Descartar preços absurdamente baixos (provavelmente erro de scraping)
-          if (info.price < 30) { safeLog(`[scan-worker] compare scrape skip ${url}: price R$ ${info.price} too low`); return null; }
+          if (info.price < 30) { rejectedLowPrice++; safeLog(`[scan-worker] compare scrape skip ${url}: price R$ ${info.price} too low`); return null; }
           return { site: new URL(url).hostname, price: info.price, url };
         })
       )
@@ -427,7 +430,14 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     }
   }
 
-  recordInAppAlert("compare", productName, "MERCADO SEM RESULTADOS", `Nenhum preço encontrado para "${productName}" nas lojas pesquisadas.`, 6);
+  const parts: string[] = [];
+  if (items.length > 0) parts.push(`${items.length} links encontrados`);
+  if (urls.length > 0) parts.push(`${urls.length} URLs escavadas`);
+  if (rejectedSameProduct > 0) parts.push(`${rejectedSameProduct} rejeitadas (produto diferente)`);
+  if (rejectedNoData > 0) parts.push(`${rejectedNoData} falha no scrape`);
+  if (rejectedLowPrice > 0) parts.push(`${rejectedLowPrice} preço muito baixo`);
+  const detail = parts.length > 0 ? `\n\nDetalhes: ${parts.join(", ")}` : "";
+  recordInAppAlert("compare", productName, "MERCADO SEM RESULTADOS", `Nenhum preço compatível encontrado para "${productName}" nas lojas pesquisadas.${detail}`, 6);
   return { jobKey, results: [] };
 }
 
