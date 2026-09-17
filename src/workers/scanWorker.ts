@@ -30,7 +30,7 @@ import { AI_MODELS } from "../lib/aiModels";
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
 const COMPARE_SCRAPE_TIMEOUT_MS = 45_000;
 const COMPARE_NVIDIA_TIMEOUT_MS = 60_000;
-const NVIDIA_EXTRACT_MODEL = "mistralai/mistral-nemotron";
+const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
 
 // Corrida com timeout: rejeita a promise após `ms` sem travar o worker.
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {

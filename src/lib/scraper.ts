@@ -40,7 +40,7 @@ const USER_AGENTS = [
 const MAX_PRICE = 10_000_000;
 
 // Modelo de extração NVIDIA NIM (o antigo meta/llama-3.1-8b-instruct foi retirado da lista)
-const NVIDIA_EXTRACT_MODEL = "mistralai/mistral-nemotron";
+const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
 
 function simpleHash(str: string): string {
   let hash = 0;
