@@ -375,9 +375,10 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       apiKey: profile.nvidiaApiKey,
     });
     const snippet = items
+      .slice(0, 5)
       .map((i) => `${i.url}\n${i.snippet}`)
       .join("\n---\n")
-      .slice(0, 4000);
+      .slice(0, 1500);
     const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
     for (const model of models) {
       for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
