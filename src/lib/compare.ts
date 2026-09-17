@@ -103,6 +103,60 @@ function getCategoryKeywords(productName: string): string[] {
   return [];
 }
 
+function extractSpecs(productName: string): Record<string, string> {
+  const specs: Record<string, string> = {};
+  const norm = productName.toLowerCase();
+
+  // Fontes: wattage, certificação, modularidade
+  const wattMatch = norm.match(/(\d{3,4})\s*w/i);
+  if (wattMatch) specs.wattage = wattMatch[1] + "w";
+
+  if (norm.includes("80 plus gold") || norm.includes("80 gold")) specs.certification = "80 plus gold";
+  else if (norm.includes("80 plus bronze") || norm.includes("80 bronze")) specs.certification = "80 plus bronze";
+  else if (norm.includes("80 plus platinum") || norm.includes("80 platinum")) specs.certification = "80 plus platinum";
+  else if (norm.includes("80 plus") || norm.includes("80plus")) specs.certification = "80 plus";
+
+  if (norm.includes("modular")) specs.modular = "modular";
+  else if (norm.includes("semi-modular") || norm.includes("semi modular")) specs.modular = "semi-modular";
+  else if (norm.includes("não modular") || norm.includes("nao modular") || norm.includes("fixed")) specs.modular = "fixed";
+
+  // Gabinetes: formato
+  if (norm.includes("e-atx") || norm.includes("eatx")) specs.formFactor = "e-atx";
+  else if (norm.includes("atx")) specs.formFactor = "atx";
+  else if (norm.includes("matx") || norm.includes("micro-atx") || norm.includes("micro atx")) specs.formFactor = "matx";
+  else if (norm.includes("itx") || norm.includes("mini-itx") || norm.includes("mini itx")) specs.formFactor = "itx";
+
+  // Processadores: socket, geração
+  const socketMatch = norm.match(/(am[45]|lga\s*\d{4}|socket\s*\d+)/i);
+  if (socketMatch) specs.socket = socketMatch[1].toLowerCase().replace(/\s/g, "");
+
+  // Placas de vídeo: modelo GPU, VRAM
+  const gpuMatch = norm.match(/(rtx|gtx|radeon|rx)\s*(\d{4}\s*(?:ti|super)?)\s*(\d+)\s*gb/i);
+  if (gpuMatch) {
+    specs.gpu = gpuMatch[1].toLowerCase() + " " + gpuMatch[2].toLowerCase();
+    specs.vram = gpuMatch[3] + "gb";
+  }
+
+  return specs;
+}
+
+function specsMatch(specsA: Record<string, string>, specsB: Record<string, string>): boolean {
+  const keys = ["wattage", "certification", "formFactor", "socket", "gpu"];
+  let matchCount = 0;
+  let totalCompare = 0;
+
+  for (const key of keys) {
+    if (specsA[key] && specsB[key]) {
+      totalCompare++;
+      if (specsA[key] === specsB[key]) matchCount++;
+    }
+  }
+
+  // Se temos specs comparáveis e pelo menos 1 match principal, é o mesmo produto
+  if (totalCompare >= 1 && matchCount >= 1) return true;
+  return false;
+}
+
 export function sameProduct(productName: string, pageTitle: string): boolean {
   if (!pageTitle) return false;
   const skus = extractModelTokens(productName);
@@ -118,6 +172,20 @@ export function sameProduct(productName: string, pageTitle: string): boolean {
     }
 
     return true;
+  }
+
+  // Fallback: match por specs (mesma categoria, mesmas especificações)
+  const specsA = extractSpecs(productName);
+  const specsB = extractSpecs(pageTitle);
+  const categoryA = getCategoryKeywords(productName);
+  const categoryB = getCategoryKeywords(pageTitle);
+
+  // Se ambos têm a mesma categoria e specs compatíveis, aceitar
+  if (categoryA.length > 0 && categoryB.length > 0) {
+    const sameCategory = categoryA.some(c => categoryB.includes(c));
+    if (sameCategory && specsMatch(specsA, specsB)) {
+      return true;
+    }
   }
 
   const tokens = normalize(productName)

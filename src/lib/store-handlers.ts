@@ -1596,6 +1596,116 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
     console.log("[Handler] WebMotors extracted: name=\"" + namePreview + "\", price=" + data.price);
     return data;
   },
+
+  "shopee.com.br": async (page: Page) => {
+    console.log("[Handler] Using Shopee handler");
+
+    await page.waitForTimeout(5000);
+
+    const selectors = [
+      '[class*="product-briefing"]',
+      '[class*="pqTVkA"]',
+      '[data-sqe="name"]',
+      "h1",
+      ".product-title",
+    ];
+
+    for (const selector of selectors) {
+      try {
+        await page.waitForSelector(selector, { timeout: 5000 });
+        console.log("[Shopee] Found selector: " + selector);
+        break;
+      } catch (e) {}
+    }
+
+    await page.evaluate(`window.scrollTo(0, 300)`);
+    await page.waitForTimeout(2000);
+
+    const data = await page.evaluate(`
+    (function() {
+      var body = document.body.innerText;
+
+      function parseBrazilianPrice(text) {
+        if (!text) return 0;
+        var clean = text.replace(/R\\$\\s?/gi, '').trim();
+        if (/[eE][+-]?\\d+/i.test(clean)) return 0;
+        clean = clean.replace(/\\.(?=\\d{3})/g, '').replace(',', '.');
+        var price = parseFloat(clean);
+        return isNaN(price) ? 0 : price;
+      }
+
+      function isValidPrice(p) {
+        return p > 10 && p < 100000 && Number.isFinite(p);
+      }
+
+      var price = 0;
+
+      // Seletores de preço Shopee
+      var priceSelectors = [
+        '[class*="product-price"]',
+        '[class*="pqTVkA"]',
+        '[data-sqe="price"]',
+        '[class*="price"]',
+        '.pqTVkA',
+      ];
+
+      for (var i = 0; i < priceSelectors.length; i++) {
+        var el = document.querySelector(priceSelectors[i]);
+        if (el) {
+          var text = el.textContent || "";
+          console.log("[Shopee] Trying selector " + priceSelectors[i] + ": " + text.substring(0, 50));
+          var parsed = parseBrazilianPrice(text);
+          if (isValidPrice(parsed)) {
+            price = parsed;
+            console.log("[Shopee] Valid price from selector: " + price);
+            break;
+          }
+        }
+      }
+
+      // Fallback: regex no body
+      if (!isValidPrice(price)) {
+        console.log("[Shopee] No valid price from selectors, searching in body...");
+        var priceMatches = body.match(/R\\$\\s*[\\d.,]+/g) || [];
+        var prices = [];
+        for (var i = 0; i < priceMatches.length; i++) {
+          var parsed = parseBrazilianPrice(priceMatches[i]);
+          if (isValidPrice(parsed)) {
+            prices.push(parsed);
+          }
+        }
+        if (prices.length > 0) {
+          prices.sort(function(a, b) { return a - b; });
+          price = prices[0];
+        }
+      }
+
+      price = Math.round(price * 100) / 100;
+      console.log("[Shopee] Final price: " + price);
+
+      var nameEl = document.querySelector('[class*="product-briefing"] h1') ||
+                   document.querySelector('[data-sqe="name"]') ||
+                   document.querySelector("h1");
+      var imageEl = document.querySelector('meta[property="og:image"]');
+      var bodyLower = body.toLowerCase();
+      var available = bodyLower.indexOf("esgotado") === -1 &&
+                     bodyLower.indexOf("indisponível") === -1 &&
+                     bodyLower.indexOf("sold out") === -1;
+
+      return {
+        name: nameEl && nameEl.textContent && nameEl.textContent.trim() || "",
+        price: price,
+        currency: "BRL",
+        available: available,
+        imageUrl: imageEl && imageEl.getAttribute("content") || undefined,
+      };
+    })()
+    `) as ScrapeResult;
+
+    const namePreview = data.name && data.name.length > 50 ? data.name.substring(0, 50) : (data.name || "");
+    console.log("[Handler] Shopee extracted: name=\"" + namePreview + "\", price=" + data.price);
+    return data;
+  },
 };
 
 export function getStoreHandler(url: string): ((page: Page) => Promise<Partial<ScrapeResult>>) | null {
@@ -1616,6 +1726,7 @@ export function getStoreHandler(url: string): ((page: Page) => Promise<Partial<S
       'pt.aliexpress.com': 'aliexpress.com',
       'olx.com.br': 'olx.com.br',
       'webmotors.com.br': 'webmotors.com.br',
+      'shopee.com.br': 'shopee.com.br',
     };
 
     var normalizedDomain = domainAliases[hostname] || hostname;

@@ -591,7 +591,7 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
   if (!circuitOpen) {
     // 1. Playwright stealth (handler + genérico)
-    strategies.push({ name: "PLAYWRIGHT_STEALTH", fn: () => scrapeWithPlaywrightStealth(url, options) });
+    strategies.push({ name: "PLAYWRIGHT_STEALTH", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightStealth(url, options, signal) });
 
     // 2. LM Studio (se configurado) - Vision e Text (LOCAL = RÁPIDO)
     if (options.lmStudioUrl) {
@@ -613,32 +613,32 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
       if (lmStudioAvailable) {
         strategies.push(
-          { name: "PLAYWRIGHT_LM_STUDIO_VISION", fn: () => scrapeWithPlaywrightLLMLocal(url, options, true) },
-          { name: "PLAYWRIGHT_LM_STUDIO_TEXT", fn: () => scrapeWithPlaywrightLLMLocal(url, options, false) }
+          { name: "PLAYWRIGHT_LM_STUDIO_VISION", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightLLMLocal(url, options, true, signal) },
+          { name: "PLAYWRIGHT_LM_STUDIO_TEXT", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightLLMLocal(url, options, false, signal) }
         );
       }
     }
 
     // 3a. Fallback Playwright (sem IA)
     strategies.push(
-      { name: "PLAYWRIGHT_BASIC", fn: () => scrapeWithPlaywrightBasic(url, options) }
+      { name: "PLAYWRIGHT_BASIC", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightBasic(url, options, signal) }
     );
 
     // 3b. NVIDIA NIM (extração LLM sobre o corpo da página)
     if (options.nvidiaApiKey) {
-      strategies.push({ name: "NVIDIA_NIM", fn: () => scrapeWithNvidiaNim(url, options.nvidiaApiKey!) });
+      strategies.push({ name: "NVIDIA_NIM", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithNvidiaNim(url, options.nvidiaApiKey!, signal) });
     }
 
     // 3c. GEMINI_VISION: screenshot + visão (quando o HTML é ilegível)
     if (options.geminiApiKey) {
-      strategies.push({ name: "GEMINI_VISION", fn: () => scrapeWithGeminiVision(url, options.geminiApiKey!) });
+      strategies.push({ name: "GEMINI_VISION", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithGeminiVision(url, options.geminiApiKey!, signal) });
     }
 
     // 4. SEARCH_VERIFY: snippet de busca (Serper/Tavily) + NVIDIA/Gemini
     if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey)) {
       strategies.push({
         name: "SEARCH_VERIFY",
-        fn: () => scrapeWithSearchVerify(url, (mergeResults(partials)?.name || ""), options),
+        fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithSearchVerify(url, (mergeResults(partials)?.name || ""), options, signal),
       });
     }
 
@@ -660,22 +660,31 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
   for (const strategy of strategies) {
     let strategyBrowser: any = null;
+    const abortController = new AbortController();
+    const timeoutMs = 90000;
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+
     try {
       console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
 
       const strategyPromise = (async () => {
-        const res = await strategy.fn();
+        const res = await strategy.fn({ signal: abortController.signal });
         return res;
       })();
 
       const timeoutPromise = new Promise<null>((_, reject) => {
-        setTimeout(() => reject(new Error('Strategy timeout (90s)')), 90000);
+        timeoutId = setTimeout(() => {
+          abortController.abort();
+          reject(new Error(`Strategy timeout (${timeoutMs / 1000}s)`));
+        }, timeoutMs);
       });
 
       const result = await Promise.race([
         strategyPromise,
         timeoutPromise
       ]) as ScrapeResult | null;
+
+      if (timeoutId) clearTimeout(timeoutId);
 
       if (result && isValidPrice(result.price)) {
         result.price = sanitizePrice(result.price);
@@ -708,6 +717,9 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
     } catch (error: any) {
       console.error(`[Scraper] ✗ Strategy ${strategy.name} failed:`, error.message || error);
       console.error(`[Scraper] Error stack:`, error.stack?.split("\n").slice(0, 3).join("\n"));
+    } finally {
+      if (timeoutId) clearTimeout(timeoutId);
+      abortController.abort();
     }
   }
 
@@ -869,7 +881,8 @@ if (isValidPrice(result.price)) {
 async function scrapeWithPlaywrightLLMLocal(
   url: string,
   options: any,
-  requestVision: boolean
+  requestVision: boolean,
+  signal?: AbortSignal
 ): Promise<ScrapeResult | null> {
   if (!options.lmStudioUrl) {
     console.log("[Playwright + LLM Local] No lmStudioUrl configured, skipping");
@@ -893,8 +906,9 @@ async function scrapeWithPlaywrightLLMLocal(
   const userAgent = getRandomUserAgent();
   const cookieFile = path.join(COOKIE_DIR, `${domain.replace(/\./g, "_")}.json`);
 
-  let browser;
+  let browser: any = null;
   try {
+    if (signal?.aborted) return null;
     console.log("[Playwright + LM Studio] Launching browser...");
     browser = await chromium.launch({
       headless: true,
@@ -991,12 +1005,15 @@ const storeHandler = getStoreHandler(url);
 	return null;
 	} catch (error) {
 		console.error(`[Playwright + LM Studio] Error:`, error);
-		if (browser) await browser.close().catch(function() {});
 		return null;
+	} finally {
+		if (browser) {
+			try { await browser.close(); } catch (e) {}
+		}
 	}
 }
 
-async function scrapeWithPlaywrightStealth(url: string, options: any): Promise<ScrapeResult | null> {
+async function scrapeWithPlaywrightStealth(url: string, options: any, signal?: AbortSignal): Promise<ScrapeResult | null> {
   const domain = getDomain(url);
   const cookieDomain = domain.includes("aliexpress") ? "aliexpress.com" : domain;
   const userAgent = getRandomUserAgent();
@@ -1005,8 +1022,9 @@ async function scrapeWithPlaywrightStealth(url: string, options: any): Promise<S
   console.log(`[Playwright] UA: ${userAgent.substring(0, 50)}...`);
   console.log(`[Playwright] Domain: ${domain}`);
 
-  let browser;
+  let browser: any = null;
   try {
+    if (signal?.aborted) return null;
     browser = await chromium.launch({
       headless: true,
       args: [
@@ -1164,12 +1182,11 @@ await page.waitForTimeout(2000);
     return result as ScrapeResult;
   } catch (error) {
     console.error("[Playwright] Error:", error);
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (e) {}
-    }
     return null;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
   }
 }
 
@@ -1417,11 +1434,12 @@ async function genericPageExtraction(page: any): Promise<Partial<ScrapeResult>> 
   console.log(`[Generic] Extracted: name="${namePreview}" (${data.nameSource || "?"}), price=${data.price}${data.priceConfirmed ? " (confirmed)" : ""}, img=${data.imageUrl ? "yes" : "no"}`);
   return data;
 }
-async function scrapeWithPlaywrightBasic(url: string, options: any): Promise<ScrapeResult | null> {
+async function scrapeWithPlaywrightBasic(url: string, options: any, signal?: AbortSignal): Promise<ScrapeResult | null> {
   const userAgent = getRandomUserAgent();
-  let browser;
+  let browser: any = null;
 
   try {
+    if (signal?.aborted) return null;
     browser = await chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox"],
@@ -1436,12 +1454,13 @@ async function scrapeWithPlaywrightBasic(url: string, options: any): Promise<Scr
     await page.waitForTimeout(3000);
 
     const result = await genericPageExtraction(page);
-    await browser.close();
-
     return result as ScrapeResult;
   } catch (error) {
-    if (browser) await browser.close().catch(function() {});
     return null;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
   }
 }
 
@@ -1510,12 +1529,13 @@ async function scrapeWithFetch(url: string): Promise<ScrapeResult | null> {
   }
 }
 
-async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeResult | null> {
+async function scrapeWithNvidiaNim(url: string, apiKey: string, signal?: AbortSignal): Promise<ScrapeResult | null> {
   console.log("[NVIDIA NIM] Starting scrape...");
   console.log("[NVIDIA NIM] URL:", url);
   
-  let browser;
+  let browser: any = null;
   try {
+    if (signal?.aborted) return null;
     console.log("[NVIDIA NIM] Launching browser...");
     browser = await chromium.launch({
       headless: true,
@@ -1613,12 +1633,11 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeR
   } catch (error: any) {
     console.error("[NVIDIA NIM] Error:", error.message);
     console.error("[NVIDIA NIM] Stack:", error.stack?.split("\n").slice(0, 3).join("\n"));
-    if (browser) {
-      try {
-        await browser.close();
-      } catch (e) {}
-    }
     return null;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
   }
 }
 
@@ -1705,13 +1724,14 @@ Return ONLY valid JSON, no explanation.`
 
 // FASE 14 — GEMINI_VISION: screenshot via Playwright + modelo de visão,
 // usado quando o HTML é ilegível (paywall/JS pesado/bot).
-async function scrapeWithGeminiVision(url: string, apiKey: string): Promise<ScrapeResult | null> {
+async function scrapeWithGeminiVision(url: string, apiKey: string, signal?: AbortSignal): Promise<ScrapeResult | null> {
   if (!apiKey) return null;
   console.log("[GEMINI_VISION] Starting vision extraction...");
 
   const ai = new GoogleGenAI({ apiKey });
   let browser: any = null;
   try {
+    if (signal?.aborted) return null;
     browser = await chromium.launch({
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
@@ -1780,10 +1800,11 @@ async function scrapeWithGeminiVision(url: string, apiKey: string): Promise<Scra
     return result as ScrapeResult;
   } catch (error: any) {
     console.error("[GEMINI_VISION] Error:", error.message || error);
+    return null;
+  } finally {
     if (browser) {
       try { await browser.close(); } catch (e) {}
     }
-    return null;
   }
 }
 
@@ -1792,7 +1813,8 @@ async function scrapeWithGeminiVision(url: string, apiKey: string): Promise<Scra
 async function scrapeWithSearchVerify(
   url: string,
   nameHint: string,
-  options: ScrapeOptions
+  options: ScrapeOptions,
+  signal?: AbortSignal
 ): Promise<ScrapeResult | null> {
   if (nameHint.length < 5) {
     // sem nome confiável — grounding via Gemini urlContext é a melhor aposta
