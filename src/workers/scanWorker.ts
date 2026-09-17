@@ -233,7 +233,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       );
       const parsed = JSON.parse(response.text || "[]");
       const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
-        if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
+        if (!r || !r.url || !r.price || r.price < 30 || r.price > 5000000) return false;
         try {
           return isTrustedHost(new URL(r.url).hostname);
         } catch {
@@ -347,6 +347,8 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         ).then((info: any) => {
           if (!info || !info.price || !info.name) { safeLog(`[scan-worker] compare scrape skip ${url}: no data (price=${info?.price}, name=${info?.name})`); return null; }
           if (!sameProduct(productName, info.name)) { safeLog(`[scan-worker] compare scrape skip ${url}: sameProduct=false (name="${info.name}")`); return null; }
+          // Descartar preços absurdamente baixos (provavelmente erro de scraping)
+          if (info.price < 30) { safeLog(`[scan-worker] compare scrape skip ${url}: price R$ ${info.price} too low`); return null; }
           return { site: new URL(url).hostname, price: info.price, url };
         })
       )
@@ -402,7 +404,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
               ...r,
               title: r.title || r.site || snippetMap.get(r.url) || productName,
             })).filter(
-              (r: any) => r && r.url && r.price > 0 && r.price <= 5000000
+              (r: any) => r && r.url && r.price >= 30 && r.price <= 5000000
             );
             safeLog(`[scan-worker] compare NVIDIA: ${rawResults.length} resultados brutos (modelo=${model})`);
             const results = await filterAndDedupe(rawResults, productName);

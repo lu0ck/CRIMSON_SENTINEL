@@ -179,6 +179,18 @@ function isPriceRealistic(price: number, productName?: string): boolean {
       return price >= 50 && price <= 10000;
     }
 
+    // Fontes (PSU) devem ter preço mínimo razoável
+    if (nameLower.includes('fonte') || nameLower.includes('power supply') ||
+        nameLower.includes('psu') || nameLower.includes('atx') ||
+        nameLower.includes('modular')) {
+      return price >= 100 && price <= 10000;
+    }
+
+    // Gabinetes devem ter preço mínimo razoável
+    if (nameLower.includes('gabinete') || nameLower.includes('case')) {
+      return price >= 80 && price <= 5000;
+    }
+
     // Monitores e TVs devem ter preço mínimo
     if (nameLower.includes('monitor') || nameLower.includes('tv ') ||
         nameLower.includes('televisão')) {

@@ -433,7 +433,34 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         return p > 10 && p < 100000 && Number.isFinite(p);
       }
 
-      // Tentar múltiplos seletores de preço
+      // Função para verificar se elemento está riscado (preço antigo)
+      function isStrikethrough(el) {
+        if (!el) return false;
+        if (el.closest && (el.closest("s") || el.closest("del") || el.closest("strike"))) return true;
+        var style = window.getComputedStyle(el);
+        if (style.textDecorationLine === "line-through" || style.textDecoration === "line-through") return true;
+        return false;
+      }
+
+      // Função para extrair preço de um elemento, ignorando preços riscados
+      function extractPriceFromElement(el) {
+        if (!el || isStrikethrough(el)) return 0;
+        
+        // Se o elemento tem filhos, pegar apenas texto direto (não de filhos riscados)
+        var text = "";
+        for (var i = 0; i < el.childNodes.length; i++) {
+          var child = el.childNodes[i];
+          if (child.nodeType === 3) { // Text node
+            text += child.textContent;
+          } else if (child.nodeType === 1 && !isStrikethrough(child)) { // Element node, not riscado
+            text += child.textContent;
+          }
+        }
+        
+        return parseBrazilianPrice(text);
+      }
+
+      // Tentar múltiplos seletores de preço (ignorando preços riscados)
       var priceSelectors = [
         ".prodDetPreco .preco",
         ".prodDetPreco",
@@ -454,7 +481,13 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
           var text = el.textContent || "";
           console.log("[Terabyte] Trying selector " + priceSelectors[i] + ": " + text.substring(0, 50));
           
-          var parsed = parseBrazilianPrice(text);
+          // Pular se elemento está riscado
+          if (isStrikethrough(el)) {
+            console.log("[Terabyte] Skipping strikethrough element");
+            continue;
+          }
+          
+          var parsed = extractPriceFromElement(el);
           if (isValidPrice(parsed)) {
             price = parsed;
             foundSelector = priceSelectors[i];
@@ -464,7 +497,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         }
       }
 
-      // Se não encontrou preço válido, buscar no texto
+      // Se não encontrou preço válido, buscar no texto (com filtro de parcelamento)
       if (!isValidPrice(price)) {
         console.log("[Terabyte] No valid price from selectors, searching in body...");
         
@@ -480,7 +513,19 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         for (var p = 0; p < patterns.length; p++) {
           var matches = body.match(patterns[p]) || [];
           for (var m = 0; m < matches.length; m++) {
-            var parsed = parseBrazilianPrice(matches[m]);
+            var matchText = matches[m];
+            // Filtrar textos de parcelamento ("12x de R$ 14,99", "parcel")
+            var contextStart = Math.max(0, body.indexOf(matchText) - 50);
+            var contextEnd = Math.min(body.length, body.indexOf(matchText) + matchText.length + 50);
+            var context = body.substring(contextStart, contextEnd).toLowerCase();
+            
+            // Pular se é texto de parcelamento
+            if (/\\d+x\\s*de|parcel|\\d+\\s*veces/i.test(context)) {
+              console.log("[Terabyte] Skipping installment price: " + matchText);
+              continue;
+            }
+            
+            var parsed = parseBrazilianPrice(matchText);
             if (isValidPrice(parsed)) {
               allPrices.push(parsed);
             }
@@ -499,8 +544,18 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         console.log("[Terabyte] Prices found in body: " + JSON.stringify(uniquePrices.slice(0, 5)));
 
         if (uniquePrices.length > 0) {
-          // Pegar o menor preço (provavelmente à vista/Pix)
-          price = uniquePrices[0];
+          // Pegar o menor preço válido (provavelmente à vista/Pix)
+          // Mas não pegar preços absurdamente baixos (< R$ 50 provavelmente é erro)
+          for (var j = 0; j < uniquePrices.length; j++) {
+            if (uniquePrices[j] >= 50) {
+              price = uniquePrices[j];
+              break;
+            }
+          }
+          // Se todos são < 50, pegar o menor mesmo assim
+          if (!isValidPrice(price) && uniquePrices.length > 0) {
+            price = uniquePrices[0];
+          }
         }
       }
 
