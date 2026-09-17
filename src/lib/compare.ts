@@ -42,15 +42,15 @@ export function buildSearchQuery(productName: string): string {
     .sort((a, b) => b.length - a.length);
 
   let parts: string[] = [];
-  parts.push(...distinctive.slice(0, 3));
-  parts.push(...skus.slice(0, 2));
-  parts = parts.slice(0, 4);
+  parts.push(...distinctive.slice(0, 5));
+  parts.push(...skus.slice(0, 3));
+  parts = parts.slice(0, 8);
 
   if (parts.length === 0) {
-    parts = tokens.slice(0, 4);
+    parts = tokens.slice(0, 8);
   }
 
-  return `${parts.join(" ")} preço brasil`.trim().slice(0, 90);
+  return `${parts.join(" ")} preço brasil`.trim().slice(0, 120);
 }
 
 function titleSimilarity(a: string, b: string): number {
@@ -124,10 +124,9 @@ export function sameProduct(productName: string, pageTitle: string): boolean {
     .split(" ")
     .filter((t) => t.length >= 3 && !QUERY_STOPWORDS.has(t) && !/\d/.test(t));
 
-  return (
-    titleSimilarity(productName, pageTitle) >= TITLE_SIM_THRESHOLD &&
-    tokens.filter((t) => pageTitle.toLowerCase().includes(t)).length >= 2
-  );
+  const matchedTokens = tokens.filter((t) => pageTitle.toLowerCase().includes(t)).length;
+  if (matchedTokens < 2) return false;
+  return titleSimilarity(productName, pageTitle) >= 0.3;
 }
 
 export function isProductUrl(url: string): boolean {

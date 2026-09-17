@@ -249,61 +249,52 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       }
       safeLog(`[scan-worker] compare Gemini: ${rawResults.length}/${Array.isArray(parsed) ? parsed.length : 0} válidos — baixando para busca+scrape`);
     } catch (err: any) {
-      safeLog(`[scan-worker] compare Gemini falhou: ${err.message || err}`);
+      const msg = err.message || String(err);
+      if (/429|quota|rate.?limit/i.test(msg)) {
+        safeLog(`[scan-worker] compare Gemini: quota esgotada (429), pulando para Tavily`);
+      } else {
+        safeLog(`[scan-worker] compare Gemini falhou: ${msg}`);
+      }
     }
   }
 
-  // 2) BUSCA — Tavily primeiro (funciona e traz snippets); Serper só como
-  //    fallback quando Tavily não achar nada. Praticamente a key do perfil
-  //    retorna 0 em variações gl/hl, então Tavily é a fonte primária.
+  // 2) BUSCA — Tavily primeiro (1 chamada com site-operator); Serper como
+  //    fallback se Tavily não achar nada.
   type SearchItem = { url: string; snippet: string };
   let items: SearchItem[] = [];
   if (profile?.tavilyApiKey) {
     const siteQuery = `${searchQuery} site:mercadolivre.com.br OR site:kabum.com.br OR site:amazon.com.br OR site:pichau.com.br OR site:terabyteshop.com.br OR site:magazineluiza.com.br OR site:aliexpress.com OR site:shopee.com.br`;
-    const variations = [
-      { query: siteQuery, label: "site-operator" },
-      { query: searchQuery, include_domains: TRUSTED_DOMAINS, label: "restrito" },
-      { query: searchQuery, label: "livre" },
-      {
-        query: searchQuery.replace(/\s*pre[çc]o brasil\s*$/i, ""),
-        label: "sem-rodape",
-      },
-    ];
-    for (const v of variations) {
-      if (items.length > 0) break;
-      try {
-        const body: any = {
-          api_key: profile.tavilyApiKey,
-          query: v.query,
-          search_depth: "basic",
-          max_results: 10,
-        };
-        if ((v as any).include_domains) body.include_domains = (v as any).include_domains;
-        const res = await withTimeout(
-          fetch("https://api.tavily.com/search", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
-          }),
-          COMPARE_SEARCH_TIMEOUT_MS
-        );
-        const j = await res.json();
-        items = (Array.isArray(j.results) ? j.results : []).map((x: any) => ({
-          url: x.url || "",
-          snippet: `${x.title || ""} ${x.content || ""}`,
-        }));
-        items = items.filter((i) => {
-          if (!isProductUrl(i.url)) return false;
-          try {
-            const h = new URL(i.url).hostname;
-            if (/^(?!www\.|pt\.)[a-z]{2}\.aliexpress\.com$/.test(h)) return false;
-          } catch {}
-          return true;
-        });
-        safeLog(`[scan-worker] compare Tavily (${v.label}): ${items.length} URLs de produto`);
-      } catch (err: any) {
-        safeLog(`[scan-worker] compare Tavily falhou: ${err.message || err}`);
-      }
+    try {
+      const body: any = {
+        api_key: profile.tavilyApiKey,
+        query: siteQuery,
+        search_depth: "basic",
+        max_results: 20,
+      };
+      const res = await withTimeout(
+        fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        }),
+        COMPARE_SEARCH_TIMEOUT_MS
+      );
+      const j = await res.json();
+      items = (Array.isArray(j.results) ? j.results : []).map((x: any) => ({
+        url: x.url || "",
+        snippet: `${x.title || ""} ${x.content || ""}`,
+      }));
+      items = items.filter((i) => {
+        if (!isProductUrl(i.url)) return false;
+        try {
+          const h = new URL(i.url).hostname;
+          if (/^(?!www\.|pt\.)[a-z]{2}\.aliexpress\.com$/.test(h)) return false;
+        } catch {}
+        return true;
+      });
+      safeLog(`[scan-worker] compare Tavily (site-operator): ${items.length} URLs de produto`);
+    } catch (err: any) {
+      safeLog(`[scan-worker] compare Tavily falhou: ${err.message || err}`);
     }
   }
   if (items.length === 0 && profile?.serperApiKey) {
@@ -328,7 +319,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     }
   }
 
-  // 3) SCRAPE PARALELO — máx 3 URLs únicas, timeout de 45s por página.
+  // 3) SCRAPE PARALELO — máx 5 URLs únicas, timeout de 45s por página.
   const seenUrls = new Set<string>();
   const urls = items
     .map((i) => i.url)
@@ -338,7 +329,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       seenUrls.add(key);
       return true;
     })
-    .slice(0, 3);
+    .slice(0, 5);
   safeLog(`[scan-worker] compare scrape: ${urls.length} URLs para escrapar: ${urls.join(", ")}`);
   const scraped: { site: string; price: number; url: string }[] = [];
   if (urls.length > 0) {
