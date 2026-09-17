@@ -29,8 +29,11 @@ import { AI_MODELS } from "../lib/aiModels";
 
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
 const COMPARE_SCRAPE_TIMEOUT_MS = 45_000;
-const COMPARE_NVIDIA_TIMEOUT_MS = 60_000;
+const COMPARE_NVIDIA_TIMEOUT_MS = 90_000;
+const NVIDIA_MAX_RETRIES = 3;
+const NVIDIA_RETRY_DELAY_MS = 3_000;
 const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
+const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
 
 // Corrida com timeout: rejeita a promise após `ms` sem travar o worker.
 function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
@@ -254,31 +257,31 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
   type SearchItem = { url: string; snippet: string };
   let items: SearchItem[] = [];
   if (profile?.tavilyApiKey) {
-    // Variações: (1) query limpa restrita aos domínios confiáveis; (2) sem
-    // restrição de domínio (Google indexa AliExpress/Shopee melhor); (3) sem
-    // o rodapé "preço brasil".
+    const siteQuery = `${searchQuery} site:mercadolivre.com.br OR site:kabum.com.br OR site:amazon.com.br OR site:pichau.com.br OR site:terabyteshop.com.br OR site:magazineluiza.com.br OR site:aliexpress.com OR site:shopee.com.br`;
     const variations = [
-      { query: searchQuery, include_domains: TRUSTED_DOMAINS },
-      { query: searchQuery, include_domains: undefined as string[] | undefined },
+      { query: siteQuery, label: "site-operator" },
+      { query: searchQuery, include_domains: TRUSTED_DOMAINS, label: "restrito" },
+      { query: searchQuery, label: "livre" },
       {
         query: searchQuery.replace(/\s*pre[çc]o brasil\s*$/i, ""),
-        include_domains: undefined as string[] | undefined,
+        label: "sem-rodape",
       },
     ];
     for (const v of variations) {
       if (items.length > 0) break;
       try {
+        const body: any = {
+          api_key: profile.tavilyApiKey,
+          query: v.query,
+          search_depth: "basic",
+          max_results: 10,
+        };
+        if ((v as any).include_domains) body.include_domains = (v as any).include_domains;
         const res = await withTimeout(
           fetch("https://api.tavily.com/search", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              api_key: profile.tavilyApiKey,
-              query: v.query,
-              search_depth: "basic",
-              ...(v.include_domains ? { include_domains: v.include_domains } : {}),
-              max_results: 10,
-            }),
+            body: JSON.stringify(body),
           }),
           COMPARE_SEARCH_TIMEOUT_MS
         );
@@ -291,12 +294,11 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           if (!isProductUrl(i.url)) return false;
           try {
             const h = new URL(i.url).hostname;
-            // Bloquear subdomínios internacionais do AliExpress (he., th., ar., etc.)
             if (/^(?!www\.|pt\.)[a-z]{2}\.aliexpress\.com$/.test(h)) return false;
           } catch {}
           return true;
         });
-        safeLog(`[scan-worker] compare Tavily (${v.include_domains ? "restrito" : "livre"}): ${items.length} URLs de produto`);
+        safeLog(`[scan-worker] compare Tavily (${v.label}): ${items.length} URLs de produto`);
       } catch (err: any) {
         safeLog(`[scan-worker] compare Tavily falhou: ${err.message || err}`);
       }
@@ -364,50 +366,62 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
   }
 
   // 4) NVIDIA — último recurso: extrai preços dos snippets (sem abrir páginas).
+  //    Tenta até NVIDIA_MAX_RETRIES vezes; se DeepSeek falhar, usa GLM Flash.
   safeLog(`[scan-worker] compare step4 check: nvidiaKey=${!!profile?.nvidiaApiKey}, items=${items.length}`);
   if (profile?.nvidiaApiKey && items.length > 0) {
-    try {
-      const OpenAI = (await import("openai")).default;
-      const client = new OpenAI({
-        baseURL: "https://integrate.api.nvidia.com/v1",
-        apiKey: profile.nvidiaApiKey,
-      });
-      const snippet = items
-        .map((i) => `${i.url}\n${i.snippet}`)
-        .join("\n---\n")
-        .slice(0, 4000);
-      const resp = await withTimeout(
-        client.chat.completions.create({
-          model: NVIDIA_EXTRACT_MODEL,
-          messages: [
-            { role: "system", content: 'Você é o SENTINEL. A partir dos resultados de busca abaixo, retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string","title":"string"}]. FONTES: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. Use preços à vista em BRL e só URLs completas. O campo "title" deve conter o nome do produto encontrado na página.' },
-            { role: "user", content: `Produto pesquisado: "${productName}"\n\nResultados de busca:\n${snippet}\n\nJSON:` },
-          ],
-          max_tokens: 600,
-          temperature: 0,
-        }),
-        COMPARE_NVIDIA_TIMEOUT_MS
-      );
-      const rawText = (resp.choices[0]?.message?.content || "").replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
-      const jm = rawText.match(/\[[\s\S]*\]/);
-      if (jm) {
-        const parsed = JSON.parse(jm[0]);
-        const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
-        const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
-          ...r,
-          title: r.title || r.site || snippetMap.get(r.url) || productName,
-        })).filter(
-          (r: any) => r && r.url && r.price > 0 && r.price <= 5000000
-        );
-        safeLog(`[scan-worker] compare NVIDIA: ${rawResults.length} resultados brutos, filtrando por sameProduct...`);
-        const results = await filterAndDedupe(rawResults, productName);
-        if (results.length > 0) {
-          safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados após filtro`);
-          return { jobKey, results };
+    const OpenAI = (await import("openai")).default;
+    const client = new OpenAI({
+      baseURL: "https://integrate.api.nvidia.com/v1",
+      apiKey: profile.nvidiaApiKey,
+    });
+    const snippet = items
+      .map((i) => `${i.url}\n${i.snippet}`)
+      .join("\n---\n")
+      .slice(0, 4000);
+    const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
+    for (const model of models) {
+      for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
+        try {
+          safeLog(`[scan-worker] compare NVIDIA tentativa ${attempt}/${NVIDIA_MAX_RETRIES} modelo=${model}`);
+          const resp = await withTimeout(
+            client.chat.completions.create({
+              model,
+              messages: [
+                { role: "system", content: 'Você é o SENTINEL. A partir dos resultados de busca abaixo, retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string","title":"string"}]. FONTES: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. Use preços à vista em BRL e só URLs completas. O campo "title" deve conter o nome do produto encontrado na página.' },
+                { role: "user", content: `Produto pesquisado: "${productName}"\n\nResultados de busca:\n${snippet}\n\nJSON:` },
+              ],
+              max_tokens: 600,
+              temperature: 0,
+            }),
+            COMPARE_NVIDIA_TIMEOUT_MS
+          );
+          const rawText = (resp.choices[0]?.message?.content || "").replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
+          const jm = rawText.match(/\[[\s\S]*\]/);
+          if (jm) {
+            const parsed = JSON.parse(jm[0]);
+            const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
+            const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
+              ...r,
+              title: r.title || r.site || snippetMap.get(r.url) || productName,
+            })).filter(
+              (r: any) => r && r.url && r.price > 0 && r.price <= 5000000
+            );
+            safeLog(`[scan-worker] compare NVIDIA: ${rawResults.length} resultados brutos (modelo=${model})`);
+            const results = await filterAndDedupe(rawResults, productName);
+            if (results.length > 0) {
+              safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados após filtro`);
+              return { jobKey, results };
+            }
+          }
+          safeLog(`[scan-worker] compare NVIDIA: resposta sem resultados válidos (modelo=${model}, tentativa=${attempt})`);
+          break; // resposta válida mas sem resultados → não adianta retry
+        } catch (err: any) {
+          safeLog(`[scan-worker] compare NVIDIA falhou: ${err.message || err} (modelo=${model}, tentativa=${attempt})`);
+          if (attempt < NVIDIA_MAX_RETRIES) {
+            await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
+          }
         }
       }
-    } catch (err: any) {
-      safeLog(`[scan-worker] compare NVIDIA falhou: ${err.message || err}`);
     }
   }
 

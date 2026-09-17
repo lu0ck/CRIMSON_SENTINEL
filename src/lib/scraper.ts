@@ -41,6 +41,9 @@ const MAX_PRICE = 10_000_000;
 
 // Modelo de extração NVIDIA NIM (o antigo meta/llama-3.1-8b-instruct foi retirado da lista)
 const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
+const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
+const NVIDIA_MAX_RETRIES = 2;
+const NVIDIA_RETRY_DELAY_MS = 2_000;
 
 function simpleHash(str: string): string {
   let hash = 0;
@@ -1541,60 +1544,59 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string): Promise<ScrapeR
       apiKey: apiKey,
     });
 
-    const response = await client.chat.completions.create({
-      model: NVIDIA_EXTRACT_MODEL,
-      messages: [
-        {
-          role: "system",
-          content: "Extraia dados do produto. Retorne APENAS JSON válido. Sem markdown. Formato: {\"name\":\"Produto\",\"price\":1234.56}",
-        },
-        {
-          role: "user",
-          content: `Extraia nome e menor preço (Pix/Boleto/à vista) deste texto:\n\n${bodyText}\n\nJSON:`,
-        },
-      ],
-      max_tokens: 300,
-      temperature: 0,
-    });
+    const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
+    for (const model of models) {
+      for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
+        try {
+          console.log(`[NVIDIA NIM] Calling API (model=${model}, attempt=${attempt}/${NVIDIA_MAX_RETRIES})...`);
+          const response = await client.chat.completions.create({
+            model,
+            messages: [
+              {
+                role: "system",
+                content: "Extraia dados do produto. Retorne APENAS JSON válido. Sem markdown. Formato: {\"name\":\"Produto\",\"price\":1234.56}",
+              },
+              {
+                role: "user",
+                content: `Extraia nome e menor preço (Pix/Boleto/à vista) deste texto:\n\n${bodyText}\n\nJSON:`,
+              },
+            ],
+            max_tokens: 300,
+            temperature: 0,
+          });
 
-    const resultText = response.choices[0].message?.content || "";
-    console.log(`[NVIDIA NIM] Raw response: ${resultText.substring(0, 200)}`);
+          const resultText = response.choices[0].message?.content || "";
+          console.log(`[NVIDIA NIM] Raw response: ${resultText.substring(0, 200)}`);
 
-    const jsonMatch = resultText.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      let jsonStr = jsonMatch[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, "");
-      jsonStr = jsonStr.replace(/,(\s*[}\]])/g, "$1");
+          const jsonMatch = resultText.match(/\{[\s\S]*\}/);
+          if (jsonMatch) {
+            let jsonStr = jsonMatch[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, "");
+            jsonStr = jsonStr.replace(/,(\s*[}\]])/g, "$1");
 
-      try {
-        const result = JSON.parse(jsonStr);
-        if (isValidPrice(result.price)) {
-          result.price = sanitizePrice(result.price);
-          result.currency = result.currency || "BRL";
-          result.name = result.name || "";
-          console.log(`[NVIDIA NIM] SUCCESS: "${result.name?.substring(0, 30)}" - R$ ${result.price}`);
-          return result as ScrapeResult;
+            try {
+              const result = JSON.parse(jsonStr);
+              if (isValidPrice(result.price)) {
+                result.price = sanitizePrice(result.price);
+                result.currency = result.currency || "BRL";
+                result.name = result.name || "";
+                console.log(`[NVIDIA NIM] SUCCESS (model=${model}): "${result.name?.substring(0, 30)}" - R$ ${result.price}`);
+                return result as ScrapeResult;
+              }
+            } catch (e) {
+              console.log("[NVIDIA NIM] Failed to parse JSON");
+            }
+          }
+          break; // resposta válida mas sem JSON → não retry
+        } catch (err: any) {
+          console.log(`[NVIDIA NIM] Error (model=${model}, attempt=${attempt}): ${err.message || err}`);
+          if (attempt < NVIDIA_MAX_RETRIES) {
+            await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
+          }
         }
-      } catch (e) {
-        console.log("[NVIDIA NIM] Failed to parse JSON");
       }
     }
 
-    const priceMatch = resultText.match(/R?\$?\s*[\d.,]+/);
-    if (priceMatch) {
-      const priceStr = priceMatch[0].replace(/R\$\s?/g, "").replace(/\./g, "").replace(",", ".");
-      const price = parseFloat(priceStr);
-      if (!isNaN(price) && price > 10 && price < 100000) {
-        console.log(`[NVIDIA NIM] Extracted price from text: R$ ${price}`);
-        return {
-          name: "",
-          price: price,
-          currency: "BRL",
-          available: true,
-        };
-      }
-    }
-
-    console.log("[NVIDIA NIM] No valid result");
+    console.log("[NVIDIA NIM] No valid result from any model");
     return null;
   } catch (error: any) {
     console.error("[NVIDIA NIM] Error:", error.message);
@@ -1831,41 +1833,51 @@ async function scrapeWithSearchVerify(
 
   if (!snippet || snippet.length < 40) return null;
 
-  // 1) NVIDIA (grátis) extrai do snippet
+  // 1) NVIDIA (grátis) extrai do snippet — com retry e fallback de modelo
   if (options.nvidiaApiKey) {
-    try {
-      const client = new OpenAI({
-        baseURL: "https://integrate.api.nvidia.com/v1",
-        apiKey: options.nvidiaApiKey,
-      });
-      const resp = await client.chat.completions.create({
-        model: NVIDIA_EXTRACT_MODEL,
-        messages: [
-          { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
-          { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
-        ],
-        max_tokens: 300,
-        temperature: 0,
-      });
-      const text = resp.choices[0].message?.content || "";
-      const jm = text.match(/\{[\s\S]*\}/);
-      if (jm) {
-        const out = JSON.parse(jm[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
-        const price = sanitizePrice(Number(out.price));
-        if (isValidPrice(price) && out.name && String(out.name).length > 5) {
-          console.log(`[SEARCH_VERIFY] ✓ NVIDIA: "${String(out.name).substring(0, 40)}" R$ ${price}`);
-          return {
-            name: cleanProductName(String(out.name)),
-            price,
-            currency: "BRL",
-            available: true,
-            priceConfirmed: false,
-            nameSource: "SEARCH",
-          } as ScrapeResult;
+    const client = new OpenAI({
+      baseURL: "https://integrate.api.nvidia.com/v1",
+      apiKey: options.nvidiaApiKey,
+    });
+    const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
+    for (const model of models) {
+      for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
+        try {
+          console.log(`[SEARCH_VERIFY] NVIDIA call (model=${model}, attempt=${attempt})`);
+          const resp = await client.chat.completions.create({
+            model,
+            messages: [
+              { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
+              { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
+            ],
+            max_tokens: 300,
+            temperature: 0,
+          });
+          const text = resp.choices[0].message?.content || "";
+          const jm = text.match(/\{[\s\S]*\}/);
+          if (jm) {
+            const out = JSON.parse(jm[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
+            const price = sanitizePrice(Number(out.price));
+            if (isValidPrice(price) && out.name && String(out.name).length > 5) {
+              console.log(`[SEARCH_VERIFY] ✓ NVIDIA (model=${model}): "${String(out.name).substring(0, 40)}" R$ ${price}`);
+              return {
+                name: cleanProductName(String(out.name)),
+                price,
+                currency: "BRL",
+                available: true,
+                priceConfirmed: false,
+                nameSource: "SEARCH",
+              } as ScrapeResult;
+            }
+          }
+          break; // resposta válida mas sem resultado → não retry
+        } catch (e: any) {
+          console.log(`[SEARCH_VERIFY] NVIDIA falhou (model=${model}, attempt=${attempt}):`, e.message || e);
+          if (attempt < NVIDIA_MAX_RETRIES) {
+            await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
+          }
         }
       }
-    } catch (e: any) {
-      console.log("[SEARCH_VERIFY] NVIDIA falhou:", e.message || e);
     }
   }
 
