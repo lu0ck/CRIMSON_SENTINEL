@@ -92,6 +92,8 @@ function getCategoryKeywords(productName: string): string[] {
     fonte: ["fonte", "power supply", "psu", "atx"],
     processador: ["processador", "cpu", "xeon", "ryzen", "core", "i3", "i5", "i7", "i9", "athlon"],
     placa: ["placa", "gpu", "rtx", "gtx", "radeon", "rx"],
+    cooler: ["cooler", "ventilador", "watercooler", "aio", "heatsink", "散热器"],
+    monitor: ["monitor", "tela", "display"],
   };
 
   const norm = productName.toLowerCase();
@@ -137,11 +139,23 @@ function extractSpecs(productName: string): Record<string, string> {
     specs.vram = gpuMatch[3] + "gb";
   }
 
+  // Coolers: socket, TDP, tamanho
+  if (norm.includes("cooler") || norm.includes("ventilador") || norm.includes("watercooler") || norm.includes("aio")) {
+    const coolerSocketMatch = norm.match(/(lga\s*\d{4}|am[45]|socket\s*\d+)/i);
+    if (coolerSocketMatch) specs.coolerSocket = coolerSocketMatch[1].toLowerCase().replace(/\s/g, "");
+
+    const tdpMatch = norm.match(/tdp\s*(\d+)/i);
+    if (tdpMatch) specs.tdp = tdpMatch[1];
+
+    const sizeMatch = norm.match(/\b(\d{3,4})\s*mm\b/i);
+    if (sizeMatch) specs.fanSize = sizeMatch[1] + "mm";
+  }
+
   return specs;
 }
 
 function specsMatch(specsA: Record<string, string>, specsB: Record<string, string>): boolean {
-  const keys = ["wattage", "certification", "formFactor", "socket", "gpu"];
+  const keys = ["wattage", "certification", "formFactor", "socket", "gpu", "coolerSocket", "tdp", "fanSize"];
   let matchCount = 0;
   let totalCompare = 0;
 
@@ -152,8 +166,8 @@ function specsMatch(specsA: Record<string, string>, specsB: Record<string, strin
     }
   }
 
-  // Se temos specs comparáveis e pelo menos 1 match principal, é o mesmo produto
-  if (totalCompare >= 1 && matchCount >= 1) return true;
+  // Se ambas têm specs comparáveis, TODAS devem coincidir
+  if (totalCompare >= 1) return matchCount === totalCompare;
   return false;
 }
 
@@ -194,7 +208,11 @@ export function sameProduct(productName: string, pageTitle: string): boolean {
 
   const matchedTokens = tokens.filter((t) => pageTitle.toLowerCase().includes(t)).length;
   if (matchedTokens < 2) return false;
-  return titleSimilarity(productName, pageTitle) >= 0.3;
+
+  // Se não tem specs nem model tokens, ser mais rigoroso (0.5 em vez de 0.3)
+  const hasSpecs = Object.keys(specsA).length > 0 || Object.keys(specsB).length > 0;
+  const threshold = hasSpecs ? 0.3 : 0.5;
+  return titleSimilarity(productName, pageTitle) >= threshold;
 }
 
 export function isProductUrl(url: string): boolean {
