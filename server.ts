@@ -394,7 +394,10 @@ app.post("/api/compare", async (req, res) => {
         const jsonMatch = text.match(/\[[\s\S]*\]/);
         if (jsonMatch) {
           const parsed = JSON.parse(jsonMatch[0]);
-          const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
+          const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
+            ...r,
+            title: r.title || r.site || "",
+          })).filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
             try {
               const host = new URL(r.url).hostname.toLowerCase();

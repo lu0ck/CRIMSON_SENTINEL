@@ -29,6 +29,7 @@ import { AI_MODELS } from "../lib/aiModels";
 
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
 const COMPARE_SCRAPE_TIMEOUT_MS = 45_000;
+const COMPARE_NVIDIA_TIMEOUT_MS = 60_000;
 const NVIDIA_EXTRACT_MODEL = "mistralai/mistral-nemotron";
 
 // Corrida com timeout: rejeita a promise após `ms` sem travar o worker.
@@ -286,7 +287,15 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           url: x.url || "",
           snippet: `${x.title || ""} ${x.content || ""}`,
         }));
-        items = items.filter((i) => isProductUrl(i.url));
+        items = items.filter((i) => {
+          if (!isProductUrl(i.url)) return false;
+          try {
+            const h = new URL(i.url).hostname;
+            // Bloquear subdomínios internacionais do AliExpress (he., th., ar., etc.)
+            if (/^(?!www\.|pt\.)[a-z]{2}\.aliexpress\.com$/.test(h)) return false;
+          } catch {}
+          return true;
+        });
         safeLog(`[scan-worker] compare Tavily (${v.include_domains ? "restrito" : "livre"}): ${items.length} URLs de produto`);
       } catch (err: any) {
         safeLog(`[scan-worker] compare Tavily falhou: ${err.message || err}`);
@@ -355,6 +364,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
   }
 
   // 4) NVIDIA — último recurso: extrai preços dos snippets (sem abrir páginas).
+  safeLog(`[scan-worker] compare step4 check: nvidiaKey=${!!profile?.nvidiaApiKey}, items=${items.length}`);
   if (profile?.nvidiaApiKey && items.length > 0) {
     try {
       const OpenAI = (await import("openai")).default;
@@ -370,13 +380,13 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         client.chat.completions.create({
           model: NVIDIA_EXTRACT_MODEL,
           messages: [
-            { role: "system", content: 'Você é o SENTINEL. A partir dos resultados de busca abaixo, retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string"}]. FONTES: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. Use preços à vista em BRL e só URLs completas.' },
-            { role: "user", content: `${snippet}\n\nJSON:` },
+            { role: "system", content: 'Você é o SENTINEL. A partir dos resultados de busca abaixo, retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string","title":"string"}]. FONTES: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. Use preços à vista em BRL e só URLs completas. O campo "title" deve conter o nome do produto encontrado na página.' },
+            { role: "user", content: `Produto pesquisado: "${productName}"\n\nResultados de busca:\n${snippet}\n\nJSON:` },
           ],
           max_tokens: 600,
           temperature: 0,
         }),
-        30_000
+        COMPARE_NVIDIA_TIMEOUT_MS
       );
       const rawText = (resp.choices[0]?.message?.content || "").replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
       const jm = rawText.match(/\[[\s\S]*\]/);
@@ -385,13 +395,14 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
         const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
           ...r,
-          title: r.title || r.site || snippetMap.get(r.url) || "",
+          title: r.title || r.site || snippetMap.get(r.url) || productName,
         })).filter(
           (r: any) => r && r.url && r.price > 0 && r.price <= 5000000
         );
+        safeLog(`[scan-worker] compare NVIDIA: ${rawResults.length} resultados brutos, filtrando por sameProduct...`);
         const results = await filterAndDedupe(rawResults, productName);
         if (results.length > 0) {
-          safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados`);
+          safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados após filtro`);
           return { jobKey, results };
         }
       }
