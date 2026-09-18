@@ -46,6 +46,7 @@ export interface WhatsappSessionEvents {
   onReady: () => void;
   onAuthFailure: (msg: string) => void;
   onDisconnected: () => void;
+  onGroupMessage?: (msg: { groupName: string; groupId: string; sender: string; text: string; receivedAt: string }) => void;
 }
 
 let sessionInstance: any = null;
@@ -64,12 +65,11 @@ export async function startWhatsappSession(events: WhatsappSessionEvents): Promi
   if (sessionInstance) return;
   await loadWhatsAppLibs();
   if (!ClientCtor || !qrcode) throw new Error("WhatsApp libs não carregadas");
-  // Sessão persistida em disco sob DATA_DIR (criado por db.ts)
   const wa = await import("whatsapp-web.js");
   const mod = wa.default || wa;
   const { Client, LocalAuth } = mod;
   sessionInstance = new Client({
-    authStrategy: new LocalAuth({ dataPath: undefined }), // default .wwebjs_auth
+    authStrategy: new LocalAuth({ dataPath: undefined }),
     puppeteer: {
       headless: true,
       args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage"],
@@ -105,6 +105,30 @@ export async function startWhatsappSession(events: WhatsappSessionEvents): Promi
     lastQrAnsi = null;
     events.onDisconnected();
   });
+
+  // Grupo listener — mensagens de grupos são repassadas ao callback
+  sessionInstance.on("message_create", async (msg: any) => {
+    try {
+      if (!events.onGroupMessage) return;
+      if (!msg.from || !msg.body) return;
+      // Apenas mensagens de grupo (IDs terminam em @g.us)
+      if (!msg.from.endsWith("@g.us")) return;
+      // Ignorar mensagens enviadas pelo próprio bot
+      if (msg.fromMe) return;
+      const chat = await msg.getChat();
+      const contact = await msg.getContact();
+      events.onGroupMessage({
+        groupName: chat.name || msg.from,
+        groupId: msg.from,
+        sender: contact.pushname || contact.number || msg.author || "desconhecido",
+        text: msg.body,
+        receivedAt: new Date(msg.timestamp * 1000).toISOString(),
+      });
+    } catch (err: any) {
+      safeLog(`[whatsapp] erro no group listener: ${err.message}`);
+    }
+  });
+
   await sessionInstance.initialize();
 }
 
@@ -144,4 +168,21 @@ export async function fetchContactStatuses(whatsappNumbers: string[]): Promise<
 
 export async function isWhatsappReady(): Promise<boolean> {
   return !!sessionInstance && (await sessionInstance.getState?.()) === "CONNECTED";
+}
+
+export async function fetchWhatsAppGroups(): Promise<{ id: string; name: string; members: number }[]> {
+  if (!sessionInstance) return [];
+  try {
+    const chats = await sessionInstance.getChats();
+    return chats
+      .filter((c: any) => c.id && c.id._serialized?.endsWith("@g.us"))
+      .map((c: any) => ({
+        id: c.id._serialized,
+        name: c.name || "Grupo sem nome",
+        members: c.groupMetadata?.participants?.length ?? 0,
+      }));
+  } catch (err: any) {
+    safeLog(`[whatsapp] erro listando grupos: ${err.message}`);
+    return [];
+  }
 }

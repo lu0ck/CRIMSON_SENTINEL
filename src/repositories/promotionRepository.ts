@@ -96,4 +96,11 @@ export const PromotionRepository = {
   delete(id: string): void {
     getDb().prepare("DELETE FROM promotions WHERE id = ?").run(id);
   },
+
+  getRecent(limit = 20): Promotion[] {
+    const rows = getDb()
+      .prepare("SELECT * FROM promotions ORDER BY detected_at DESC LIMIT ?")
+      .all(limit) as PromotionRow[];
+    return rows.map(promotionRowToPromotion);
+  },
 };

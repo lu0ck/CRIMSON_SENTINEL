@@ -129,10 +129,38 @@ export interface InstagramStoriesScanJobPayload {
   triggeredBy: "manual" | "cron";
 }
 
+// FRENTE 4 — processamento de mensagens de grupo (WhatsApp/Telegram)
+export interface GroupMessageProcessJobPayload {
+  type: "group-message-process";
+  messageId: number;
+  source: "whatsapp" | "telegram";
+  groupName: string;
+  groupId?: string;
+  text: string;
+  profileId?: string;
+}
+
+// FRENTE 4 — avaliação periódica de triggers
+export interface TriggerEvaluateJobPayload {
+  type: "trigger-evaluate";
+  triggeredBy: "cron" | "manual";
+}
+
+// FRENTE 4 — promo → produto (rastrear produto a partir de promoção)
+export interface TrackFromPromoJobPayload {
+  type: "track-from-promo";
+  promoId: string;
+  listId?: string;
+  profileId?: string;
+}
+
 export type SocialMonitorJobPayload =
   | SocialCaptureJobPayload
   | SocialScanAllJobPayload
   | WhatsappStatusScanJobPayload
-  | InstagramStoriesScanJobPayload;
+  | InstagramStoriesScanJobPayload
+  | GroupMessageProcessJobPayload
+  | TriggerEvaluateJobPayload
+  | TrackFromPromoJobPayload;
 
 // Tipos discriminados para o worker discriminar com `switch (payload.type)`.

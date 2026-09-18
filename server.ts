@@ -17,7 +17,7 @@ import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
 import { normalizeProductUrl, generateProductId } from "./src/lib/url.ts";
 import { getScanQueue, getRouteQueue, getSocialQueue } from "./src/queue/queues.ts";
-import { registerSchedulers, registerSocialScheduler, registerLocalPriceScanScheduler, unregisterSocialScheduler, listSocialScheduledJob } from "./src/queue/schedulers.ts";
+import { registerSchedulers, registerSocialScheduler, registerLocalPriceScanScheduler, registerTriggerEvaluateScheduler, unregisterSocialScheduler, listSocialScheduledJob } from "./src/queue/schedulers.ts";
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
@@ -1148,6 +1148,107 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // ---------------------------------------------------------------------------
+  // FRENTE 4 — Group Messages
+  // ---------------------------------------------------------------------------
+
+  app.get("/api/social/groups/messages", (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 30;
+      const { GroupMessageRepository } = require("./src/repositories/groupMessageRepository.ts");
+      res.json(GroupMessageRepository.getRecent(limit));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.get("/api/social/whatsapp/groups", async (_req, res) => {
+    try {
+      const { isWhatsappReady, fetchWhatsAppGroups } = await import("./src/social/whatsappSession.ts");
+      if (!(await isWhatsappReady())) {
+        return res.json({ groups: [], error: "WhatsApp não conectado" });
+      }
+      const groups = await fetchWhatsAppGroups();
+      res.json({ groups });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  // ---------------------------------------------------------------------------
+  // FRENTE 4 — Triggers CRUD
+  // ---------------------------------------------------------------------------
+
+  app.get("/api/triggers", (_req, res) => {
+    try {
+      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      res.json(TriggerRepository.getAll());
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/triggers", (req, res) => {
+    try {
+      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      const { name, entityType, condition, value, channels } = req.body;
+      if (!name || !entityType || !condition || !value) {
+        return res.status(400).json({ error: "name, entityType, condition e value são obrigatórios" });
+      }
+      const trigger = {
+        id: `trigger-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name,
+        entityType,
+        condition,
+        value,
+        channels: channels || "discord",
+        enabled: true,
+        createdAt: new Date().toISOString(),
+      };
+      TriggerRepository.save(trigger);
+      res.json(trigger);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/triggers/:id/toggle", (req, res) => {
+    try {
+      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      const trigger = TriggerRepository.getById(req.params.id);
+      if (!trigger) return res.status(404).json({ error: "Trigger não encontrado" });
+      trigger.enabled = !trigger.enabled;
+      TriggerRepository.save(trigger);
+      res.json(trigger);
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/triggers/:id", (req, res) => {
+    try {
+      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      TriggerRepository.delete(req.params.id);
+      res.json({ ok: true });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/triggers/evaluate", async (_req, res) => {
+    try {
+      const { isRedisAvailable } = await import("./src/queue/connection.ts");
+      if (!isRedisAvailable()) {
+        return res.status(503).json({ error: "Redis indisponível" });
+      }
+      const queue = getSocialQueue();
+      const job = await queue.add("trigger-evaluate", { type: "trigger-evaluate", triggeredBy: "manual" });
+      res.json({ jobId: job.id, status: "queued" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // C2 — endpoints WhatsApp real (whatsapp-web.js)
   // Toggle WhatsApp on/off via DB (sem .env)
   app.get("/api/social/whatsapp/toggle", (_req, res) => {
@@ -1710,6 +1811,53 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       await registerLocalPriceScanScheduler({ intervalMs: localIntervalMs });
     } catch {
       safeLog("[scheduler] Falha ao registrar scheduler de preços locais — Redis indisponível?");
+    }
+
+    // FRENTE 4 — trigger evaluator (a cada 1h)
+    try {
+      await registerTriggerEvaluateScheduler();
+    } catch {
+      safeLog("[scheduler] Falha ao registrar trigger-evaluate scheduler — Redis indisponível?");
+    }
+
+    // FRENTE 4 — WhatsApp group listener (se habilitado)
+    try {
+      if (SettingsRepository.getBool("whatsapp_enabled")) {
+        const { startWhatsappSession, isWhatsappReady } = await import("./src/social/whatsappSession.ts");
+        const { GroupMessageRepository } = await import("./src/repositories/groupMessageRepository.ts");
+        if (!(await isWhatsappReady())) {
+          startWhatsappSession({
+            onQr: () => {},
+            onAuthenticated: () => safeLog("[whatsapp] autenticado (group listener)"),
+            onReady: () => safeLog("[whatsapp] pronto — group listener ativo"),
+            onAuthFailure: (m) => safeLog(`[whatsapp] auth fail: ${m}`),
+            onDisconnected: () => safeLog("[whatsapp] desconectado"),
+            onGroupMessage: (msg) => {
+              GroupMessageRepository.save({
+                source: "whatsapp",
+                groupName: msg.groupName,
+                groupId: msg.groupId,
+                sender: msg.sender,
+                text: msg.text,
+                receivedAt: msg.receivedAt,
+                processed: false,
+              });
+              // Enfileirar processamento
+              const queue = getSocialQueue();
+              queue.add("group-message-process", {
+                type: "group-message-process",
+                messageId: 0,
+                source: "whatsapp",
+                groupName: msg.groupName,
+                groupId: msg.groupId,
+                text: msg.text,
+              }).catch((e: any) => safeLog(`[whatsapp] erro ao enfileirar msg grupo: ${e.message}`));
+            },
+          }).catch((e: any) => safeLog(`[whatsapp] init group listener falhou: ${e.message}`));
+        }
+      }
+    } catch (e: any) {
+      safeLog(`[whatsapp] group listener init: ${e.message}`);
     }
 
     // C3 — auto-start Instagram microservice

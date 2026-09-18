@@ -8,6 +8,7 @@ const SOCIAL_SCAN_KEY = "social-scan-cron";
 const WHATSAPP_SCAN_KEY = "whatsapp-status-scan-cron";
 const INSTAGRAM_SCAN_KEY = "instagram-stories-scan-cron";
 const LOCAL_PRICE_SCAN_KEY = "local-price-scan-cron";
+const TRIGGER_EVALUATE_KEY = "trigger-evaluate-cron";
 
 export async function registerSchedulers(opts?: {
   scanIntervalMs?: number;
@@ -152,6 +153,46 @@ export async function unregisterSocialScheduler(): Promise<void> {
     } catch {
       // já não existia
     }
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FRENTE 4 — agendador de avaliação de triggers (a cada 1h)
+// ---------------------------------------------------------------------------
+
+export async function registerTriggerEvaluateScheduler(): Promise<void> {
+  let queue;
+  try {
+    queue = getSocialQueue();
+  } catch {
+    console.warn("[scheduler] Redis indisponível — trigger-evaluate scheduler ignorado");
+    return;
+  }
+
+  await queue.upsertJobScheduler(
+    TRIGGER_EVALUATE_KEY,
+    { every: 60 * 60 * 1000 }, // 1h
+    {
+      name: "trigger-evaluate",
+      data: { type: "trigger-evaluate", triggeredBy: "cron" } as SocialMonitorJobPayload,
+    }
+  );
+
+  console.log("[scheduler] trigger-evaluate registrado: a cada 60min");
+}
+
+export async function unregisterTriggerEvaluateScheduler(): Promise<void> {
+  let queue;
+  try {
+    queue = getSocialQueue();
+  } catch {
+    return;
+  }
+  try {
+    await queue.removeJobScheduler(TRIGGER_EVALUATE_KEY);
+    console.log(`[scheduler] removido ${TRIGGER_EVALUATE_KEY}`);
+  } catch {
+    // já não existia
   }
 }
 

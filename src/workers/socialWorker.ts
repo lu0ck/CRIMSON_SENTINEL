@@ -427,6 +427,189 @@ async function handleInstagramStoriesScan(
   return { captured, saved, scanned: withHandle.length, method: "instagrapi" };
 }
 
+// ---------------------------------------------------------------------------
+// FRENTE 4 — Processamento de mensagens de grupo (WhatsApp/Telegram)
+// ---------------------------------------------------------------------------
+
+async function handleGroupMessageProcess(
+  job: Job<SocialMonitorJobPayload & { type: "group-message-process" }>
+) {
+  if (!SettingsRepository.getBool("social_monitoring_enabled")) {
+    return { skipped: true, reason: "social_monitoring_enabled=false" };
+  }
+
+  const { groupName, text, profileId, source } = job.data;
+  const profile = profileId ? ProfileRepository.getById(profileId) : ProfileRepository.getAll()[0];
+  const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
+
+  const { promos } = await parsePromosFromTextWithAI(text, apiKey, groupName);
+  const enriched = enrichParsedPromos(promos, text, groupName);
+
+  const saved: any[] = [];
+  const skippedDuplicates: any[] = [];
+
+  for (const promo of enriched) {
+    if (!promo.establishmentId) continue;
+    if (isDuplicatePromo(promo)) {
+      skippedDuplicates.push(promo.productName);
+      continue;
+    }
+    const id = genPromoId(source);
+    PromotionRepository.save({
+      id,
+      establishmentId: promo.establishmentId,
+      productName: promo.productName,
+      regularPrice: promo.regularPrice,
+      promoPrice: promo.promoPrice,
+      source,
+      rawText: text.slice(0, 2000),
+      detectedAt: new Date().toISOString(),
+      isActive: true,
+    });
+    saved.push({ id, productName: promo.productName, promoPrice: promo.promoPrice });
+
+    const est = promo.establishmentName ?? groupName;
+    alertActivePromotion(id, promo.productName, est, promo.promoPrice, promo.regularPrice)
+      .catch((e: any) => safeLog(`[social-worker] erro alerta grupo: ${e}`));
+  }
+
+  // Marcar mensagem como processada
+  const { GroupMessageRepository } = await import("../repositories/groupMessageRepository.ts");
+  GroupMessageRepository.markProcessed(job.data.messageId);
+
+  safeLog(`[social-worker] grupo ${groupName} (${source}): ${saved.length} promoções, ${skippedDuplicates.length} duplicadas`);
+  return { captured: true, source, groupName, saved, skippedDuplicates };
+}
+
+// ---------------------------------------------------------------------------
+// FRENTE 4 — Avaliação periódica de triggers
+// ---------------------------------------------------------------------------
+
+async function handleTriggerEvaluate(
+  job: Job<SocialMonitorJobPayload & { type: "trigger-evaluate" }>
+) {
+  const { TriggerRepository } = await import("../repositories/triggerRepository.ts");
+  const triggers = TriggerRepository.getAll(true);
+  if (triggers.length === 0) return { evaluated: 0, fired: 0 };
+
+  const COOLDOWN_MS = 6 * 60 * 60 * 1000; // 6h cooldown entre disparos
+  let fired = 0;
+
+  for (const trigger of triggers) {
+    if (TriggerRepository.hasFiredRecently(trigger.id, COOLDOWN_MS)) continue;
+
+    let matched = false;
+    let matchedValue = "";
+
+    switch (trigger.condition) {
+      case "price_lte": {
+        const threshold = parseFloat(trigger.value);
+        if (isNaN(threshold)) break;
+        const products = (await import("../repositories/productRepository.ts")).ProductRepository.getAll();
+        for (const p of products) {
+          if (p.currentPrice != null && p.currentPrice <= threshold) {
+            matched = true;
+            matchedValue = `${p.name}: R$ ${p.currentPrice}`;
+            break;
+          }
+        }
+        break;
+      }
+      case "contains": {
+        const keywords = trigger.value.toLowerCase().split(",").map((s) => s.trim());
+        const recentPromos = (await import("../repositories/promotionRepository.ts")).PromotionRepository.getRecent?.(20) ?? [];
+        for (const promo of recentPromos) {
+          const name = promo.productName.toLowerCase();
+          if (keywords.some((kw) => name.includes(kw))) {
+            matched = true;
+            matchedValue = promo.productName;
+            break;
+          }
+        }
+        break;
+      }
+      case "new_promo": {
+        // Verifica se há promoções novas desde o último fire
+        const recentPromos = (await import("../repositories/promotionRepository.ts")).PromotionRepository.getRecent?.(5) ?? [];
+        if (recentPromos.length > 0) {
+          matched = true;
+          matchedValue = `${recentPromos.length} promoções recentes`;
+        }
+        break;
+      }
+    }
+
+    if (matched) {
+      TriggerRepository.setLastFired(trigger.id);
+      TriggerRepository.logFire(trigger.id, undefined, matchedValue);
+      fired++;
+
+      // Enviar notificação
+      const channels = trigger.channels.split(",").map((c) => c.trim());
+      const profile = ProfileRepository.getAll()[0];
+      const message = `🔔 TRIGGER "${trigger.name}" ATIVADO!\n\n📦 ${matchedValue}`;
+
+      if (channels.includes("discord") && profile?.discordWebhook) {
+        const { sendDiscordNotification } = await import("../lib/notifications.ts");
+        sendDiscordNotification(profile.discordWebhook, message).catch(() => {});
+      }
+      if (channels.includes("telegram") && profile?.telegramToken && profile?.telegramChatId) {
+        const { sendTelegramNotification } = await import("../lib/notifications.ts");
+        sendTelegramNotification(profile.telegramToken, profile.telegramChatId, message).catch(() => {});
+      }
+    }
+  }
+
+  safeLog(`[social-worker] trigger-evaluate: ${triggers.length} triggers, ${fired} disparados`);
+  return { evaluated: triggers.length, fired };
+}
+
+// ---------------------------------------------------------------------------
+// FRENTE 4 — Converter promoção em produto rastreado
+// ---------------------------------------------------------------------------
+
+async function handleTrackFromPromo(
+  job: Job<SocialMonitorJobPayload & { type: "track-from-promo" }>
+) {
+  const { promoId, listId, profileId } = job.data;
+  const promo = (await import("../repositories/promotionRepository.ts")).PromotionRepository.getById?.(promoId);
+  if (!promo) return { error: "promoção não encontrada" };
+
+  const profile = profileId
+    ? ProfileRepository.getById(profileId)
+    : ProfileRepository.getAll()[0];
+  if (!profile) return { error: "nenhum perfil configurado" };
+
+  const est = (await import("../repositories/establishmentRepository.ts")).EstablishmentRepository.getById?.(promo.establishmentId);
+  const productUrl = est?.priceUrl || promo.sourceUrl || "";
+
+  const productId = `promo-${promoId}`;
+  const { ProductRepository } = await import("../repositories/productRepository.ts");
+  ProductRepository.save({
+    id: productId,
+    url: productUrl,
+    name: promo.productName,
+    currentPrice: promo.promoPrice,
+    previousPrice: promo.regularPrice ?? promo.promoPrice,
+    currency: "BRL",
+    available: true,
+    lastUpdated: new Date().toISOString(),
+    listId: listId || "",
+    profileId: profile.id,
+    targetPrice: promo.promoPrice,
+    priceHistory: [],
+  });
+
+  // Registrar preço inicial no histórico
+  const { getDb } = await import("../database/db.ts");
+  getDb()
+    .prepare("INSERT INTO price_history (product_id, price, date) VALUES (?, ?, ?)")
+    .run(productId, promo.promoPrice, new Date().toISOString().slice(0, 10));
+
+  safeLog(`[social-worker] promo ${promoId} convertida em produto ${productId}`);
+  return { productId, productName: promo.productName };
+}
+
 export function startSocialWorker() {
   const worker = new Worker<SocialMonitorJobPayload>(
     QUEUE_NAMES.SOCIAL,
@@ -442,6 +625,18 @@ export function startSocialWorker() {
         case "instagram-stories-scan":
           return handleInstagramStoriesScan(
             job as Job<SocialMonitorJobPayload & { type: "instagram-stories-scan" }>
+          );
+        case "group-message-process":
+          return handleGroupMessageProcess(
+            job as Job<SocialMonitorJobPayload & { type: "group-message-process" }>
+          );
+        case "trigger-evaluate":
+          return handleTriggerEvaluate(
+            job as Job<SocialMonitorJobPayload & { type: "trigger-evaluate" }>
+          );
+        case "track-from-promo":
+          return handleTrackFromPromo(
+            job as Job<SocialMonitorJobPayload & { type: "track-from-promo" }>
           );
       }
     },

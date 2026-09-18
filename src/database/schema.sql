@@ -248,3 +248,50 @@ CREATE TABLE IF NOT EXISTS promotion_sites (
   last_checked_at TEXT,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+-- ---------------------------------------------------------------------------
+-- FRENTE 4 — Monitoramento de Grupos + Sistema de Triggers
+-- ---------------------------------------------------------------------------
+
+-- Mensagens recebidas de grupos WhatsApp/Telegram
+CREATE TABLE IF NOT EXISTS group_messages (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  source TEXT NOT NULL CHECK (source IN ('whatsapp', 'telegram')),
+  group_name TEXT NOT NULL,
+  group_id TEXT,
+  sender TEXT,
+  text TEXT NOT NULL,
+  media_url TEXT,
+  received_at TEXT NOT NULL DEFAULT (datetime('now')),
+  processed INTEGER DEFAULT 0
+);
+
+CREATE INDEX IF NOT EXISTS idx_group_messages_source ON group_messages(source);
+CREATE INDEX IF NOT EXISTS idx_group_messages_received ON group_messages(received_at);
+
+-- Regras de trigger configuráveis pelo usuário
+CREATE TABLE IF NOT EXISTS triggers (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'keyword', 'promo')),
+  condition TEXT NOT NULL CHECK (condition IN ('price_lte', 'price_drop_pct', 'contains', 'new_promo')),
+  value TEXT NOT NULL,
+  channels TEXT NOT NULL DEFAULT 'discord',
+  enabled INTEGER DEFAULT 1,
+  last_fired_at TEXT,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_triggers_enabled ON triggers(enabled);
+
+-- Histórico de disparos de triggers
+CREATE TABLE IF NOT EXISTS trigger_fire_log (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  trigger_id TEXT NOT NULL,
+  entity_id TEXT,
+  matched_value TEXT,
+  fired_at TEXT NOT NULL DEFAULT (datetime('now')),
+  FOREIGN KEY (trigger_id) REFERENCES triggers(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_trigger_fire_log_trigger ON trigger_fire_log(trigger_id);
