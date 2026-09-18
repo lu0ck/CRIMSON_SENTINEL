@@ -356,7 +356,7 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
       });
       playSound("click");
       toast(`ESTABELECIMENTO REGISTRADO: ${est.name.toUpperCase()}`, "success");
-      setEstName(""); setEstLat(""); setEstLng(""); setEstAddress(""); setEstCity(""); setEstCategory(""); setEstPriceUrl("");
+      setEstName(""); setEstLat(""); setEstLng(""); setEstAddress(""); setEstCity(""); setEstCategory(""); setEstPriceUrl(""); setEstCep("");
       setShowEstForm(false);
       setShowEstMap(false);
       loadAll();
@@ -432,7 +432,7 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ establishmentId: id }),
       });
-      const result = await pollJob(data.jobId, undefined, 3000, 180000, "scan");
+      const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan");
       const rv = result || {};
       const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}`;
       playSound("scan");

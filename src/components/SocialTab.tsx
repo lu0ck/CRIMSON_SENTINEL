@@ -105,7 +105,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const loadSocialSettings = async () => {
     try {
       const data = await apiJson("/api/social/settings");
-      setIntervalMs(data.intervalMs);
+      setIntervalMs(data.intervalMs ?? 6 * 60 * 60 * 1000);
     } catch {
       // settings indisponíveis — mantém default
     }
@@ -283,7 +283,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),
       });
-      const result = await pollJob(jobId, undefined, 2000, 180_000, "social");
+      const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
       return result;
     } catch (err: any) {
       throw err;
@@ -311,7 +311,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     setScanning(true);
     try {
       const { jobId } = await apiJson("/api/social/scan-all", { method: "POST" });
-      const result = await pollJob(jobId, undefined, 2000, 180_000, "social");
+      const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
       toast(`SCAN CONCLUÍDO — ${result?.sources || 0} FONTE(S)`, "info");
     } catch (err: any) {
       toast("FALHA NO SCAN", "error", String(err?.message || err));
@@ -368,7 +368,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     setWaScanning(true);
     try {
       const { jobId } = await apiJson("/api/social/whatsapp/scan", { method: "POST" });
-      const result = await pollJob(jobId, undefined, 2000, 180_000, "social");
+      const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
       const n = Number(result?.saved ?? 0);
       toast(`SCAN WHATSAPP CONCLUÍDO — ${n} PROMOÇÃO(ÕES)`, n > 0 ? "success" : "info");
       loadWhatsAppStatus();
@@ -402,7 +402,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     setIgScanning(true);
     try {
       const { jobId } = await apiJson("/api/social/instagram/scan", { method: "POST" });
-      const result = await pollJob(jobId, undefined, 2000, 180_000, "social");
+      const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
       const n = Number(result?.saved ?? 0);
       toast(`SCAN INSTAGRAM CONCLUÍDO — ${n} PROMOÇÃO(ÕES)`, n > 0 ? "success" : "info");
       loadInstagramHealth();

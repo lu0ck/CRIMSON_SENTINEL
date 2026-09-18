@@ -316,7 +316,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({}),
       });
-      const result = await pollJob(jobId, undefined, 2000, 120000, "scan");
+      const result = await pollJob(jobId, undefined, 2000, 600_000, "scan");
       setAiText(result?.text || "");
       setAiMethod(result?.method || "");
       toast("ANÁLISE SENTINEL CONCLUÍDA", "success");
@@ -425,7 +425,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
         body: JSON.stringify({ radiusMeters: (parseFloat(locRadiusKm) || 5) * 1000 }),
       });
       toast(`DESCOBERTA ENFILEIRADA: JOB ${jobId}`, "info");
-      const result = await pollJob(jobId, undefined, 2000, 240_000, "scan");
+      const result = await pollJob(jobId, undefined, 2000, 600_000, "scan");
       const inserted = Number(result?.inserted ?? 0);
       toast(
         `DESCOBERTA CONCLUÍDA — ${inserted} NOVO(S)`,
@@ -586,7 +586,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ establishmentId: id }),
       });
-      const result = await pollJob(data.jobId, undefined, 3000, 180000, "scan");
+      const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan");
       const rv = result || {};
       const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}`;
       playSound("scan");
@@ -786,7 +786,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       });
       if (!queued.jobId) throw new Error(queued.error || "Falha ao enfileirar rota");
       toast(`ROTA ENFILEIRADA: JOB ${queued.jobId}`, "info");
-      const result = await pollJob(queued.jobId, undefined, 2000, 300_000, "route");
+      const result = await pollJob(queued.jobId, undefined, 2000, 600_000, "route");
       setLatestRouteId(result?.routeId || null);
       toast(
         `ROTA CALCULADA: ${result?.stopCount || 0} PARADAS, ${result?.totalDistanceKm || 0} KM, CUSTO ${fmtBRL(result?.totalEstimatedCost || 0)}`,
@@ -953,6 +953,30 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
           )}
 
           <div className="flex flex-wrap gap-3">
+            <button
+              onClick={() => {
+                if (!navigator.geolocation) {
+                  toast("GEOLOCALIZAÇÃO NÃO SUPORTADA NESTE NAVEGADOR", "error");
+                  return;
+                }
+                playSound("click");
+                navigator.geolocation.getCurrentPosition(
+                  (pos) => {
+                    setLocLat(String(pos.coords.latitude.toFixed(6)));
+                    setLocLng(String(pos.coords.longitude.toFixed(6)));
+                    toast("LOCALIZAÇÃO ATUAL DETECTADA", "success", `${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}`);
+                  },
+                  (err) => {
+                    toast("FALHA AO OBTER LOCALIZAÇÃO", "error", err.message);
+                  },
+                  { enableHighAccuracy: true, timeout: 10000 }
+                );
+              }}
+              className="hud-button flex items-center gap-2 text-xs"
+              title="Detectar minha localização atual via GPS do navegador"
+            >
+              <Navigation size={14} /> MINHA LOCALIZAÇÃO
+            </button>
             <button
               onClick={() => { playSound("click"); saveLocation(); }}
               disabled={locSaving}

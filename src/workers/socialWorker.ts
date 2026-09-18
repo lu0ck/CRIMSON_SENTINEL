@@ -268,8 +268,8 @@ async function handleWhatsappStatusScan(job: Job<SocialMonitorJobPayload & { typ
             .catch((e) => safeLog(`[social-worker] erro alerta whatsapp: ${e}`));
         }
       }
-      // Throttle entre contatos (ms) — nunca em loop apertado
-      await new Promise((r) => setTimeout(r, throttleMs));
+      // Throttle leve entre contatos — aguarda 5s para não sobrecarregar
+      await new Promise((r) => setTimeout(r, 5000));
     } catch (err: any) {
       safeLog(`[social-worker] erro whatsappStatus ${est.name}: ${err.message}`);
     }
@@ -418,8 +418,8 @@ async function handleInstagramStoriesScan(
             .catch((e) => safeLog(`[social-worker] erro alerta instagram: ${e}`));
         }
       }
-      // Throttle agressivo entre handles
-      await new Promise((r) => setTimeout(r, throttleMs));
+      // Throttle leve entre handles — aguarda 5s para não sobrecarregar
+      await new Promise((r) => setTimeout(r, 5000));
     } catch (err: any) {
       safeLog(`[social-worker] erro instagramStories ${est.name}: ${err.message}`);
     }
@@ -448,10 +448,9 @@ export function startSocialWorker() {
     {
       connection: getRedis(),
       concurrency: 1,
-      // A4: lock para evitar jobs presos
-      lockDuration: 60_000,
-      stalledInterval: 30_000,
-      maxStalledCount: 1,
+      lockDuration: 3_600_000,
+      stalledInterval: 120_000,
+      maxStalledCount: 3,
     }
   );
 
