@@ -247,10 +247,44 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       });
       const results = await filterAndDedupe(rawResults, productName);
       if (results.length > 0) {
-        safeLog(`[scan-worker] compare via Gemini: ${results.length} resultados para "${productName}"`);
-        const best = results.reduce((a, b) => a.price < b.price ? a : b);
-        recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Gemini)", `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
-        return { jobKey, results };
+        // CONFIRMAÇÃO: escrape rápido (15s) para verificar disponibilidade real
+        // antes de retornar resultados do Gemini — evita produtos esgotados.
+        const geminiUrls = results.map((r) => r.url).filter((u) => {
+          try { return isTrustedHost(new URL(u).hostname); } catch { return false; }
+        }).slice(0, 3);
+        const confirmed: Array<{ url: string; title: string; price: number }> = [];
+        if (geminiUrls.length > 0) {
+          const gemSettled = await Promise.allSettled(
+            geminiUrls.map((url) =>
+              withTimeout(
+                advancedScrape(url, {
+                  lmStudioUrl: profile?.lmStudioUrl,
+                  nvidiaApiKey: profile?.nvidiaApiKey,
+                  geminiApiKey: finalApiKey,
+                  serperApiKey: profile?.serperApiKey,
+                  tavilyApiKey: profile?.tavilyApiKey,
+                }),
+                15_000
+              ).then((info: any) => {
+                if (!info || !info.price || info.available === false) return null;
+                return { url, title: info.name || productName, price: info.price };
+              })
+            )
+          );
+          for (const g of gemSettled) {
+            if (g.status === "fulfilled" && g.value) confirmed.push(g.value);
+          }
+        }
+        if (confirmed.length > 0) {
+          const deduped = await filterAndDedupe(confirmed, productName);
+          if (deduped.length > 0) {
+            safeLog(`[scan-worker] compare via Gemini+scrape: ${deduped.length} resultados CONFIRMADOS disponíveis para "${productName}"`);
+            const best = deduped.reduce((a, b) => a.price < b.price ? a : b);
+            recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Gemini+scrape)", `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
+            return { jobKey, results: deduped };
+          }
+        }
+        safeLog(`[scan-worker] compare Gemini: ${results.length} resultados mas nenhum confirmado disponível — continuando para busca`);
       }
       safeLog(`[scan-worker] compare Gemini: ${rawResults.length}/${Array.isArray(parsed) ? parsed.length : 0} válidos — baixando para busca+scrape`);
     } catch (err: any) {
@@ -326,6 +360,18 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     }
   }
 
+  // Filtrar snippets que mencionam esgotamento/indisponibilidade antes de usar
+  // nos tiers de scrape e LLM — evita que produtos sem estoque entrem na comparação.
+  const UNAVAILABLE_SNIPPET_KEYWORDS = ["esgotado", "indisponível", "indisponivel", "sem estoque", "fora de estoque", "sold out", "unavailable"];
+  const itemsBefore = items.length;
+  items = items.filter((i) => {
+    const snipLower = (i.snippet || "").toLowerCase();
+    return !UNAVAILABLE_SNIPPET_KEYWORDS.some((kw) => snipLower.includes(kw));
+  });
+  if (itemsBefore !== items.length) {
+    safeLog(`[scan-worker] compare: ${itemsBefore - items.length} snippets descartados por menção de esgotamento`);
+  }
+
   // 3) SCRAPE PARALELO — máx 5 URLs únicas, timeout de 45s por página.
   const seenUrls = new Set<string>();
   const urls = items
@@ -342,6 +388,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
   let rejectedSameProduct = 0;
   let rejectedNoData = 0;
   let rejectedLowPrice = 0;
+  let rejectedUnavailable = 0;
   if (urls.length > 0) {
     const settled = await Promise.allSettled(
       urls.map((url) =>
@@ -356,6 +403,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           COMPARE_SCRAPE_TIMEOUT_MS
         ).then((info: any) => {
           if (!info || !info.price || !info.name) { rejectedNoData++; safeLog(`[scan-worker] compare scrape skip ${url}: no data (price=${info?.price}, name=${info?.name})`); return null; }
+          if (info.available === false) { rejectedUnavailable++; safeLog(`[scan-worker] compare scrape skip ${url}: esgotado/indisponível`); return null; }
           if (!sameProduct(productName, info.name)) { rejectedSameProduct++; safeLog(`[scan-worker] compare scrape skip ${url}: sameProduct=false (name="${info.name}")`); return null; }
           // Descartar preços absurdamente baixos (provavelmente erro de scraping)
           if (info.price < 30) { rejectedLowPrice++; safeLog(`[scan-worker] compare scrape skip ${url}: price R$ ${info.price} too low`); return null; }
@@ -366,7 +414,7 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     for (const s of settled) {
       if (s.status === "fulfilled" && s.value) scraped.push(s.value);
     }
-    safeLog(`[scan-worker] compare scrape: ${scraped.length}/${urls.length} URLs com preço do MESMO produto`);
+    safeLog(`[scan-worker] compare scrape: ${scraped.length}/${urls.length} URLs com preço do MESMO produto (rejeitados: ${rejectedSameProduct} mesmo produto, ${rejectedNoData} sem dados, ${rejectedLowPrice} preço baixo, ${rejectedUnavailable} esgotado)`);
     if (scraped.length > 0) {
       const best = scraped.reduce((a, b) => a.price < b.price ? a : b);
       recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Scrape)", `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
