@@ -162,7 +162,7 @@ sample() {
 }
 
 main() {
-  say "== CRIMSON SENTINEL — TESTE DE ESTRESSE =="
+  say "== SENTINELL — TESTE DE ESTRESSE =="
   say "API: $API_URL | Redis: $REDIS_HOST:$REDIS_PORT"
   say "Duração: ${DURATION_SECONDS}s | Amostra a cada ${SAMPLE_MINUTES}min"
   say "Log: $LOG_FILE"

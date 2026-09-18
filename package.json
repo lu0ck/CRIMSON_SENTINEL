@@ -1,11 +1,11 @@
 {
-  "name": "crimson-sentinel",
+  "name": "sentinell",
   "private": true,
-  "version": "1.0.0",
-  "description": "Crimson Sentinel - Iron Man Inspired Price Tracker",
-  "homepage": "https://github.com/lucasred071/crimson-sentinel",
+  "version": "2.0.0",
+  "description": "Sentinell — Monitor de preços e promoções locais",
+  "homepage": "https://github.com/lu0ck/CRIMSON_SENTINEL",
   "author": {
-    "name": "Crimson Sentinel Team",
+    "name": "Sentinell",
     "email": "lucasred071@gmail.com"
   },
   "type": "module",
@@ -30,8 +30,8 @@
     "clear-cache": "rm -rf .cache .cookies"
   },
   "build": {
-    "appId": "com.crimsonsentinel.app",
-    "productName": "Crimson Sentinel",
+    "appId": "com.sentinell.app",
+    "productName": "Sentinell",
     "directories": {
       "output": "release"
     },

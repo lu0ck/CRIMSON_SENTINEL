@@ -116,7 +116,7 @@ export async function alertProductTargetReached(
     entityType: "product",
     entityId: productId,
     subject: `🎯 ALVO ATINGIDO: ${productName}`,
-    message: `🛡️ [SENTINEL] O produto *${productName}* atingiu o preço-alvo!\n\n💵 Preço atual: R$ ${currentPrice}\n🎯 Alvo: R$ ${targetPrice}${link}`,
+    message: `🛡️ [SENTINELL] O produto *${productName}* atingiu o preço-alvo!\n\n💵 Preço atual: R$ ${currentPrice}\n🎯 Alvo: R$ ${targetPrice}${link}`,
   });
 }
 
@@ -133,7 +133,7 @@ export async function alertShoppingItemTargetReached(
     entityType: "shopping_item",
     entityId: itemId,
     subject: `🎯 ALVO ATINGIDO: ${itemName}`,
-    message: `🛒 [SENTINEL] O item *${itemName}* está dentro do alvo em ${establishmentName}!\n\n💵 Preço: R$ ${price}\n🎯 Alvo: R$ ${targetPrice}\n\nRota otimizada sugerida na aba LOCAL.`,
+    message: `🛒 [SENTINELL] O item *${itemName}* está dentro do alvo em ${establishmentName}!\n\n💵 Preço: R$ ${price}\n🎯 Alvo: R$ ${targetPrice}\n\nRota otimizada sugerida na aba LOCAL.`,
   });
 }
 
@@ -180,7 +180,7 @@ export async function alertActivePromotion(
     entityType: "promotion",
     entityId: promotionId,
     subject: `🔥 PROMOÇÃO: ${productName}`,
-    message: `🏷️ [SENTINEL] Nova promoção em ${establishmentName}:\n\n📦 *${productName}*\n🔥 De R$ ${regularPrice ?? "—"} por R$ ${promoPrice}${discount}${link}`,
+    message: `🏷️ [SENTINELL] Nova promoção em ${establishmentName}:\n\n📦 *${productName}*\n🔥 De R$ ${regularPrice ?? "—"} por R$ ${promoPrice}${discount}${link}`,
   });
 }
 
@@ -213,7 +213,7 @@ export async function alertFlashPromotion(
   if (targetProfiles.length === 0 && telegramOnly) return 0;
 
   const link = productUrl ? `\n\n🔗 Comprar agora: ${productUrl}` : "";
-  const msg = `⚡ [SENTINEL] PROMOÇÃO RELÂMPAGO!\n\n📦 *${promotion.productName}*\n🔥 R$ ${promotion.promoPrice}${promotion.regularPrice ? ` (era R$ ${promotion.regularPrice})` : ""}\n📍 ${establishmentName}${reason ? `\n📉 Motivo: ${reason}` : ""}${link}\n\n⚠️ Válido por ~24h ou até o fim do estoque.`;
+  const msg = `⚡ [SENTINELL] PROMOÇÃO RELÂMPAGO!\n\n📦 *${promotion.productName}*\n🔥 R$ ${promotion.promoPrice}${promotion.regularPrice ? ` (era R$ ${promotion.regularPrice})` : ""}\n📍 ${establishmentName}${reason ? `\n📉 Motivo: ${reason}` : ""}${link}\n\n⚠️ Válido por ~24h ou até o fim do estoque.`;
 
   await Promise.allSettled(
     targetProfiles.map((p) =>

@@ -1,34 +1,33 @@
-# 🛡️ Crimson Sentinel — Iron Man HUD Price Tracker
+# 🛡️ Sentinell — Monitor de Preços e Promoções Locais
 
-**Crimson Sentinel** é um rastreador de preços inspirado no HUD do Homem de Ferro. Ele monitora produtos online e lojas físicas locais, roteiriza compras, detecta promoções-relâmpago e notifica via Discord/Telegram — tudo processado por uma arquitetura de **fila de jobs assíncrona** (BullMQ + Redis) com workers isolados em PM2.
+**Sentinell** é um monitor de preços inspirado no HUD do Homem de Ferro. Ele monitora produtos online e lojas físicas locais, detecta promoções-relâmpago e notifica via Discord/Telegram — tudo processado por uma arquitetura de **fila de jobs assíncrona** (BullMQ + Redis) com workers isolados em PM2.
 
 ---
 
 ## 🏗️ Arquitetura
 
 ```
-┌────────────┐   HTTP (UI)   ┌─────────────┐      BullMQ/Redis      ┌─────────────────────┐
-│ React+Vite │ ────────────► │ Express API │ ─────────────────────► │ crimson-scan-worker  │ 4× cluster
-│ (HUD)      │               │  server.ts  │                        │   scrape, scan-all,   │ concurrency 5
-└────────────┘               └─────────────┘                        │   compare, analyze,   │ = até 20 jobs
-                                     │  SQLite (better-sqlite3)      │   local-price-scan,   │
-                                     │  crimson.db (USER_DATA_PATH)  │   discover, insight   │
-                                    ▼                               └─────────────────────┘
-                          ┌────────────────────┐                    ┌─────────────────────┐
-                          │ Filas (3):         │                    │ crimson-route-worker │
-                          │  scan-queue        │◄───────────────────│   roteirização TSP   │
-                          │  route-queue       │                    │   (OSRM + veículo)   │
-                          │  social-monitor-   │                    └─────────────────────┘
-                          │    queue           │                    ┌─────────────────────┐
-                          └────────────────────┘                    │ crimson-social-worker│
-                                                                    │   whatsapp-web.js    │
-                                                                    │   instagrapi client  │
-                                                                    └─────────────────────┘
-                                                                     ┌─────────────────────┐
-                                                                     │ crimson-instagram-  │
-                                                                     │   service (Python)  │
-                                                                     │   FastAPI:8721      │
-                                                                     └─────────────────────┘
+┌────────────┐   HTTP (UI)   ┌─────────────┐      BullMQ/Redis      ┌─────────────────────────┐
+│ React+Vite │ ────────────► │ Express API │ ─────────────────────► │ sentinell-scan-worker   │ 4× cluster
+│ (HUD)      │               │  server.ts  │                        │   scrape, scan-all,     │ concurrency 5
+└────────────┘               └─────────────┘                        │   compare, analyze,     │ = até 20 jobs
+                                     │  SQLite (better-sqlite3)      │   local-price-scan,    │
+                                     │  crimson.db (USER_DATA_PATH)  │   discover, insight    │
+                                    ▼                               └─────────────────────────┘
+                          ┌────────────────────┐                    ┌─────────────────────────┐
+                          │ Filas (3):         │                    │ sentinell-route-worker  │
+                          │  scan-queue        │◄───────────────────│   roteirização TSP      │
+                          │  route-queue       │                    │   (OSRM + veículo)      │
+                          │  social-monitor-   │                    └─────────────────────────┘
+                          │    queue           │                    ┌─────────────────────────┐
+                          └────────────────────┘                    │ sentinell-social-worker │
+                                                                    │   instagrapi client     │
+                                                                    └─────────────────────────┘
+                                                                     ┌─────────────────────────┐
+                                                                     │ sentinell-instagram-    │
+                                                                     │   service (Python)      │
+                                                                     │   FastAPI:8721          │
+                                                                     └─────────────────────────┘
 ```
 
 - **Fila única de scan** com 4 instâncias PM2 em cluster (`concurrency: 5` cada) → até **20 jobs simultâneos** sem OOM.
@@ -140,4 +139,4 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 
 ---
 
-*[SISTEMA SENTINEL ATIVO]*
+*[SISTEMA SENTINELL ATIVO]*
