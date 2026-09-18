@@ -1165,10 +1165,8 @@ const queued = await response.json();
     setComparingAll(true);
     setCompareAllProgress({ current: 0, total: listProducts.length, productName: "" });
     setSystemMessage(`INITIATING BATCH MARKET SCAN: ${listProducts.length} PRODUCTS`);
-    setIsComparing(true);
 
     const controller = new AbortController();
-    setScanController(controller);
 
     try {
       const products = listProducts.map((p) => ({ id: p.id, name: p.name }));
@@ -1244,10 +1242,6 @@ const queued = await response.json();
     } finally {
       setComparingAll(false);
       setCompareAllProgress(null);
-      setIsComparing(false);
-      setComparingProduct(null);
-      setScanController(null);
-      setScanTimeout(0);
     }
   };
 
