@@ -35,7 +35,7 @@ const NVIDIA_RETRY_DELAY_MS = 2_000;
 const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
 const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
 const LM_STUDIO_TIMEOUT_MS = 120_000;
-const LM_STUDIO_DEFAULT_URL = "http://127.0.0.1:44277/v1";
+const LM_STUDIO_DEFAULT_URL = "http://127.0.0.1:1234/v1";
 const LM_STUDIO_API_KEY = process.env.LM_STUDIO_API_KEY || "lm-studio";
 
 // Corrida com timeout: rejeita a promise após `ms` sem travar o worker.

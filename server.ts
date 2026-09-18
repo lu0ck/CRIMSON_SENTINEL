@@ -479,8 +479,8 @@ app.get("/api/status", async (req, res) => {
     status.redis.connected = isRedisAvailable();
   } catch {}
 
-  // Test LM Studio connection (fallback para localhost:44277 se profile não tem URL)
-  const lmStudioUrl = profile?.lmStudioUrl || "http://127.0.0.1:44277/v1";
+  // Test LM Studio connection (fallback para localhost:1234 se profile não tem URL)
+  const lmStudioUrl = profile?.lmStudioUrl || "http://127.0.0.1:1234/v1";
   try {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 5000);
