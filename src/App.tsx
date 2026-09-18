@@ -172,6 +172,8 @@ export default function App() {
   const [newListName, setNewListName] = useState("");
   const [isLoading, setIsLoading] = useState(false);
   const [isComparing, setIsComparing] = useState(false);
+  const [comparingAll, setComparingAll] = useState(false);
+  const [compareAllProgress, setCompareAllProgress] = useState<{ current: number; total: number; productName: string } | null>(null);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
   const [scrapeProgress, setScrapeProgress] = useState({ percent: 0, currentEngine: "", strategiesTried: [] as string[] });
   const [scrapeResults, setScrapeResults] = useState<{ url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number }[]>([]);
@@ -1155,6 +1157,100 @@ const queued = await response.json();
     }
   };
 
+  const compareAllProducts = async () => {
+    if (comparingAll || isComparing) return;
+    const listProducts = profileProducts.filter((p) => p.listId === selectedListId);
+    if (listProducts.length === 0) return;
+
+    setComparingAll(true);
+    setCompareAllProgress({ current: 0, total: listProducts.length, productName: "" });
+    setSystemMessage(`INITIATING BATCH MARKET SCAN: ${listProducts.length} PRODUCTS`);
+    setIsComparing(true);
+
+    const controller = new AbortController();
+    setScanController(controller);
+
+    try {
+      const products = listProducts.map((p) => ({ id: p.id, name: p.name }));
+      const response = await fetch("/api/compare-all", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ products, profileId: activeProfileId }),
+        signal: controller.signal,
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || "Batch comparison failed");
+      }
+
+      const queued = await response.json();
+      if (!queued.jobId) throw new Error(queued.error || "Batch comparison queueing failed");
+
+      // Poll do job com tratamento de progresso.
+      const deadline = Date.now() + 600_000;
+      let finalResult: any = null;
+      while (Date.now() < deadline) {
+        if (controller.signal.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
+        const res = await fetch(`/api/jobs/scan/${queued.jobId}`, { signal: controller.signal });
+        if (!res.ok) throw new Error("Job status fetch failed");
+        const job = await res.json();
+        if (job.state === "completed") {
+          finalResult = job.returnvalue;
+          break;
+        }
+        if (job.state === "failed") throw new Error(job.failedReason || "Job failed");
+        if (job.progress && typeof job.progress === "object") {
+          setCompareAllProgress(job.progress);
+          setSystemMessage(`BATCH SCAN: ${job.progress.current}/${job.progress.total} — ${job.progress.productName}`);
+        }
+        await new Promise((r) => setTimeout(r, 3000));
+      }
+      if (!finalResult) throw new Error("Batch comparison timed out");
+
+      // Salvar resultados em cada produto.
+      const resultsMap = finalResult.results || {};
+      const nowIso = new Date().toISOString();
+      const newProducts = data.products.map((p) => {
+        const productResults = resultsMap[p.id];
+        if (!productResults || !Array.isArray(productResults)) return p;
+        if (productResults.length === 0) return p;
+        const bestPrice = Math.min(...productResults.map((r: any) => r.price));
+        const priceChanged = bestPrice !== p.currentPrice;
+        return {
+          ...p,
+          previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
+          currentPrice: bestPrice,
+          lastUpdated: nowIso,
+          priceHistory: priceChanged ? [...p.priceHistory, { date: nowIso, price: bestPrice }] : p.priceHistory,
+          comparisonResults: productResults,
+        };
+      });
+
+      saveData({ ...data, products: newProducts });
+
+      const withResults = Object.values(resultsMap).filter((r: any) => Array.isArray(r) && r.length > 0).length;
+      setSystemMessage(`BATCH SCAN COMPLETE: ${withResults}/${products.length} products with market data`);
+      addToast(`COMPARAÇÃO EM LOTE: ${withResults}/${products.length} produtos com dados de mercado`, "success");
+    } catch (error: any) {
+      if (error.name === "AbortError") {
+        setSystemMessage("BATCH SCAN CANCELLED");
+        addToast("Batch scan cancelled", "info");
+      } else {
+        const msg = error.message || "BATCH COMPARISON FAILED";
+        setSystemMessage(`ERROR: ${msg.toUpperCase()}`);
+        addToast(msg, "error");
+      }
+    } finally {
+      setComparingAll(false);
+      setCompareAllProgress(null);
+      setIsComparing(false);
+      setComparingProduct(null);
+      setScanController(null);
+      setScanTimeout(0);
+    }
+  };
+
   const createProfile = () => {
     if (!newProfileName) return;
     const newProfile: Profile = {
@@ -1765,9 +1861,29 @@ const queued = await response.json();
                           </button>
                         </div>
                       </div>
-                      <button onClick={() => { playSound('click'); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
-                        <Plus size={16} /> ADD LINK
-                      </button>
+                      <div className="flex items-center gap-2">
+                        {profileProducts.filter((p) => p.listId === selectedListId).length >= 2 && (
+                          <button
+                            onClick={() => { playSound('click'); compareAllProducts(); }}
+                            disabled={comparingAll || isComparing}
+                            className={`hud-button flex items-center gap-2 ${comparingAll ? 'opacity-50 cursor-wait' : ''}`}
+                          >
+                            {comparingAll ? (
+                              <>
+                                <RefreshCw size={14} className="animate-spin" />
+                                {compareAllProgress ? `${compareAllProgress.current}/${compareAllProgress.total}` : "COMPARANDO..."}
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw size={14} /> COMPARAR TODOS
+                              </>
+                            )}
+                          </button>
+                        )}
+                        <button onClick={() => { playSound('click'); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
+                          <Plus size={16} /> ADD LINK
+                        </button>
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-1 gap-4">

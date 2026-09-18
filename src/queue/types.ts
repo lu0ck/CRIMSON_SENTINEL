@@ -23,6 +23,12 @@ export interface CompareJobPayload {
   jobKey: string; // chave única para associar jobId↔requisição no frontend
 }
 
+export interface CompareAllJobPayload {
+  type: "compare-all";
+  products: { id: string; name: string }[];
+  profileId?: string;
+}
+
 export interface LocalInsightJobPayload {
   type: "local-insight";
   profileId?: string; // chave Gemini para a análise
@@ -55,6 +61,7 @@ export type ScanJobPayload =
   | ScrapeJobPayload
   | ScanAllJobPayload
   | CompareJobPayload
+  | CompareAllJobPayload
   | LocalInsightJobPayload
   | LocalPriceScanJobPayload
   | DiscoverEstablishmentsJobPayload

@@ -182,9 +182,16 @@ async function handleScanAll() {
   return { updated, errors, total: data.products.length };
 }
 
-async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
-  const { productName, profileId, jobKey } = job.data;
-  const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
+// ---------------------------------------------------------------------------
+// Comparação de mercado — lógica central (compartilhada entre single e batch).
+// ---------------------------------------------------------------------------
+
+type CompareResult = { site: string; price: number; url: string };
+
+async function runComparison(
+  productName: string,
+  profile: { geminiApiKey?: string; tavilyApiKey?: string; serperApiKey?: string; nvidiaApiKey?: string; lmStudioUrl?: string } | undefined
+): Promise<CompareResult[]> {
   const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
   const systemInstruction = `Você é o SENTINEL, um agente de inteligência de mercado de elite.
@@ -200,12 +207,6 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
 
   const prompt = `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`;
   const searchQuery = buildSearchQuery(productName);
-
-  // Cascata rápido → lento (nunca escrape pesado sequencial):
-  // 1) Gemini (1 chamada com googleSearch) — tenta SEMPRE que houver chave;
-  // 2) Serper → Tavily para achar URLs confiáveis (+ snippets);
-  // 3) advancedScrape em PARALELO (máx 3, timeout 45s/URL);
-  // 4) NVIDIA extraindo preços direto dos snippets de busca.
 
   // 1) GEMINI — caminho rápido.
   if (finalApiKey) {
@@ -247,8 +248,6 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       });
       const results = await filterAndDedupe(rawResults, productName);
       if (results.length > 0) {
-        // CONFIRMAÇÃO: escrape rápido (15s) para verificar disponibilidade real
-        // antes de retornar resultados do Gemini — evita produtos esgotados.
         const geminiUrls = results.map((r) => r.url).filter((u) => {
           try { return isTrustedHost(new URL(u).hostname); } catch { return false; }
         }).slice(0, 3);
@@ -278,27 +277,23 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         if (confirmed.length > 0) {
           const deduped = await filterAndDedupe(confirmed, productName);
           if (deduped.length > 0) {
-            safeLog(`[scan-worker] compare via Gemini+scrape: ${deduped.length} resultados CONFIRMADOS disponíveis para "${productName}"`);
-            const best = deduped.reduce((a, b) => a.price < b.price ? a : b);
-            recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Gemini+scrape)", `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
-            return { jobKey, results: deduped };
+            safeLog(`[compare] Gemini+scrape: ${deduped.length} resultados CONFIRMADOS para "${productName}"`);
+            return deduped.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
           }
         }
-        safeLog(`[scan-worker] compare Gemini: ${results.length} resultados mas nenhum confirmado disponível — continuando para busca`);
+        safeLog(`[compare] Gemini: ${results.length} resultados mas nenhum confirmado — continuando`);
       }
-      safeLog(`[scan-worker] compare Gemini: ${rawResults.length}/${Array.isArray(parsed) ? parsed.length : 0} válidos — baixando para busca+scrape`);
     } catch (err: any) {
       const msg = err.message || String(err);
       if (/429|quota|rate.?limit/i.test(msg)) {
-        safeLog(`[scan-worker] compare Gemini: quota esgotada (429), pulando para Tavily`);
+        safeLog(`[compare] Gemini: quota esgotada (429), pulando`);
       } else {
-        safeLog(`[scan-worker] compare Gemini falhou: ${msg}`);
+        safeLog(`[compare] Gemini falhou: ${msg}`);
       }
     }
   }
 
-  // 2) BUSCA — Tavily primeiro (1 chamada com site-operator); Serper como
-  //    fallback se Tavily não achar nada.
+  // 2) BUSCA — Tavily primeiro; Serper como fallback.
   type SearchItem = { url: string; snippet: string };
   let items: SearchItem[] = [];
   if (profile?.tavilyApiKey) {
@@ -328,14 +323,13 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         try {
           const h = new URL(i.url).hostname;
           if (/^(?!www\.|pt\.)[a-z]{2}\.aliexpress\.com$/.test(h)) return false;
-    } catch (e: any) {
-      safeLog(`[scan-worker] compare LM Studio check falhou: ${e?.message || e}`);
-    }
+        } catch (e: any) {
+          safeLog(`[compare] LM Studio check falhou: ${e?.message || e}`);
+        }
         return true;
       });
-      safeLog(`[scan-worker] compare Tavily (site-operator): ${items.length} URLs de produto`);
     } catch (err: any) {
-      safeLog(`[scan-worker] compare Tavily falhou: ${err.message || err}`);
+      safeLog(`[compare] Tavily falhou: ${err.message || err}`);
     }
   }
   if (items.length === 0 && profile?.serperApiKey) {
@@ -354,14 +348,12 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
         snippet: `${x.title || ""} ${x.snippet || ""}`,
       }));
       items = items.filter((i) => isProductUrl(i.url));
-      safeLog(`[scan-worker] compare Serper: ${items.length} URLs de produto`);
     } catch (err: any) {
-      safeLog(`[scan-worker] compare Serper falhou: ${err.message || err}`);
+      safeLog(`[compare] Serper falhou: ${err.message || err}`);
     }
   }
 
-  // Filtrar snippets que mencionam esgotamento/indisponibilidade antes de usar
-  // nos tiers de scrape e LLM — evita que produtos sem estoque entrem na comparação.
+  // Filtrar snippets com keywords de esgotamento.
   const UNAVAILABLE_SNIPPET_KEYWORDS = ["esgotado", "indisponível", "indisponivel", "sem estoque", "fora de estoque", "sold out", "unavailable"];
   const itemsBefore = items.length;
   items = items.filter((i) => {
@@ -369,10 +361,10 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     return !UNAVAILABLE_SNIPPET_KEYWORDS.some((kw) => snipLower.includes(kw));
   });
   if (itemsBefore !== items.length) {
-    safeLog(`[scan-worker] compare: ${itemsBefore - items.length} snippets descartados por menção de esgotamento`);
+    safeLog(`[compare] ${itemsBefore - items.length} snippets descartados por esgotamento`);
   }
 
-  // 3) SCRAPE PARALELO — máx 5 URLs únicas, timeout de 45s por página.
+  // 3) SCRAPE PARALELO — máx 5 URLs, timeout de 45s por página.
   const seenUrls = new Set<string>();
   const urls = items
     .map((i) => i.url)
@@ -383,12 +375,8 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
       return true;
     })
     .slice(0, 5);
-  safeLog(`[scan-worker] compare scrape: ${urls.length} URLs para escrapar: ${urls.join(", ")}`);
-  const scraped: { site: string; price: number; url: string }[] = [];
-  let rejectedSameProduct = 0;
-  let rejectedNoData = 0;
-  let rejectedLowPrice = 0;
-  let rejectedUnavailable = 0;
+  const scraped: CompareResult[] = [];
+  let rejectedSameProduct = 0, rejectedNoData = 0, rejectedLowPrice = 0, rejectedUnavailable = 0;
   if (urls.length > 0) {
     const settled = await Promise.allSettled(
       urls.map((url) =>
@@ -402,11 +390,10 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           }),
           COMPARE_SCRAPE_TIMEOUT_MS
         ).then((info: any) => {
-          if (!info || !info.price || !info.name) { rejectedNoData++; safeLog(`[scan-worker] compare scrape skip ${url}: no data (price=${info?.price}, name=${info?.name})`); return null; }
-          if (info.available === false) { rejectedUnavailable++; safeLog(`[scan-worker] compare scrape skip ${url}: esgotado/indisponível`); return null; }
-          if (!sameProduct(productName, info.name)) { rejectedSameProduct++; safeLog(`[scan-worker] compare scrape skip ${url}: sameProduct=false (name="${info.name}")`); return null; }
-          // Descartar preços absurdamente baixos (provavelmente erro de scraping)
-          if (info.price < 30) { rejectedLowPrice++; safeLog(`[scan-worker] compare scrape skip ${url}: price R$ ${info.price} too low`); return null; }
+          if (!info || !info.price || !info.name) { rejectedNoData++; return null; }
+          if (info.available === false) { rejectedUnavailable++; return null; }
+          if (!sameProduct(productName, info.name)) { rejectedSameProduct++; return null; }
+          if (info.price < 30) { rejectedLowPrice++; return null; }
           return { site: new URL(url).hostname, price: info.price, url };
         })
       )
@@ -414,39 +401,28 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
     for (const s of settled) {
       if (s.status === "fulfilled" && s.value) scraped.push(s.value);
     }
-    safeLog(`[scan-worker] compare scrape: ${scraped.length}/${urls.length} URLs com preço do MESMO produto (rejeitados: ${rejectedSameProduct} mesmo produto, ${rejectedNoData} sem dados, ${rejectedLowPrice} preço baixo, ${rejectedUnavailable} esgotado)`);
-    if (scraped.length > 0) {
-      const best = scraped.reduce((a, b) => a.price < b.price ? a : b);
-      recordInAppAlert("compare", productName, "MERCADO ENCONTRADO (Scrape)", `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
-      return { jobKey, results: scraped };
-    }
+    safeLog(`[compare] scrape: ${scraped.length}/${urls.length} ok (${rejectedSameProduct} outro produto, ${rejectedNoData} sem dados, ${rejectedLowPrice} preço baixo, ${rejectedUnavailable} esgotado)`);
+    if (scraped.length > 0) return scraped;
   }
 
-  // 4) NVIDIA — último recurso: extrai preços dos snippets (sem abrir páginas).
-  //    Tenta até NVIDIA_MAX_RETRIES vezes; se DeepSeek falhar, usa GLM Flash.
-  safeLog(`[scan-worker] compare step4 check: nvidiaKey=${!!profile?.nvidiaApiKey}, items=${items.length}`);
+  // 4) NVIDIA — extrai preços dos snippets.
   if (profile?.nvidiaApiKey && items.length > 0) {
     const OpenAI = (await import("openai")).default;
     const client = new OpenAI({
       baseURL: "https://integrate.api.nvidia.com/v1",
       apiKey: profile.nvidiaApiKey,
     });
-    const snippet = items
-      .slice(0, 5)
-      .map((i) => `${i.url}\n${i.snippet}`)
-      .join("\n---\n")
-      .slice(0, 1500);
+    const snippet = items.slice(0, 5).map((i) => `${i.url}\n${i.snippet}`).join("\n---\n").slice(0, 1500);
     const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
     for (const model of models) {
       for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
         try {
-          safeLog(`[scan-worker] compare NVIDIA tentativa ${attempt}/${NVIDIA_MAX_RETRIES} modelo=${model}`);
           const resp = await withTimeout(
             client.chat.completions.create({
               model,
               messages: [
-                { role: "system", content: 'Você é o SENTINEL. A partir dos resultados de busca abaixo, retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string","title":"string"}]. FONTES: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. Use preços à vista em BRL e só URLs completas. O campo "title" deve conter o nome do produto encontrado na página.' },
-                { role: "user", content: `Produto pesquisado: "${productName}"\n\nResultados de busca:\n${snippet}\n\nJSON:` },
+                { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string","title":"string"}]. Só o mesmo modelo/SKU. Preço à vista BRL.' },
+                { role: "user", content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:` },
               ],
               max_tokens: 600,
               temperature: 0,
@@ -459,33 +435,20 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
             const parsed = JSON.parse(jm[0]);
             const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
             const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
-              ...r,
-              title: r.title || r.site || snippetMap.get(r.url) || productName,
-            })).filter(
-              (r: any) => r && r.url && r.price >= 30 && r.price <= 5000000
-            );
-            safeLog(`[scan-worker] compare NVIDIA: ${rawResults.length} resultados brutos (modelo=${model})`);
+              ...r, title: r.title || r.site || snippetMap.get(r.url) || productName,
+            })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000);
             const results = await filterAndDedupe(rawResults, productName);
-            if (results.length > 0) {
-              safeLog(`[scan-worker] compare NVIDIA: ${results.length} resultados após filtro`);
-              const best = results.reduce((a, b) => a.price < b.price ? a : b);
-              recordInAppAlert("compare", productName, `MERCADO ENCONTRADO (NVIDIA/${model})`, `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
-              return { jobKey, results };
-            }
+            if (results.length > 0) return results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
           }
-          safeLog(`[scan-worker] compare NVIDIA: resposta sem resultados válidos (modelo=${model}, tentativa=${attempt})`);
-          break; // resposta válida mas sem resultados → não adianta retry
+          break;
         } catch (err: any) {
-          safeLog(`[scan-worker] compare NVIDIA falhou: ${err.message || err} (modelo=${model}, tentativa=${attempt})`);
-          if (attempt < NVIDIA_MAX_RETRIES) {
-            await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
-          }
+          if (attempt < NVIDIA_MAX_RETRIES) await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
         }
       }
     }
   }
 
-  // 5) LM STUDIO — fallback local: envia snippets de busca para o LLM local.
+  // 5) LM STUDIO — fallback local.
   const lmStudioUrl = profile?.lmStudioUrl || LM_STUDIO_DEFAULT_URL;
   if (items.length > 0) {
     let lmStudioAvailable = false;
@@ -508,105 +471,109 @@ async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
           lmStudioAvailable = true;
         }
       }
-    } catch (e: any) {
-      safeLog(`[scan-worker] compare LM Studio check falhou: ${e?.message || e}`);
-    }
+    } catch { /* skip */ }
     if (lmStudioAvailable) {
       try {
         const OpenAI = (await import("openai")).default;
         const client = new OpenAI({ baseURL: lmStudioUrl, apiKey: LM_STUDIO_API_KEY });
-        const snippet = items
-          .slice(0, 5)
-          .map((i) => `${i.url}\n${i.snippet}`)
-          .join("\n---\n")
-          .slice(0, 1500);
-        safeLog(`[scan-worker] compare LM Studio: modelo=${detectedModel}, tentando extrair preços (timeout=${LM_STUDIO_TIMEOUT_MS / 1000}s)`);
-        const lmStart = Date.now();
+        const snippet = items.slice(0, 5).map((i) => `${i.url}\n${i.snippet}`).join("\n---\n").slice(0, 1500);
         const resp = await withTimeout(
           client.chat.completions.create({
             model: detectedModel,
             messages: [
-              {
-                role: "system",
-                content:
-                  'Retorne APENAS JSON válido, sem markdown: [{"site":"string","price":123.45,"url":"string"}]. Só inclua o produto pesquisado se for EXATAMENTE o mesmo modelo. Preço à vista BRL. Se nada correspondente, retorne [].',
-              },
-              {
-                role: "user",
-                content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:`,
-              },
+              { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string"}]. Só o mesmo modelo. Preço à vista BRL. Se nada, retorne [].' },
+              { role: "user", content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:` },
             ],
             max_tokens: 2048,
             temperature: 0,
           }),
           LM_STUDIO_TIMEOUT_MS
         );
-        const lmElapsed = ((Date.now() - lmStart) / 1000).toFixed(1);
         const msg = resp.choices[0]?.message as any;
-        const rawText = (msg?.content || msg?.reasoning_content || "")
-          .replace(/```json\s*/g, "")
-          .replace(/```\s*/g, "")
-          .trim();
-        safeLog(`[scan-worker] compare LM Studio raw (${lmElapsed}s): ${rawText.slice(0, 300)}`);
+        const rawText = (msg?.content || msg?.reasoning_content || "").replace(/```json\s*/g, "").replace(/```\s*/g, "").trim();
         const jm = rawText.match(/\[[\s\S]*\]/);
         if (jm) {
           const parsed = JSON.parse(jm[0]);
           const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
-          const rawResults = (Array.isArray(parsed) ? parsed : [])
-            .map((r: any) => ({
-              ...r,
-              title: r.title || r.site || snippetMap.get(r.url) || productName,
-            }))
-            .filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000);
-          safeLog(`[scan-worker] compare LM Studio: ${rawResults.length} resultados brutos (${lmElapsed}s)`);
+          const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
+            ...r, title: r.title || r.site || snippetMap.get(r.url) || productName,
+          })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000);
           const results = await filterAndDedupe(rawResults, productName);
-          if (results.length > 0) {
-            safeLog(`[scan-worker] compare LM Studio: ${results.length} resultados após filtro`);
-            const best = results.reduce((a: any, b: any) => (a.price < b.price ? a : b));
-            recordInAppAlert(
-              "compare",
-              productName,
-              `MERCADO ENCONTRADO (LM Studio)`,
-              `${new URL(best.url).hostname}: R$ ${best.price.toFixed(2)} — ${productName}`,
-              1
-            );
-            return { jobKey, results };
-          }
+          if (results.length > 0) return results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
         }
-        safeLog(`[scan-worker] compare LM Studio: resposta sem resultados válidos (${lmElapsed}s)`);
-      } catch (err: any) {
-        safeLog(`[scan-worker] compare LM Studio falhou: ${err.message || err}`);
-      }
-    } else {
-      safeLog(`[scan-worker] compare LM Studio indisponível, pulando`);
+      } catch { /* skip */ }
     }
   }
 
-  const parts: string[] = [];
-  if (items.length > 0) parts.push(`${items.length} links encontrados`);
-  if (urls.length > 0) parts.push(`${urls.length} URLs escavadas`);
-  if (rejectedSameProduct > 0) parts.push(`${rejectedSameProduct} rejeitadas (produto diferente)`);
-  if (rejectedNoData > 0) parts.push(`${rejectedNoData} falha no scrape`);
-  if (rejectedLowPrice > 0) parts.push(`${rejectedLowPrice} preço muito baixo`);
-  const detail = parts.length > 0 ? `\n\nDetalhes: ${parts.join(", ")}` : "";
+  return [];
+}
 
-  const detailsPayload = {
-    searchItems: items.slice(0, 10).map((i) => ({ url: i.url, snippet: i.snippet.slice(0, 200) })),
-    scrapedUrls: urls,
-    rejectedSameProduct,
-    rejectedNoData,
-    rejectedLowPrice,
-  };
+// ---------------------------------------------------------------------------
+// handleCompare — comparação single (job type "compare").
+// ---------------------------------------------------------------------------
+async function handleCompare(job: Job<ScanJobPayload & { type: "compare" }>) {
+  const { productName, profileId, jobKey } = job.data;
+  const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
 
-  recordInAppAlert(
-    "compare",
-    productName,
-    "MERCADO SEM RESULTADOS",
-    `Nenhum preço compatível encontrado para "${productName}" nas lojas pesquisadas.${detail}`,
-    6,
-    JSON.stringify(detailsPayload)
-  );
+  const results = await runComparison(productName, profile);
+
+  if (results.length > 0) {
+    const best = results.reduce((a, b) => a.price < b.price ? a : b);
+    recordInAppAlert("compare", productName, "MERCADO ENCONTRADO", `${best.site}: R$ ${best.price.toFixed(2)} — ${productName}`, 1);
+    return { jobKey, results };
+  }
+
+  recordInAppAlert("compare", productName, "MERCADO SEM RESULTADOS", `Nenhum preço compatível encontrado para "${productName}".`, 6);
   return { jobKey, results: [] };
+}
+
+// ---------------------------------------------------------------------------
+// handleCompareAll — comparação em lote (job type "compare-all").
+// ---------------------------------------------------------------------------
+async function handleCompareAll(job: Job<ScanJobPayload & { type: "compare-all" }>) {
+  const { products, profileId } = job.data;
+  const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
+  const total = products.length;
+  const results: Record<string, CompareResult[]> = {};
+
+  safeLog(`[compare-all] iniciando comparação em lote: ${total} produtos`);
+
+  for (let i = 0; i < total; i++) {
+    const product = products[i];
+    await job.updateProgress({ current: i + 1, total, productName: product.name });
+    safeLog(`[compare-all] ${i + 1}/${total} — ${product.name}`);
+
+    try {
+      const productResults = await runComparison(product.name, profile);
+      results[product.id] = productResults;
+      if (productResults.length > 0) {
+        const best = productResults.reduce((a, b) => a.price < b.price ? a : b);
+        safeLog(`[compare-all] ${product.name}: ${productResults.length} resultados (menor: R$ ${best.price})`);
+      } else {
+        safeLog(`[compare-all] ${product.name}: sem resultados`);
+      }
+    } catch (err: any) {
+      safeLog(`[compare-all] ${product.name}: erro — ${err.message || err}`);
+      results[product.id] = [];
+    }
+
+    // Cooldown entre produtos para não sobrecarregar APIs.
+    if (i < total - 1) {
+      await new Promise((r) => setTimeout(r, 5_000));
+    }
+  }
+
+  const withResults = Object.values(results).filter((r) => r.length > 0).length;
+  safeLog(`[compare-all] concluído: ${withResults}/${total} produtos com dados de mercado`);
+  recordInAppAlert(
+    "compare-all",
+    `${total} produtos`,
+    "COMPARAÇÃO EM LOTE CONCLUÍDA",
+    `${withResults}/${total} produtos com dados de mercado encontrados.`,
+    1
+  );
+
+  return { results };
 }
 
 // FASE 7 — insights locais: análise determinística + narrativa IA (Gemini)
@@ -899,6 +866,8 @@ export function startScanWorker() {
           return handleScanAll();
         case "compare":
           return handleCompare(job as Job<ScanJobPayload & { type: "compare" }>);
+        case "compare-all":
+          return handleCompareAll(job as Job<ScanJobPayload & { type: "compare-all" }>);
         case "local-insight":
           return handleLocalInsight(job as Job<ScanJobPayload & { type: "local-insight" }>);
         case "local-price-scan":

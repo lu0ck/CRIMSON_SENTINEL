@@ -430,6 +430,32 @@ app.post("/api/compare", async (req, res) => {
   }
 });
 
+app.post("/api/compare-all", async (req, res) => {
+  const { products, profileId } = req.body as { products: { id: string; name: string }[]; profileId?: string };
+  if (!Array.isArray(products) || products.length === 0) {
+    res.status(400).json({ error: "products array is required" });
+    return;
+  }
+  try {
+    const { isRedisAvailable } = await import("./src/queue/connection.ts");
+    if (isRedisAvailable()) {
+      const queue = getScanQueue();
+      const job = await queue.add("compare-all", {
+        type: "compare-all",
+        products,
+        profileId,
+      });
+      safeLog(`[compare-all] enfileirado job ${job.id} para ${products.length} produtos`);
+      res.json({ jobId: job.id, status: "queued" });
+      return;
+    }
+    res.status(503).json({ error: "Redis offline — compare-all requer Redis" });
+  } catch (error: any) {
+    safeLog("[compare-all] erro: " + error.message);
+    res.status(500).json({ error: error.message || "Failed to compare all" });
+  }
+});
+
   // System Status Endpoint
 
 app.get("/api/status", async (req, res) => {
