@@ -2728,7 +2728,7 @@ function ComparisonMatrix({ list, products, onClose }: { list: ProductList, prod
                             <img src={product.imageUrl} alt="" className="w-full h-full object-contain" referrerPolicy="no-referrer" />
                           ) : <Cpu size={14} className="text-crimson/20" />}
                         </div>
-                        <span className="font-bold group-hover:text-crimson transition-colors truncate max-w-[200px]">{product.name}</span>
+                        <span className="font-bold group-hover:text-crimson transition-colors truncate">{product.name}</span>
                       </div>
                     </td>
                     <td className="p-4 text-right">
