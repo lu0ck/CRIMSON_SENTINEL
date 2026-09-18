@@ -53,6 +53,7 @@ import { MercadoTab } from "./components/MercadoTab";
 import { BackupPanel } from "./components/BackupPanel";
 import { NotificationsTab } from "./components/NotificationsTab";
 import { SocialTab } from "./components/SocialTab";
+import { TriggersTab } from "./components/TriggersTab";
 import { PriceHistoryTab } from "./components/PriceHistoryTab";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 
@@ -164,7 +165,7 @@ export default function App() {
   }, [activeProfileId]);
   const [isCreatingProfile, setIsCreatingProfile] = useState(false);
   const [newProfileName, setNewProfileName] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "mercado" | "settings" | "local" | "alerts" | "social" | "history">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "mercado" | "settings" | "local" | "alerts" | "social" | "triggers" | "history">("dashboard");
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [isAddingList, setIsAddingList] = useState(false);
@@ -1642,6 +1643,12 @@ const queued = await response.json();
             badge={notificationsCount}
           />
           <NavButton 
+            active={activeTab === "triggers"} 
+            onClick={() => { playSound('click'); setActiveTab("triggers"); }}
+            icon={<ShieldAlert size={24} />}
+            label="TRIGGERS"
+          />
+          <NavButton 
             active={activeTab === "history"} 
             onClick={() => { playSound('click'); setActiveTab("history"); }}
             icon={<Activity size={24} />}
@@ -2235,6 +2242,23 @@ const queued = await response.json();
               >
                 <ErrorBoundary fallbackLabel="ERRO NA ABA SOCIAL">
                   <SocialTab
+                    addToast={addToast}
+                    playSound={playSound}
+                    pollJob={pollJob}
+                  />
+                </ErrorBoundary>
+              </motion.div>
+            )}
+
+            {activeTab === "triggers" && (
+              <motion.div
+                key="triggers"
+                initial={{ opacity: 0, x: 20 }}
+                animate={{ opacity: 1, x: 0 }}
+                exit={{ opacity: 0, x: -20 }}
+              >
+                <ErrorBoundary fallbackLabel="ERRO NA ABA TRIGGERS">
+                  <TriggersTab
                     addToast={addToast}
                     playSound={playSound}
                     pollJob={pollJob}

@@ -4,7 +4,7 @@ export interface Trigger {
   id: string;
   name: string;
   entityType: "product" | "keyword" | "promo";
-  condition: "price_lte" | "price_drop_pct" | "contains" | "new_promo";
+  condition: "price_lte" | "price_drop_pct" | "price_trend" | "contains" | "new_promo";
   value: string;
   channels: string;
   enabled: boolean;

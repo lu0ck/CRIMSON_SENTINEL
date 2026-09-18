@@ -274,7 +274,7 @@ CREATE TABLE IF NOT EXISTS triggers (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
   entity_type TEXT NOT NULL CHECK (entity_type IN ('product', 'keyword', 'promo')),
-  condition TEXT NOT NULL CHECK (condition IN ('price_lte', 'price_drop_pct', 'contains', 'new_promo')),
+  condition TEXT NOT NULL CHECK (condition IN ('price_lte', 'price_drop_pct', 'price_trend', 'contains', 'new_promo')),
   value TEXT NOT NULL,
   channels TEXT NOT NULL DEFAULT 'discord',
   enabled INTEGER DEFAULT 1,

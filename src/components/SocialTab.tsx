@@ -80,15 +80,6 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [groupMessages, setGroupMessages] = useState<any[]>([]);
   const [whatsappGroups, setWhatsappGroups] = useState<{ id: string; name: string; members: number }[]>([]);
 
-  // FRENTE 4 — Triggers
-  const [triggers, setTriggers] = useState<any[]>([]);
-  const [showTriggerForm, setShowTriggerForm] = useState(false);
-  const [newTriggerName, setNewTriggerName] = useState("");
-  const [newTriggerEntity, setNewTriggerEntity] = useState<"product" | "keyword" | "promo">("keyword");
-  const [newTriggerCondition, setNewTriggerCondition] = useState<"price_lte" | "price_drop_pct" | "contains" | "new_promo">("contains");
-  const [newTriggerValue, setNewTriggerValue] = useState("");
-  const [newTriggerChannels, setNewTriggerChannels] = useState("discord");
-
   // ---- Instagram Stories (C3 — instagrapi) ----
   const [igEnabled, setIgEnabled] = useState(false);
   const [igOk, setIgOk] = useState(false);
@@ -149,15 +140,6 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     try {
       const data = await apiJson("/api/social/whatsapp/groups");
       setWhatsappGroups(data.groups || []);
-    } catch {
-      // ignore
-    }
-  };
-
-  const loadTriggers = async () => {
-    try {
-      const data = await apiJson("/api/triggers");
-      setTriggers(Array.isArray(data) ? data : []);
     } catch {
       // ignore
     }
@@ -251,7 +233,6 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     loadScanLog();
     loadGroupMessages();
     loadWhatsappGroups();
-    loadTriggers();
     loadIgCredentials();
     loadInstagramHealth();
     const t = setInterval(() => {
@@ -338,60 +319,6 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       toast("FALHA NO SCAN", "error", String(err?.message || err));
     } finally {
       setScanning(false);
-    }
-  };
-
-  const addTrigger = async () => {
-    if (!newTriggerName.trim() || !newTriggerValue.trim()) return;
-    try {
-      await apiJson("/api/triggers", {
-        method: "POST",
-        body: JSON.stringify({
-          name: newTriggerName,
-          entityType: newTriggerEntity,
-          condition: newTriggerCondition,
-          value: newTriggerValue,
-          channels: newTriggerChannels,
-        }),
-        headers: { "Content-Type": "application/json" },
-      });
-      toast("TRIGGER CRIADO", "success");
-      setShowTriggerForm(false);
-      setNewTriggerName("");
-      setNewTriggerValue("");
-      loadTriggers();
-    } catch (err: any) {
-      toast("FALHA AO CRIAR TRIGGER", "error", String(err?.message || err));
-    }
-  };
-
-  const toggleTrigger = async (id: string) => {
-    try {
-      await apiJson(`/api/triggers/${id}/toggle`, { method: "POST" });
-      loadTriggers();
-    } catch (err: any) {
-      toast("FALHA", "error", String(err?.message || err));
-    }
-  };
-
-  const deleteTrigger = async (id: string) => {
-    try {
-      await apiJson(`/api/triggers/${id}`, { method: "DELETE" });
-      toast("TRIGGER REMOVIDO", "info");
-      loadTriggers();
-    } catch (err: any) {
-      toast("FALHA", "error", String(err?.message || err));
-    }
-  };
-
-  const evaluateTriggers = async () => {
-    try {
-      const { jobId } = await apiJson("/api/triggers/evaluate", { method: "POST" });
-      await pollJob(jobId, undefined, 2000, 60_000, "social");
-      toast("TRIGGERS AVALIADOS", "info");
-      loadTriggers();
-    } catch (err: any) {
-      toast("FALHA", "error", String(err?.message || err));
     }
   };
 
@@ -715,107 +642,6 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
           </div>
         </section>
       )}
-
-      {/* ===== TRIGGERS (FRENTE 4) ===== */}
-      <section>
-        <div className="flex items-center justify-between">
-          <SectionTitle icon={<ShieldAlert size={16} />}>TRIGGERS — ALERTAS CONFIGURÁVEIS</SectionTitle>
-          <div className="flex items-center gap-2">
-            <button
-              onClick={() => { playSound("click"); evaluateTriggers(); }}
-              className="hud-button flex items-center gap-2 text-[10px]"
-            >
-              <Radio size={12} /> AVALIAR
-            </button>
-            <button
-              onClick={() => { playSound("click"); setShowTriggerForm(!showTriggerForm); }}
-              className="hud-button flex items-center gap-2"
-            >
-              <Plus size={14} /> NOVO TRIGGER
-            </button>
-          </div>
-        </div>
-
-        <AnimatePresence>
-          {showTriggerForm && (
-            <motion.div
-              initial={{ opacity: 0, height: 0 }}
-              animate={{ opacity: 1, height: "auto" }}
-              exit={{ opacity: 0, height: 0 }}
-              className="hud-border bg-black/40 p-5 mt-4 overflow-hidden"
-            >
-              <div className="grid grid-cols-2 gap-3">
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] font-mono text-crimson/50">NOME</label>
-                  <input className="hud-input" placeholder="Ex: Arroz abaixo de R$20" value={newTriggerName} onChange={(e) => setNewTriggerName(e.target.value)} />
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] font-mono text-crimson/50">TIPO</label>
-                  <select className="hud-input" value={newTriggerEntity} onChange={(e) => setNewTriggerEntity(e.target.value as any)}>
-                    <option value="keyword">KEYWORD (contém texto)</option>
-                    <option value="product">PRODUCT (preço ≤ X)</option>
-                    <option value="promo">PROMO (nova promoção)</option>
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] font-mono text-crimson/50">CONDIÇÃO</label>
-                  <select className="hud-input" value={newTriggerCondition} onChange={(e) => setNewTriggerCondition(e.target.value as any)}>
-                    <option value="contains">CONTÉM (keyword)</option>
-                    <option value="price_lte">PREÇO ≤ (product)</option>
-                    <option value="price_drop_pct">QUEDA % (product)</option>
-                    <option value="new_promo">NOVA PROMO (promo)</option>
-                  </select>
-                </div>
-                <div className="flex flex-col gap-1">
-                  <label className="text-[9px] font-mono text-crimson/50">VALOR</label>
-                  <input className="hud-input" placeholder={newTriggerEntity === "keyword" ? "arroz,leite,café" : newTriggerEntity === "product" ? "19.90" : "true"} value={newTriggerValue} onChange={(e) => setNewTriggerValue(e.target.value)} />
-                </div>
-                <div className="flex flex-col gap-1 col-span-2">
-                  <label className="text-[9px] font-mono text-crimson/50">CANAIS (separados por vírgula)</label>
-                  <input className="hud-input" placeholder="discord,telegram" value={newTriggerChannels} onChange={(e) => setNewTriggerChannels(e.target.value)} />
-                </div>
-              </div>
-              <div className="flex justify-end mt-3">
-                <button onClick={() => { playSound("click"); addTrigger(); }} className="hud-button flex items-center gap-2">
-                  <Plus size={14} /> CRIAR TRIGGER
-                </button>
-              </div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {triggers.length === 0 ? (
-          <div className="hud-border p-6 text-center text-crimson/30 font-mono mt-4">
-            NENHUM TRIGGER CONFIGURADO
-          </div>
-        ) : (
-          <div className="flex flex-col gap-2 mt-4">
-            {triggers.map((t) => (
-              <div key={t.id} className="hud-border bg-black/40 p-3 flex items-center justify-between gap-3">
-                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
-                  <span className="text-[11px] font-mono text-crimson/70 font-bold">{t.name}</span>
-                  <span className="text-[9px] font-mono text-crimson/40">
-                    {t.entityType} • {t.condition} • {t.value}
-                  </span>
-                  <span className="text-[8px] font-mono text-crimson/30">
-                    Canais: {t.channels} {t.lastFiredAt ? `• Último: ${new Date(t.lastFiredAt).toLocaleString("pt-BR")}` : ""}
-                  </span>
-                </div>
-                <div className="flex items-center gap-1">
-                  <button onClick={() => { playSound("click"); toggleTrigger(t.id); }}
-                    className={cn("text-[9px] font-mono px-2 py-1 border", t.enabled ? "border-green-500/30 text-green-500" : "border-crimson/30 text-crimson/40")}>
-                    {t.enabled ? "ON" : "OFF"}
-                  </button>
-                  <button onClick={() => { playSound("click"); deleteTrigger(t.id); }}
-                    className="text-crimson/50 hover:text-crimson transition-colors p-1">
-                    <Trash2 size={14} />
-                  </button>
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
 
       {/* ===== INSTAGRAM STORIES (C3 — instagrapi) ===== */}
       <section>

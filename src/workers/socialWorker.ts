@@ -515,6 +515,47 @@ async function handleTriggerEvaluate(
         }
         break;
       }
+      case "price_drop_pct": {
+        const minDropPct = parseFloat(trigger.value);
+        if (isNaN(minDropPct)) break;
+        const products = (await import("../repositories/productRepository.ts")).ProductRepository.getAll();
+        for (const p of products) {
+          if (p.currentPrice != null && p.previousPrice != null && p.previousPrice > 0) {
+            const dropPct = ((p.previousPrice - p.currentPrice) / p.previousPrice) * 100;
+            if (dropPct >= minDropPct) {
+              matched = true;
+              matchedValue = `${p.name}: R$ ${p.previousPrice} → R$ ${p.currentPrice} (${dropPct.toFixed(1)}% queda)`;
+              break;
+            }
+          }
+        }
+        break;
+      }
+      case "price_trend": {
+        const minConsecutive = parseInt(trigger.value) || 3;
+        const { getDb } = await import("../database/db.ts");
+        const products = (await import("../repositories/productRepository.ts")).ProductRepository.getAll();
+        for (const p of products) {
+          const history = getDb()
+            .prepare("SELECT price FROM price_history WHERE product_id = ? ORDER BY date DESC LIMIT ?")
+            .all(p.id, minConsecutive + 1) as { price: number }[];
+          if (history.length < minConsecutive + 1) continue;
+          let consecutive = 0;
+          for (let i = 0; i < history.length - 1; i++) {
+            if (history[i].price < history[i + 1].price) {
+              consecutive++;
+            } else {
+              break;
+            }
+          }
+          if (consecutive >= minConsecutive) {
+            matched = true;
+            matchedValue = `${p.name}: ${consecutive} quedas consecutivas (R$ ${history[0].price} → R$ ${history[history.length - 1].price})`;
+            break;
+          }
+        }
+        break;
+      }
       case "contains": {
         const keywords = trigger.value.toLowerCase().split(",").map((s) => s.trim());
         const recentPromos = (await import("../repositories/promotionRepository.ts")).PromotionRepository.getRecent?.(20) ?? [];
@@ -529,7 +570,6 @@ async function handleTriggerEvaluate(
         break;
       }
       case "new_promo": {
-        // Verifica se há promoções novas desde o último fire
         const recentPromos = (await import("../repositories/promotionRepository.ts")).PromotionRepository.getRecent?.(5) ?? [];
         if (recentPromos.length > 0) {
           matched = true;
