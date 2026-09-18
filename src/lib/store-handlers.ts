@@ -509,53 +509,75 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         ];
 
         var allPrices = [];
+        var pixPrices = [];
+        var pixKeywords = ['pix', 'à vista', 'a vista', 'avista', 'boleto', 'débito', 'debito'];
+        var parcelKeywords = ['\\d+x\\s*de', 'parcel', '\\d+\\s*veces'];
         
         for (var p = 0; p < patterns.length; p++) {
           var matches = body.match(patterns[p]) || [];
           for (var m = 0; m < matches.length; m++) {
             var matchText = matches[m];
-            // Filtrar textos de parcelamento ("12x de R$ 14,99", "parcel")
-            var contextStart = Math.max(0, body.indexOf(matchText) - 50);
-            var contextEnd = Math.min(body.length, body.indexOf(matchText) + matchText.length + 50);
+            var contextStart = Math.max(0, body.indexOf(matchText) - 80);
+            var contextEnd = Math.min(body.length, body.indexOf(matchText) + matchText.length + 80);
             var context = body.substring(contextStart, contextEnd).toLowerCase();
             
             // Pular se é texto de parcelamento
-            if (/\\d+x\\s*de|parcel|\\d+\\s*veces/i.test(context)) {
-              console.log("[Terabyte] Skipping installment price: " + matchText);
-              continue;
+            var isParcel = false;
+            for (var pk = 0; pk < parcelKeywords.length; pk++) {
+              if (new RegExp(parcelKeywords[pk], 'i').test(context)) { isParcel = true; break; }
             }
+            if (isParcel) continue;
             
             var parsed = parseBrazilianPrice(matchText);
             if (isValidPrice(parsed)) {
               allPrices.push(parsed);
+              // Verificar se contexto menciona Pix/à vista
+              var hasPixKeyword = false;
+              for (var pk = 0; pk < pixKeywords.length; pk++) {
+                if (context.indexOf(pixKeywords[pk]) !== -1) { hasPixKeyword = true; break; }
+              }
+              if (hasPixKeyword) {
+                pixPrices.push(parsed);
+              }
             }
           }
         }
 
         // Remover duplicatas e ordenar
+        var uniquePixPrices = [];
+        for (var i = 0; i < pixPrices.length; i++) {
+          if (uniquePixPrices.indexOf(pixPrices[i]) === -1) uniquePixPrices.push(pixPrices[i]);
+        }
+        uniquePixPrices.sort(function(a, b) { return a - b; });
+
         var uniquePrices = [];
         for (var i = 0; i < allPrices.length; i++) {
-          if (uniquePrices.indexOf(allPrices[i]) === -1) {
-            uniquePrices.push(allPrices[i]);
-          }
+          if (uniquePrices.indexOf(allPrices[i]) === -1) uniquePrices.push(allPrices[i]);
         }
         uniquePrices.sort(function(a, b) { return a - b; });
 
-        console.log("[Terabyte] Prices found in body: " + JSON.stringify(uniquePrices.slice(0, 5)));
+        console.log("[Terabyte] Pix prices: " + JSON.stringify(uniquePixPrices.slice(0, 3)) + " | All: " + JSON.stringify(uniquePrices.slice(0, 5)));
 
-        if (uniquePrices.length > 0) {
-          // Pegar o menor preço válido (provavelmente à vista/Pix)
-          // Mas não pegar preços absurdamente baixos (< R$ 50 provavelmente é erro)
+        // Priorizar preço Pix/à vista (menor >= 50)
+        if (uniquePixPrices.length > 0) {
+          for (var j = 0; j < uniquePixPrices.length; j++) {
+            if (uniquePixPrices[j] >= 50) {
+              price = uniquePixPrices[j];
+              break;
+            }
+          }
+        }
+        // Fallback: menor preço válido
+        if (!isValidPrice(price) && uniquePrices.length > 0) {
           for (var j = 0; j < uniquePrices.length; j++) {
             if (uniquePrices[j] >= 50) {
               price = uniquePrices[j];
               break;
             }
           }
-          // Se todos são < 50, pegar o menor mesmo assim
-          if (!isValidPrice(price) && uniquePrices.length > 0) {
-            price = uniquePrices[0];
-          }
+        }
+        if (!isValidPrice(price) && uniquePrices.length > 0) {
+          price = uniquePrices[0];
         }
       }
 
@@ -567,7 +589,12 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
       var nameEl = document.querySelector("h1") || document.querySelector("title");
       var imageEl = document.querySelector('meta[property="og:image"]');
       var bodyLower = body.toLowerCase();
-      var available = bodyLower.indexOf("esgotado") === -1 && bodyLower.indexOf("indisponível") === -1;
+      var available = bodyLower.indexOf("esgotado") === -1 
+        && bodyLower.indexOf("indisponível") === -1
+        && bodyLower.indexOf("indisponivel") === -1
+        && bodyLower.indexOf("sem estoque") === -1
+        && bodyLower.indexOf("fora de estoque") === -1
+        && bodyLower.indexOf("avise-me") === -1;
 
 	return {
 	name: nameEl && nameEl.textContent && nameEl.textContent.trim() || "",

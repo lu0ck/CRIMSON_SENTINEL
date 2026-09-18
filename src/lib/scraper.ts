@@ -505,7 +505,10 @@ function mergeResults(partials: ScrapeResult[]): ScrapeResult | null {
     };
     return quality(b) - quality(a);
   });
-  const priceSrc = priceCandidates.find((r) => r.available !== false) || priceCandidates[0];
+  // Preferir resultados disponíveis. Se TODOS dizem unavailable, aceitar o melhor
+  // mesmo assim (o chamador pode decidir o que fazer com available=false).
+  const availableCandidates = priceCandidates.filter((r) => r.available !== false);
+  const priceSrc = availableCandidates.length > 0 ? availableCandidates[0] : priceCandidates[0];
 
   // MELHOR FOTO
   let bestImage: string | undefined;
@@ -1518,7 +1521,7 @@ async function scrapeWithFetch(url: string): Promise<ScrapeResult | null> {
       name,
       price: sanitizePrice(price),
       currency: "BRL",
-      available: price > 0,
+      available: price > 0 && !(data.jsonLdAvailability && data.jsonLdAvailability.includes("OutOfStock")),
       imageUrl: pickBestImage(data),
       nameSource: source,
       priceConfirmed: confirmed,

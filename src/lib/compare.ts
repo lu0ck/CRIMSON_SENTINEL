@@ -14,7 +14,7 @@ export function normalize(name: string): string {
 }
 
 export const QUERY_STOPWORDS = new Set([
-  "preto", "white", "branco", "black", "gamer",
+  "gamer",
   "sem", "com", "para", "fans", "vidro", "temperado",
   "atx", "e-atx", "mid", "tower", "miniatx", "matx", "full", "rgb", "argb",
   "pfc", "ativo", "modular", "certificado", "desktop", "servidor", "preco",
