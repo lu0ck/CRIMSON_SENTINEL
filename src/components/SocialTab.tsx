@@ -717,7 +717,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       <div className="border border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
         <ShieldAlert size={16} className="text-amber-500 shrink-0 mt-0.5" />
         <p className="text-[10px] font-mono text-amber-500/70 leading-relaxed">
-          SENTINELL CAPTURA PROMOÇÕES VIA TEXTO COLADO, STORIES DO INSTAGRAM (instagrapi + GEMINI VISION)
+          SENTINELA CAPTURA PROMOÇÕES VIA TEXTO COLADO, STORIES DO INSTAGRAM (instagrapi + GEMINI VISION)
           E CAPTIONS DE PERFIS PÚBLICOS. AS PROMOÇÕES DETECTADAS SÃO SALVAS NA ABA LOCAL E DISPARAM
           ALERTAS NOS CANAIS CONFIGURADOS. O MONITORAMENTO DO INSTAGRAM EXIGE CONTA SECUNDÁRIA E PODE
           RESULTAR EM BANIMENTO — USE COM DISCERNIMENTO.

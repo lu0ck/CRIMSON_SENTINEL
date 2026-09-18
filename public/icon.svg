@@ -51,5 +51,5 @@
   <line x1="166" y1="160" x2="166" y2="150" stroke="#DC143C" stroke-width="1" opacity="0.5"/>
 
   <!-- Text -->
-  <text x="128" y="210" text-anchor="middle" fill="#DC143C" font-family="monospace" font-size="10" font-weight="bold" letter-spacing="3" opacity="0.8">SENTINELL</text>
+  <text x="128" y="210" text-anchor="middle" fill="#DC143C" font-family="monospace" font-size="10" font-weight="bold" letter-spacing="3" opacity="0.8">SENTINELA</text>
 </svg>

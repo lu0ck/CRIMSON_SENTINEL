@@ -1287,7 +1287,7 @@ const queued = await response.json();
             <div className="h-6 bg-black/80 border-b border-crimson/20 flex items-center justify-between px-4 z-[100] app-drag">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-crimson animate-pulse" />
-                <span className="text-[8px] font-mono text-crimson/50 tracking-widest">SENTINELL_HUD_ACTIVE</span>
+                <span className="text-[8px] font-mono text-crimson/50 tracking-widest">SENTINELA_HUD_ACTIVE</span>
               </div>
           <div className="flex items-center gap-2 app-no-drag">
             <button onClick={minimizeApp} className="text-crimson/30 hover:text-crimson transition-colors p-1">
@@ -1311,7 +1311,7 @@ const queued = await response.json();
             >
               <div className="text-center">
                 <Cpu className="text-crimson mx-auto mb-4 animate-pulse" size={48} />
-                <h1 className="text-2xl font-mono font-bold glow-text tracking-tighter">SENTINELL</h1>
+                <h1 className="text-2xl font-mono font-bold glow-text tracking-tighter">SENTINELA</h1>
                 <p className="text-[10px] font-mono text-crimson/50 mt-2 tracking-widest">SELECT OPERATOR PROFILE</p>
               </div>
               
@@ -1406,7 +1406,7 @@ const queued = await response.json();
           <div className="h-6 bg-black/80 border-b border-crimson/20 flex items-center justify-between px-4 z-[100] app-drag">
             <div className="flex items-center gap-2">
               <div className="w-2 h-2 rounded-full bg-crimson animate-pulse" />
-              <span className="text-[8px] font-mono text-crimson/50 tracking-widest">SENTINELL_HUD_ACTIVE</span>
+              <span className="text-[8px] font-mono text-crimson/50 tracking-widest">SENTINELA_HUD_ACTIVE</span>
             </div>
           <div className="flex items-center gap-2 app-no-drag">
             <button onClick={minimizeApp} className="text-crimson/30 hover:text-crimson transition-colors p-1">
@@ -1480,7 +1480,7 @@ const queued = await response.json();
         <div className="h-6 bg-black/80 border-b border-crimson/20 flex items-center justify-between px-4 z-[100] app-drag">
           <div className="flex items-center gap-2">
             <div className="w-2 h-2 rounded-full bg-crimson animate-pulse" />
-            <span className="text-[8px] font-mono text-crimson/50 tracking-widest">SENTINELL_HUD_ACTIVE</span>
+            <span className="text-[8px] font-mono text-crimson/50 tracking-widest">SENTINELA_HUD_ACTIVE</span>
           </div>
           <div className="flex items-center gap-2 app-no-drag">
             <button onClick={minimizeApp} className="text-crimson/30 hover:text-crimson transition-colors p-1">
@@ -1501,7 +1501,7 @@ const queued = await response.json();
         <div className="flex items-center gap-4">
           <Cpu className="text-crimson animate-pulse" size={24} />
           <h1 className="text-xl font-mono font-bold tracking-tighter glow-text">
-            SENTINELL <span className="text-[10px] text-crimson/50 align-top">v2.0.0</span>
+            SENTINELA <span className="text-[10px] text-crimson/50 align-top">v2.0.0</span>
           </h1>
         </div>
         

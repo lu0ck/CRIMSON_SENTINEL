@@ -54,7 +54,7 @@ getDb();
 
 async function startServer() {
   console.log("=".repeat(80));
-  console.log("SENTINELL SERVER STARTING...");
+  console.log("SENTINELA SERVER STARTING...");
   console.log("Time:", new Date().toISOString());
   console.log("Node Env:", process.env.NODE_ENV);
   console.log("=".repeat(80));
@@ -318,7 +318,7 @@ app.post("/api/compare", async (req, res) => {
             model: AI_MODELS.TEXT,
             contents: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`,
             config: {
-              systemInstruction: `Você é o SENTINELL, um agente de inteligência de mercado de elite.
+              systemInstruction: `Você é o SENTINELA, um agente de inteligência de mercado de elite.
               FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (preços em BRL no site Brasil).
               A URL DEVE ser a página EXATA do produto (NUNCA catálogo, busca, categoria ou produtos relacionados).
               O produto DEVE ser o MESMO modelo/SKU do usuário (confira o código, ex: KLK00094, KYBER850G-BKCBR). NUNCA um modelo parecido da mesma marca.
@@ -383,7 +383,7 @@ app.post("/api/compare", async (req, res) => {
         const response = await client.chat.completions.create({
           model: "mistralai/mistral-nemotron",
           messages: [
-            { role: "system", content: "Você é o SENTINELL, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
+            { role: "system", content: "Você é o SENTINELA, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
             { role: "user", content: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras. JSON:` },
           ],
           max_tokens: 800,
@@ -1546,7 +1546,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         exportedAt: new Date().toISOString(),
         data,
       };
-      const filename = `sentinell-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      const filename = `sentinela-backup-${new Date().toISOString().slice(0, 10)}.json`;
       res.setHeader("Content-Type", "application/json");
       res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
       res.json(backup);
@@ -1681,7 +1681,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
   app.listen(PORT, BIND_HOST, async () => {
     console.log("=".repeat(80));
-    console.log("SENTINELL SERVER RUNNING!");
+    console.log("SENTINELA SERVER RUNNING!");
     console.log("Port:", PORT);
     console.log("Time:", new Date().toISOString());
     console.log("Access: http://localhost:" + PORT);

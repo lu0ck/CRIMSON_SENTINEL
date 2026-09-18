@@ -292,7 +292,7 @@ export function summarizeInsights(insights: LocalInsights): string {
   return lines.join("\n");
 }
 
-// Prompt para o núcleo SENTINELL (Gemini) gerar análise em tom de HUD militar.
+// Prompt para o núcleo SENTINELA (Gemini) gerar análise em tom de HUD militar.
 export function buildInsightPrompt(insights: LocalInsights): string {
   const itemLines = insights.items
     .filter((i) => i.bestPrice > 0)
@@ -308,7 +308,7 @@ export function buildInsightPrompt(insights: LocalInsights): string {
     .map((e) => `- ${e.establishmentName}: R$ ${e.totalCost.toFixed(2)} (${e.coveredItems}/${insights.totalItems} itens)`)
     .join("\n");
 
-  return `Você é o SENTINELL, o sistema de inteligência de mercado do usuário. Analise os dados locais de compras abaixo e gere um relatório CURTO e DIRETO em português, tom de HUD militar (sem saudação, sem markdown pesado).
+  return `Você é o SENTINELA, o sistema de inteligência de mercado do usuário. Analise os dados locais de compras abaixo e gere um relatório CURTO e DIRETO em português, tom de HUD militar (sem saudação, sem markdown pesado).
 
 DADOS:
 - Itens na lista: ${insights.totalItems}

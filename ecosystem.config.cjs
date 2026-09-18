@@ -1,4 +1,4 @@
-// PM2 Ecosystem — SENTINELL
+// PM2 Ecosystem — SENTINELA
 // Processos separados para isolamento de falhas:
 //  - api: servidor Express (entrada única do usuário)
 //  - scan-worker: scraping, scan-all, compare, local-insight, analyze (A2), local-price-scan
@@ -18,7 +18,7 @@ const USER_DATA_PATH = path.join(os.homedir(), ".config", "crimson-sentinel");
 module.exports = {
   apps: [
     {
-      name: "sentinell-api",
+      name: "sentinela-api",
       script: "npm run dev",
       interpreter: "none",
       env: {
@@ -33,7 +33,7 @@ module.exports = {
       time: true,
     },
     {
-      name: "sentinell-scan-worker",
+      name: "sentinela-scan-worker",
       // Cluster mode exige script JS carregável direto pelo node (pm2 rejeita
       // .ts sem Node>=22.18). Bootstrap registra o hook tsx e importa o worker,
       // preservando IPC do cluster (.bin/tsx = shell wrapper; cli.mjs spawn de
@@ -54,7 +54,7 @@ module.exports = {
       time: true,
     },
     {
-      name: "sentinell-route-worker",
+      name: "sentinela-route-worker",
       script: "./node_modules/.bin/tsx",
       args: "src/workers/routeWorkerEntry.ts",
       env: {
@@ -67,7 +67,7 @@ module.exports = {
       time: true,
     },
     {
-      name: "sentinell-social-worker",
+      name: "sentinela-social-worker",
       script: "./node_modules/.bin/tsx",
       args: "src/workers/socialWorkerEntry.ts",
       env: {
@@ -83,7 +83,7 @@ module.exports = {
       // C3 — microserviço Python instagrapi. Só relevante se INSTAGRAM_ENABLED=true.
       // Sobe automaticamente; se usuário não usar Instagram, processo roda idle
       // (consome poucos recursos). Desativar via `pm2 stop crimson-instagram-service`.
-      name: "sentinell-instagram-service",
+      name: "sentinela-instagram-service",
       script: "python_instagram/.venv/bin/uvicorn",
       args: "python_instagram.server:app --host 127.0.0.1 --port 8721",
       interpreter: "none",

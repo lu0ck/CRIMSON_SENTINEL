@@ -222,7 +222,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `sentinell-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = `sentinela-backup-${new Date().toISOString().slice(0, 10)}.json`;
       a.click();
       URL.revokeObjectURL(url);
       toast("BACKUP EXPORTADO", "success");
@@ -320,7 +320,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       const result = await pollJob(jobId, undefined, 2000, 600_000, "scan");
       setAiText(result?.text || "");
       setAiMethod(result?.method || "");
-      toast("ANÁLISE SENTINELL CONCLUÍDA", "success");
+      toast("ANÁLISE SENTINELA CONCLUÍDA", "success");
     } catch (err: any) {
       toast("FALHA NA ANÁLISE COM IA", "error", String(err?.message || err));
     } finally {
@@ -1346,7 +1346,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
                     className="overflow-hidden border border-crimson/30 bg-crimson/5 p-4"
                   >
                     <div className="flex items-center gap-2 mb-2 text-[8px] font-mono text-crimson/50 tracking-widest">
-                      <Sparkles size={12} /> RELATÓRIO SENTINELL
+                      <Sparkles size={12} /> RELATÓRIO SENTINELA
                       {aiMethod && <span className="text-crimson/30">• {aiMethod.toUpperCase()}</span>}
                     </div>
                     <pre className="text-[11px] font-mono text-crimson/80 whitespace-pre-wrap font-sans">

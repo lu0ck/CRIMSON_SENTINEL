@@ -1,11 +1,11 @@
 {
-  "name": "sentinell",
+  "name": "sentinela",
   "private": true,
   "version": "2.0.0",
-  "description": "Sentinell — Monitor de preços e promoções locais",
+  "description": "Sentinela — Monitor de preços e promoções locais",
   "homepage": "https://github.com/lu0ck/CRIMSON_SENTINEL",
   "author": {
-    "name": "Sentinell",
+    "name": "Sentinela",
     "email": "lucasred071@gmail.com"
   },
   "type": "module",
@@ -30,8 +30,8 @@
     "clear-cache": "rm -rf .cache .cookies"
   },
   "build": {
-    "appId": "com.sentinell.app",
-    "productName": "Sentinell",
+    "appId": "com.sentinela.app",
+    "productName": "Sentinela",
     "directories": {
       "output": "release"
     },

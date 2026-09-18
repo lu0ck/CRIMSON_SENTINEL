@@ -175,7 +175,7 @@ export function enrichParsedPromos(
 // ---------------------------------------------------------------------------
 
 export function buildSocialParsePrompt(text: string): string {
-  return `Você é o núcleo SENTINELL de monitoramento social de preços.
+  return `Você é o núcleo SENTINELA de monitoramento social de preços.
 
 Analise o texto abaixo (capturado de WhatsApp/Instagram) e extraia TODAS as promoções de supermercado/loja mencionadas.
 
