@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { cn } from "../lib/cn";
 import {
   Store,
   ShoppingCart,
@@ -1360,8 +1361,4 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       </section>
     </div>
   );
-}
-
-function cn(...inputs: (string | false | null | undefined)[]) {
-  return inputs.filter(Boolean).join(" ");
 }

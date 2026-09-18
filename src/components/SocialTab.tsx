@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import { cn } from "../lib/cn";
 import {
   Radio,
   Loader2,
@@ -13,7 +14,6 @@ import {
   CheckCircle2,
   ShieldAlert,
   Clock,
-  QrCode,
   LogIn,
   Power,
 } from "lucide-react";
@@ -73,14 +73,8 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [nextSocialScanMinutes, setNextSocialScanMinutes] = useState<number | null>(null);
   const [savingInterval, setSavingInterval] = useState(false);
 
-  // ---- WhatsApp real (C2 — whatsapp-web.js) ----
-  const [waEnabled, setWaEnabled] = useState(false);
-  const [waReady, setWaReady] = useState(false);
-  const [waQrAnsi, setWaQrAnsi] = useState<string | null>(null);
-  const [waQrStatus, setWaQrStatus] = useState<string | null>(null);
-  const [waQrLoading, setWaQrLoading] = useState(false);
-  const [waScanning, setWaScanning] = useState(false);
-  const [waToggling, setWaToggling] = useState(false);
+  // Scan log
+  const [scanLogs, setScanLogs] = useState<any[]>([]);
 
   // ---- Instagram Stories (C3 — instagrapi) ----
   const [igEnabled, setIgEnabled] = useState(false);
@@ -120,6 +114,15 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     }
   };
 
+  const loadScanLog = async () => {
+    try {
+      const data = await apiJson("/api/social/scan-log?limit=15");
+      setScanLogs(Array.isArray(data) ? data : []);
+    } catch {
+      // ignore
+    }
+  };
+
   const loadSources = async () => {
     setLoading(true);
     try {
@@ -129,33 +132,6 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       toast("FALHA AO CARREGAR FONTES SOCIAIS", "error", String(err?.message || err));
     } finally {
       setLoading(false);
-    }
-  };
-
-  const loadWhatsAppStatus = async () => {
-    try {
-      const data = await apiJson("/api/social/whatsapp/status");
-      setWaEnabled(!!data.enabled);
-      setWaReady(!!data.ready);
-    } catch {
-      // flag desligada ou erro — mantém defaults
-    }
-  };
-
-  const toggleWhatsApp = async (enabled: boolean) => {
-    setWaToggling(true);
-    try {
-      await apiJson("/api/social/whatsapp/toggle", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled }),
-      });
-      setWaEnabled(enabled);
-      toast(enabled ? "WHATSAPP ATIVADO" : "WHATSAPP DESATIVADO", "success");
-    } catch (err: any) {
-      toast("FALHA AO ALTERAR WHATSAPP", "error", String(err?.message || err));
-    } finally {
-      setWaToggling(false);
     }
   };
 
@@ -232,12 +208,12 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     loadSources();
     loadSocialSettings();
     loadStatus();
-    loadWhatsAppStatus();
+    loadScanLog();
     loadIgCredentials();
     loadInstagramHealth();
     const t = setInterval(() => {
       loadStatus();
-      loadWhatsAppStatus();
+      loadScanLog();
       loadInstagramHealth();
     }, 60_000);
     return () => clearInterval(t);
@@ -313,69 +289,11 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       const { jobId } = await apiJson("/api/social/scan-all", { method: "POST" });
       const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
       toast(`SCAN CONCLUÍDO — ${result?.sources || 0} FONTE(S)`, "info");
+      loadScanLog();
     } catch (err: any) {
       toast("FALHA NO SCAN", "error", String(err?.message || err));
     } finally {
       setScanning(false);
-    }
-  };
-
-  const generateWhatsAppQr = async () => {
-    if (waQrLoading) return;
-    setWaQrLoading(true);
-    setWaQrAnsi(null);
-    setWaQrStatus(null);
-    try {
-      // Poll até o QR estar pronto (máx 15s)
-      let attempts = 0;
-      let data: any = null;
-      while (attempts < 15) {
-        data = await apiJson("/api/social/whatsapp/qr");
-        if (data.status === "qr" || data.status === "ready" || data.status === "pending_no_session") break;
-        if (data.status === "pending") {
-          setWaQrStatus("Iniciando sessão WhatsApp...");
-          await new Promise((r) => setTimeout(r, 1000));
-          attempts++;
-          continue;
-        }
-        break;
-      }
-      if (!data) {
-        toast("FALHA AO GERAR QR", "error", "Timeout aguardando sessão");
-        return;
-      }
-      setWaQrAnsi(data.qrAnsi ?? null);
-      setWaQrStatus(data.message ?? null);
-      if (data.status === "qr") {
-        playSound("scan");
-        toast("QR DO WHATSAPP GERADO", "info", "Escaneie com o WhatsApp do número secundário");
-      } else if (data.status === "ready") {
-        setWaReady(true);
-        toast("WHATSAPP JÁ AUTENTICADO", "success");
-      } else if (data.status === "pending") {
-        setWaQrStatus("QR não disponível ainda. Tente novamente em alguns segundos.");
-      }
-      loadWhatsAppStatus();
-    } catch (err: any) {
-      toast("FALHA AO GERAR QR", "error", String(err?.message || err));
-    } finally {
-      setWaQrLoading(false);
-    }
-  };
-
-  const scanWhatsApp = async () => {
-    if (waScanning) return;
-    setWaScanning(true);
-    try {
-      const { jobId } = await apiJson("/api/social/whatsapp/scan", { method: "POST" });
-      const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
-      const n = Number(result?.saved ?? 0);
-      toast(`SCAN WHATSAPP CONCLUÍDO — ${n} PROMOÇÃO(ÕES)`, n > 0 ? "success" : "info");
-      loadWhatsAppStatus();
-    } catch (err: any) {
-      toast("FALHA NO SCAN WHATSAPP", "error", String(err?.message || err));
-    } finally {
-      setWaScanning(false);
     }
   };
 
@@ -636,90 +554,25 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
         </div>
       </section>
 
-      {/* ===== WHATSAPP REAL (C2 — whatsapp-web.js) ===== */}
-      <section>
-        <div className="flex items-center justify-between">
-          <SectionTitle icon={<MessageSquare size={16} />}>WHATSAPP REAL — STATUS DOS CONTATOS</SectionTitle>
-          <div className="flex items-center gap-2">
-            <span className={cn("text-[9px] font-mono", waEnabled ? (waReady ? "text-green-500" : "text-amber-500") : "text-crimson/40")}>
-              {waEnabled ? (waReady ? "● CONECTADO" : "○ NÃO AUTENTICADO") : "● DESLIGADO"}
-            </span>
-            {waEnabled && (
-              <button
-                onClick={() => { playSound("click"); toggleWhatsApp(false).catch(() => {}); }}
-                disabled={waToggling}
-                className="hud-button flex items-center gap-2 text-red-400 disabled:opacity-50"
-              >
-                DESATIVAR
-              </button>
-            )}
-            <button
-              onClick={() => { playSound("click"); generateWhatsAppQr().catch(() => {}); }}
-              disabled={waQrLoading || !waEnabled}
-              className="hud-button flex items-center gap-2 disabled:opacity-50"
-              title="Gera/atualiza o QR de conexão"
-            >
-              {waQrLoading ? <Loader2 size={14} className="animate-spin" /> : <QrCode size={14} />}
-              {waQrLoading ? "GERANDO..." : "GERAR QR"}
-            </button>
-            <button
-              onClick={() => { playSound("click"); scanWhatsApp().catch(() => {}); }}
-              disabled={waScanning || !waReady}
-              className="hud-button flex items-center gap-2 disabled:opacity-50"
-            >
-              {waScanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
-              {waScanning ? "ESCANEANDO..." : "SCAN STATUS"}
-            </button>
-          </div>
-        </div>
-
-        <div className="hud-border bg-black/40 p-5 mt-4">
-          {!waEnabled ? (
-            <div className="flex flex-col gap-3">
-              <div className="flex items-start gap-3">
-                <MessageSquare size={14} className="text-crimson shrink-0 mt-0.5" />
-                <p className="text-[10px] font-mono text-crimson/70 leading-relaxed">
-                  Ative o WhatsApp para monitorar Status dos contatos cadastrados.
-                  Use sempre um número secundário — existe risco de banimento.
-                </p>
-              </div>
-              <button
-                onClick={() => { playSound("click"); toggleWhatsApp(true).catch(() => {}); }}
-                disabled={waToggling}
-                className="hud-button self-start flex items-center gap-2 disabled:opacity-50"
-              >
-                {waToggling ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
-                {waToggling ? "ATIVANDO..." : "ATIVAR WHATSAPP"}
-              </button>
-            </div>
-          ) : waReady ? (
-            <div className="flex flex-col gap-2">
-              <div className="flex items-center gap-2 text-[10px] font-mono text-green-500">
-                <CheckCircle2 size={14} /> SESSÃO AUTENTICADA — PRONTO PARA SCAN DE STATUS
-              </div>
-              <p className="text-[9px] font-mono text-crimson/40">
-                O SCAN LÊ OS STATUS DOS CONTATOS EM establishments.whatsapp_number E EXTRAI PROMOÇÕES
-                (throttle configurável em user_settings.whatsapp_scan_per_contact_min).
-              </p>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-3">
-              <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
-                Abra o WhatsApp no celular (número secundário) → Configurações → Aparelhos conectados →
-                Conectar aparelho → aponte a câmera para o QR abaixo.
-              </p>
-              {waQrAnsi ? (
-                <div className="flex flex-col items-center gap-2">
-                  <pre className="font-mono text-[6px] leading-[1.1] text-crimson whitespace-pre">{waQrAnsi}</pre>
-                  <span className="text-[9px] font-mono text-crimson/40">ESCANEIE COM O WHATSAPP DO CELULAR</span>
+      {/* ===== SCAN LOG ===== */}
+      {scanLogs.length > 0 && (
+        <section>
+          <SectionTitle icon={<Clock size={16} />}>LOG DE ATIVIDADE</SectionTitle>
+          <div className="hud-border bg-black/40 p-4 mt-4 flex flex-col gap-2 max-h-64 overflow-y-auto">
+            {scanLogs.map((log) => (
+              <div key={log.id} className="flex items-start gap-3 border-b border-crimson/10 pb-2 last:border-0">
+                <span className={`text-[9px] font-mono mt-0.5 ${log.title?.includes("ENCONTRADO") ? "text-green-500" : log.title?.includes("FALHA") || log.title?.includes("SEM RESULTADOS") ? "text-amber-500" : "text-crimson/50"}`}>
+                  {log.title?.includes("ENCONTRADO") ? "●" : log.title?.includes("FALHA") ? "✗" : "○"}
+                </span>
+                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                  <span className="text-[10px] font-mono text-crimson/70 truncate">{log.message}</span>
+                  <span className="text-[8px] font-mono text-crimson/30">{new Date(log.sentAt).toLocaleString("pt-BR")}</span>
                 </div>
-              ) : (
-                <p className="text-[10px] font-mono text-crimson/40">{waQrStatus ?? "NENHUM QR DISPONÍVEL AINDA — CLIQUE EM GERAR QR"}</p>
-              )}
-            </div>
-          )}
-        </div>
-      </section>
+              </div>
+            ))}
+          </div>
+        </section>
+      )}
 
       {/* ===== INSTAGRAM STORIES (C3 — instagrapi) ===== */}
       <section>
@@ -864,16 +717,12 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       <div className="border border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
         <ShieldAlert size={16} className="text-amber-500 shrink-0 mt-0.5" />
         <p className="text-[10px] font-mono text-amber-500/70 leading-relaxed">
-          SENTINEL CAPTURA PROMOÇÕES VIA TEXTO COLADO (WHATSAPP), STATUS REAIS (whatsapp-web.js, C2),
-          STORIES (instagrapi + GEMINI VISION, C3) E CAPTIONS DE PERFIS PÚBLICOS. AS PROMOÇÕES
-          DETECTADAS SÃO SALVAS NA ABA LOCAL E DISPARAM ALERTAS NOS CANAIS CONFIGURADOS. MÓDULOS C2/C3
-          EXIGEM CONTA SECUNDÁRIA E PODEM RESULTAR EM BANIMENTO — USE COM DISCERNIMENTO.
+          SENTINEL CAPTURA PROMOÇÕES VIA TEXTO COLADO, STORIES DO INSTAGRAM (instagrapi + GEMINI VISION)
+          E CAPTIONS DE PERFIS PÚBLICOS. AS PROMOÇÕES DETECTADAS SÃO SALVAS NA ABA LOCAL E DISPARAM
+          ALERTAS NOS CANAIS CONFIGURADOS. O MONITORAMENTO DO INSTAGRAM EXIGE CONTA SECUNDÁRIA E PODE
+          RESULTAR EM BANIMENTO — USE COM DISCERNIMENTO.
         </p>
       </div>
     </div>
   );
-}
-
-function cn(...inputs: (string | false | null | undefined)[]) {
-  return inputs.filter(Boolean).join(" ");
 }

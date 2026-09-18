@@ -93,4 +93,16 @@ export const NotificationRepository = {
       entityId
     );
   },
+
+  getScanLog(limit = 20): NotificationLogEntry[] {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT * FROM notification_log
+         WHERE entity_type IN ('compare', 'social', 'scrape')
+         ORDER BY id DESC LIMIT ?`
+      )
+      .all(limit) as NotificationLogRow[];
+    return rows.map(rowToEntry);
+  },
 };

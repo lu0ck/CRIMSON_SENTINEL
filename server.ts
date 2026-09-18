@@ -1139,6 +1139,15 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  app.get("/api/social/scan-log", (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 20;
+      res.json(NotificationRepository.getScanLog(limit));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // C2 — endpoints WhatsApp real (whatsapp-web.js)
   // Toggle WhatsApp on/off via DB (sem .env)
   app.get("/api/social/whatsapp/toggle", (_req, res) => {
