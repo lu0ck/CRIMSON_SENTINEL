@@ -504,8 +504,7 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
         // Buscar padrões de preço brasileiro no texto
         var patterns = [
           /R?\\$\\s*[\\d.,]+/gi,
-          /\\d{1,3}(?:\\.\\d{3})*,\\d{2}/g,
-          /\\d+,\\d{2}/g
+          /\\d{1,3}(?:\\.\\d{3})*,\\d{2}/g
         ];
 
         var allPrices = [];
@@ -517,8 +516,8 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
           var matches = body.match(patterns[p]) || [];
           for (var m = 0; m < matches.length; m++) {
             var matchText = matches[m];
-            var contextStart = Math.max(0, body.indexOf(matchText) - 80);
-            var contextEnd = Math.min(body.length, body.indexOf(matchText) + matchText.length + 80);
+            var contextStart = Math.max(0, body.indexOf(matchText) - 40);
+            var contextEnd = Math.min(body.length, body.indexOf(matchText) + matchText.length + 40);
             var context = body.substring(contextStart, contextEnd).toLowerCase();
             
             // Pular se é texto de parcelamento
@@ -558,12 +557,18 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
 
         console.log("[Terabyte] Pix prices: " + JSON.stringify(uniquePixPrices.slice(0, 3)) + " | All: " + JSON.stringify(uniquePrices.slice(0, 5)));
 
-        // Priorizar preço Pix/à vista (menor >= 50)
+        // Priorizar preço Pix/à vista com mais ocorrências (moda)
+        var freqMap = {};
+        for (var j = 0; j < allPrices.length; j++) {
+          var key = String(allPrices[j]);
+          freqMap[key] = (freqMap[key] || 0) + 1;
+        }
+        var bestFreq = 0;
         if (uniquePixPrices.length > 0) {
           for (var j = 0; j < uniquePixPrices.length; j++) {
             if (uniquePixPrices[j] >= 50) {
-              price = uniquePixPrices[j];
-              break;
+              var freq = freqMap[String(uniquePixPrices[j])] || 0;
+              if (freq > bestFreq) { price = uniquePixPrices[j]; bestFreq = freq; }
             }
           }
         }

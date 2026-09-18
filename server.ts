@@ -1049,7 +1049,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   app.get("/api/notifications", (req, res) => {
     try {
       const limit = Number(req.query.limit) || 50;
-      res.json(NotificationRepository.getAll(limit));
+      const profileId = req.query.profileId as string | undefined;
+      if (profileId) {
+        res.json(NotificationRepository.getByProfile(profileId, limit));
+      } else {
+        res.json(NotificationRepository.getAll(limit));
+      }
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

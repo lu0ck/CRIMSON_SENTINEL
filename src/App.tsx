@@ -278,7 +278,7 @@ export default function App() {
 
   const loadNotificationsCount = async () => {
     try {
-      const response = await fetch("/api/notifications?limit=1000");
+      const response = await fetch(`/api/notifications?limit=1000&profileId=${activeProfileId}`);
       if (response.ok) {
         const data = await response.json();
         setNotificationsCount(Array.isArray(data) ? data.length : 0);
@@ -347,6 +347,7 @@ export default function App() {
   const isElectron = navigator.userAgent.toLowerCase().includes('electron');
 
   const saveData = async (newData: AppData) => {
+    setData(newData);
     try {
       const response = await fetch("/api/data", {
         method: "POST",
@@ -354,7 +355,6 @@ export default function App() {
         body: JSON.stringify(newData)
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      setData(newData);
     } catch (error) {
       console.error("Failed to save data", error);
       addToast("SYNC FAILURE: DATA NOT PERSISTED", "error");
@@ -528,6 +528,24 @@ export default function App() {
       return entry;
     });
   }, [profileProducts, profileLists]);
+
+  const selectedListHistoryData = React.useMemo(() => {
+    if (!selectedListId) return [];
+    const listProducts = profileProducts.filter(p => p.listId === selectedListId);
+    if (listProducts.length === 0) return [];
+    const allDates = Array.from(new Set(
+      listProducts.flatMap(p => p.priceHistory.map(h => h.date))
+    )).sort();
+    return allDates.map(date => {
+      const totalValue = listProducts.reduce((sum, product) => {
+        const historyEntry = [...product.priceHistory]
+          .reverse()
+          .find(h => h.date <= date);
+        return sum + (historyEntry ? historyEntry.price : 0);
+      }, 0);
+      return { date: new Date(date).toLocaleDateString(), value: totalValue };
+    });
+  }, [profileProducts, selectedListId]);
 
   const closeApp = () => {
     if (isElectron) {
@@ -1723,11 +1741,14 @@ const queued = await response.json();
                           fontFamily="monospace" 
                           tickLine={false}
                           axisLine={false}
-                          tickFormatter={(val) => `BRL ${val}`}
+                          tickFormatter={(val) => `R$ ${Number(val).toFixed(2)}`}
+                          domain={["auto", "auto"]}
                         />
                         <Tooltip 
                           contentStyle={{ backgroundColor: '#000', border: '1px solid #900', borderRadius: '0px', fontFamily: 'monospace' }}
                           itemStyle={{ color: '#f00' }}
+                          formatter={(value: number) => [`R$ ${Number(value).toFixed(2)}`, undefined]}
+                          labelFormatter={(label) => `Data: ${label}`}
                         />
                         {profileLists.map((list, idx) => (
                           <Line 
@@ -1879,6 +1900,33 @@ const queued = await response.json();
                         </button>
                       </div>
                     </div>
+
+                    {selectedListHistoryData.length > 0 && (
+                      <div className="mb-6">
+                        <h3 className="text-[10px] font-mono text-crimson/40 tracking-[0.2em] mb-2">
+                          HISTÓRICO DE PREÇO — {profileLists.find(l => l.id === selectedListId)?.name.toUpperCase()}
+                        </h3>
+                        <div className="hud-border bg-black/40 p-4 h-48">
+                          <ResponsiveContainer width="100%" height="100%">
+                            <LineChart data={selectedListHistoryData}>
+                              <CartesianGrid strokeDasharray="3 3" stroke="#222" vertical={false} />
+                              <XAxis dataKey="date" stroke="#444" fontSize={9} fontFamily="monospace" tickLine={false} axisLine={false} />
+                              <YAxis stroke="#444" fontSize={9} fontFamily="monospace" tickLine={false} axisLine={false}
+                                tickFormatter={(val) => `R$ ${Number(val).toFixed(2)}`}
+                                domain={["auto", "auto"]}
+                              />
+                              <Tooltip 
+                                contentStyle={{ backgroundColor: '#000', border: '1px solid #900', borderRadius: '0px', fontFamily: 'monospace' }}
+                                formatter={(value: number) => [`R$ ${Number(value).toFixed(2)}`, "VALOR"]}
+                                labelFormatter={(label) => `Data: ${label}`}
+                              />
+                              <Line type="monotone" dataKey="value" stroke="#f00" strokeWidth={2}
+                                dot={{ r: 3, fill: '#f00', strokeWidth: 0 }} connectNulls />
+                            </LineChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                    )}
 
                     <div className="grid grid-cols-1 gap-4">
                       {profileProducts.filter(p => p.listId === selectedListId).map((product, idx) => (

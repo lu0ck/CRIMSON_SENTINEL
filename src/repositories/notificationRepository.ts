@@ -73,6 +73,19 @@ export const NotificationRepository = {
     return rows.map(rowToEntry);
   },
 
+  getByProfile(profileId: string, limit = 50): NotificationLogEntry[] {
+    const db = getDb();
+    const rows = db
+      .prepare(
+        `SELECT n.* FROM notification_log n
+         INNER JOIN products p ON n.entity_id = p.id
+         WHERE p.profile_id = ?
+         ORDER BY n.id DESC LIMIT ?`
+      )
+      .all(profileId, limit) as NotificationLogRow[];
+    return rows.map(rowToEntry);
+  },
+
   deleteByEntity(entityType: string, entityId: string): void {
     const db = getDb();
     db.prepare("DELETE FROM notification_log WHERE entity_type = ? AND entity_id = ?").run(
