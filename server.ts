@@ -479,23 +479,22 @@ app.get("/api/status", async (req, res) => {
     status.redis.connected = isRedisAvailable();
   } catch {}
 
-  // Test LM Studio connection
-  if (profile?.lmStudioUrl) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 5000);
-      const response = await fetch(`${profile.lmStudioUrl.replace(/\/v1$/, '')}/v1/models`, {
-        signal: controller.signal
-      });
-      clearTimeout(timeoutId);
-      if (response.ok) {
-        const models = await response.json();
-        status.lmStudio.connected = true;
-        status.lmStudio.model = models.data?.[0]?.id || "unknown";
-      }
-    } catch (e) {
-      safeLog(`LM Studio status check failed: ${e}`);
+  // Test LM Studio connection (fallback para localhost:44277 se profile não tem URL)
+  const lmStudioUrl = profile?.lmStudioUrl || "http://127.0.0.1:44277/v1";
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+    const response = await fetch(`${lmStudioUrl.replace(/\/v1$/, '')}/v1/models`, {
+      signal: controller.signal
+    });
+    clearTimeout(timeoutId);
+    if (response.ok) {
+      const models = await response.json();
+      status.lmStudio.connected = true;
+      status.lmStudio.model = models.data?.[0]?.id || "unknown";
     }
+  } catch (e) {
+    safeLog(`LM Studio status check failed: ${e}`);
   }
 
   // Check API keys

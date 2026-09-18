@@ -176,7 +176,8 @@ export function sameProduct(productName: string, pageTitle: string): boolean {
   const skus = extractModelTokens(productName);
 
   if (skus.length > 0) {
-    if (!skus.every((s) => pageTitle.toLowerCase().includes(s))) return false;
+    const normalizedTitle = pageTitle.toLowerCase().replace(/[-\s]/g, '');
+    if (!skus.every((s) => normalizedTitle.includes(s.toLowerCase()))) return false;
     if (titleSimilarity(productName, pageTitle) < TITLE_SIM_THRESHOLD) return false;
 
     const category = getCategoryKeywords(productName);

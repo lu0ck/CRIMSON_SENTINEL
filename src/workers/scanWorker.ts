@@ -331,6 +331,7 @@ async function runComparison(
     } catch (err: any) {
       safeLog(`[compare] Tavily falhou: ${err.message || err}`);
     }
+    safeLog(`[compare] Tavily retornou ${items.length} resultados`);
   }
   if (items.length === 0 && profile?.serperApiKey) {
     try {
@@ -351,6 +352,7 @@ async function runComparison(
     } catch (err: any) {
       safeLog(`[compare] Serper falhou: ${err.message || err}`);
     }
+    safeLog(`[compare] Serper retornou ${items.length} resultados`);
   }
 
   // Filtrar snippets com keywords de esgotamento.
@@ -505,6 +507,7 @@ async function runComparison(
     }
   }
 
+  safeLog(`[compare] NENHUM resultado válido para "${productName}" — query: "${searchQuery}"`);
   return [];
 }
 
