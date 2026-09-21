@@ -99,7 +99,7 @@ export const NotificationRepository = {
     const rows = db
       .prepare(
         `SELECT * FROM notification_log
-         WHERE entity_type IN ('compare', 'social', 'scrape')
+         WHERE entity_type IN ('social', 'promotion')
          ORDER BY id DESC LIMIT ?`
       )
       .all(limit) as NotificationLogRow[];

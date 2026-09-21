@@ -8,6 +8,7 @@ import { SocialSourceRepository } from "../repositories/socialSourceRepository";
 import { ProfileRepository } from "../repositories/profileRepository";
 import { PromotionRepository } from "../repositories/promotionRepository";
 import { EstablishmentRepository } from "../repositories/establishmentRepository";
+import { recordInAppAlert } from "../lib/notify";
 import { alertActivePromotion } from "../lib/notify";
 import {
   parsePromosFromTextWithAI,
@@ -93,6 +94,7 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
   if (sourceId) SocialSourceRepository.setLastChecked(sourceId);
 
   safeLog(`[social-worker] ${channel} — ${saved.length} promoções salvas, ${skippedDuplicates.length} duplicadas (método ${method})`);
+  recordInAppAlert("social", `capture-${channel}-${Date.now()}`, "CAPTURA SOCIAL", `${channel.toUpperCase()}: ${saved.length} promo(s) detectada(s), ${skippedDuplicates.length} duplicada(s)`);
   return {
     captured: true,
     channel,
@@ -173,6 +175,7 @@ async function handleSocialScanAll(job: Job<SocialMonitorJobPayload & { type: "s
       safeLog(`[social-worker] falha ao enfileirar captura de ${source.name}: ${err.message}`);
     }
   }
+  recordInAppAlert("social", `scan-all-${Date.now()}`, "SCAN CONCLUÍDO", `${sources.length} fonte(s) ativa(s), ${enqueued} captura(s) enfileirada(s)`);
 
   return { sources: sources.length, enqueued };
 }
@@ -274,6 +277,7 @@ async function handleWhatsappStatusScan(job: Job<SocialMonitorJobPayload & { typ
       safeLog(`[social-worker] erro whatsappStatus ${est.name}: ${err.message}`);
     }
   }
+  recordInAppAlert("social", `whatsapp-status-${Date.now()}`, "WHATSAPP STATUS", `${saved} promo(s) salva(s) de ${withWhatsapp.length} contato(s)`);
   return { captured, saved, scanned: withWhatsapp.length };
 }
 
@@ -424,6 +428,7 @@ async function handleInstagramStoriesScan(
       safeLog(`[social-worker] erro instagramStories ${est.name}: ${err.message}`);
     }
   }
+  recordInAppAlert("social", `instagram-stories-${Date.now()}`, "INSTAGRAM STORIES", `${saved} promo(s) salva(s) de ${withHandle.length} perfil(is)`);
   return { captured, saved, scanned: withHandle.length, method: "instagrapi" };
 }
 
@@ -478,6 +483,7 @@ async function handleGroupMessageProcess(
   GroupMessageRepository.markProcessed(job.data.messageId);
 
   safeLog(`[social-worker] grupo ${groupName} (${source}): ${saved.length} promoções, ${skippedDuplicates.length} duplicadas`);
+  recordInAppAlert("social", `group-${groupName}-${Date.now()}`, "GRUPO", `${groupName}: ${saved.length} promo(s) detectada(s), ${skippedDuplicates.length} duplicada(s)`);
   return { captured: true, source, groupName, saved, skippedDuplicates };
 }
 
