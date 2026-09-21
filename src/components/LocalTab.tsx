@@ -367,6 +367,22 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Auto-save radius when changed (debounced 1s)
+  useEffect(() => {
+    const timeout = setTimeout(() => {
+      const km = parseFloat(locRadiusKm) || 5;
+      if (km > 0) {
+        apiJson("/api/location", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ radiusKm: km }),
+        }).catch(() => {});
+      }
+    }, 1000);
+    return () => clearTimeout(timeout);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locRadiusKm]);
+
   const saveLocation = async () => {
     if (locSaving) return;
     const lat = parseFloat(locLat);
