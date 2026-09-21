@@ -1152,10 +1152,10 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   // FRENTE 4 — Group Messages
   // ---------------------------------------------------------------------------
 
-  app.get("/api/social/groups/messages", (req, res) => {
+  app.get("/api/social/groups/messages", async (req, res) => {
     try {
       const limit = Number(req.query.limit) || 30;
-      const { GroupMessageRepository } = require("./src/repositories/groupMessageRepository.ts");
+      const { GroupMessageRepository } = await import("./src/repositories/groupMessageRepository.ts");
       res.json(GroupMessageRepository.getRecent(limit));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
@@ -1179,18 +1179,18 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   // FRENTE 4 — Triggers CRUD
   // ---------------------------------------------------------------------------
 
-  app.get("/api/triggers", (_req, res) => {
+  app.get("/api/triggers", async (_req, res) => {
     try {
-      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      const { TriggerRepository } = await import("./src/repositories/triggerRepository.ts");
       res.json(TriggerRepository.getAll());
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
 
-  app.post("/api/triggers", (req, res) => {
+  app.post("/api/triggers", async (req, res) => {
     try {
-      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      const { TriggerRepository } = await import("./src/repositories/triggerRepository.ts");
       const { name, entityType, condition, value, channels } = req.body;
       if (!name || !entityType || !condition || !value) {
         return res.status(400).json({ error: "name, entityType, condition e value são obrigatórios" });
@@ -1212,9 +1212,9 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  app.post("/api/triggers/:id/toggle", (req, res) => {
+  app.post("/api/triggers/:id/toggle", async (req, res) => {
     try {
-      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      const { TriggerRepository } = await import("./src/repositories/triggerRepository.ts");
       const trigger = TriggerRepository.getById(req.params.id);
       if (!trigger) return res.status(404).json({ error: "Trigger não encontrado" });
       trigger.enabled = !trigger.enabled;
@@ -1225,9 +1225,9 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  app.delete("/api/triggers/:id", (req, res) => {
+  app.delete("/api/triggers/:id", async (req, res) => {
     try {
-      const { TriggerRepository } = require("./src/repositories/triggerRepository.ts");
+      const { TriggerRepository } = await import("./src/repositories/triggerRepository.ts");
       TriggerRepository.delete(req.params.id);
       res.json({ ok: true });
     } catch (error: any) {
