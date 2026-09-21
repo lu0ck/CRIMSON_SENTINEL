@@ -1072,16 +1072,26 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
             </div>
             <div className="flex flex-col gap-1">
               <label className={labelCls}>HORÁRIO DE SAÍDA</label>
-              <select className={inputCls} value={startTimeMode} onChange={(e) => setStartTimeMode(e.target.value as any)}>
+              <select
+                className={`${inputCls} ${startTimeMode === "specific" ? "border-crimson/70" : ""}`}
+                value={startTimeMode}
+                onChange={(e) => setStartTimeMode(e.target.value as any)}
+              >
                 <option value="suggest">SUGERIR MENOR MOVIMENTO</option>
                 <option value="specific">HORÁRIO ESPECÍFICO</option>
               </select>
             </div>
             <div className="flex flex-col gap-1 md:col-span-2">
-              <label className={labelCls}>DATA/HORA (SE ESPECÍFICO)</label>
+              <label className={`${labelCls} ${startTimeMode === "specific" ? "text-crimson" : "text-crimson/40"}`}>
+                DATA/HORA (SE ESPECÍFICO)
+              </label>
               <input
                 type="datetime-local"
-                className={inputCls}
+                className={`${inputCls} ${
+                  startTimeMode === "specific"
+                    ? "border-crimson/70 shadow-[0_0_8px_rgba(255,0,0,0.15)]"
+                    : "opacity-40 cursor-not-allowed"
+                }`}
                 value={startTimeSpecific}
                 disabled={startTimeMode !== "specific"}
                 onChange={(e) => setStartTimeSpecific(e.target.value)}
