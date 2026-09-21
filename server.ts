@@ -815,7 +815,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       }
       const userLat = SettingsRepository.getNumber("user_lat");
       const userLng = SettingsRepository.getNumber("user_lng");
-      if (userLat === 0 && userLng === 0) {
+      if (!userLat || !userLng) {
         return res.status(400).json({ error: "Defina sua localização via POST /api/location primeiro" });
       }
       const radiusMeters =

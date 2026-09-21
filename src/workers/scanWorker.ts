@@ -794,7 +794,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 async function handleDiscoverEstablishments(job: Job<ScanJobPayload & { type: "discover-establishments" }>) {
   const userLat = SettingsRepository.getNumber("user_lat");
   const userLng = SettingsRepository.getNumber("user_lng");
-  if (userLat === 0 && userLng === 0) {
+  if (!userLat || !userLng) {
     throw new Error("Localização do usuário não configurada (user_lat/user_lng em user_settings).");
   }
   const radiusMeters = job.data.radiusMeters ?? SettingsRepository.getNumber("geolocation_search_radius_m") ?? 5000;
