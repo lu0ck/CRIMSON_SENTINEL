@@ -146,13 +146,3 @@ export interface RoutePlan {
   fuelConsumptionKmPerL?: number;
   fuelPricePerL?: number;
 }
-
-export interface PromotionSite {
-  id: string;
-  name: string;
-  url: string;
-  category?: string;
-  enabled?: boolean;
-  lastCheckedAt?: string;
-  createdAt: string;
-}

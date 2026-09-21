@@ -27,7 +27,6 @@ import { PromotionRepository } from "./src/repositories/promotionRepository.ts";
 import { RouteRepository } from "./src/repositories/routeRepository.ts";
 import { NotificationRepository } from "./src/repositories/notificationRepository.ts";
 import { SocialSourceRepository } from "./src/repositories/socialSourceRepository.ts";
-import { PromotionSiteRepository } from "./src/repositories/promotionSiteRepository.ts";
 import {
   alertShoppingItemTargetReached,
   alertActivePromotion,
@@ -1007,37 +1006,6 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   app.delete("/api/routes/:id", (req, res) => {
     try {
       RouteRepository.delete(req.params.id);
-      res.json({ status: "ok" });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // ---- SITES DE PROMOÇÕES ---------------------------------------------------
-
-  app.get("/api/promotion-sites", (_req, res) => {
-    try {
-      res.json(PromotionSiteRepository.getAll());
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.post("/api/promotion-sites", (req, res) => {
-    try {
-      const body = { ...req.body };
-      if (!body.id) body.id = `psite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-      if (!body.createdAt) body.createdAt = new Date().toISOString();
-      PromotionSiteRepository.save(body);
-      res.json({ status: "ok", site: PromotionSiteRepository.getById(body.id) });
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  app.delete("/api/promotion-sites/:id", (req, res) => {
-    try {
-      PromotionSiteRepository.delete(req.params.id);
       res.json({ status: "ok" });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

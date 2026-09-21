@@ -8,7 +8,6 @@ import type {
   Promotion,
   RoutePlan,
   RouteStop,
-  PromotionSite,
 } from "../types";
 
 export interface ProfileRow {
@@ -321,27 +320,5 @@ export function routeRowToRoutePlan(row: RouteRow, stops: RouteStopRow[] = []): 
           quietScore: s.quiet_score ?? undefined,
         })
       ),
-  };
-}
-
-export interface PromotionSiteRow {
-  id: string;
-  name: string;
-  url: string;
-  category: string | null;
-  enabled: number;
-  last_checked_at: string | null;
-  created_at: string;
-}
-
-export function promotionSiteRowToPromotionSite(row: PromotionSiteRow): PromotionSite {
-  return {
-    id: row.id,
-    name: row.name,
-    url: row.url,
-    category: row.category ?? undefined,
-    enabled: !!row.enabled,
-    lastCheckedAt: row.last_checked_at ?? undefined,
-    createdAt: row.created_at,
   };
 }

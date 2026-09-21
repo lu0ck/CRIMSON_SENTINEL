@@ -238,17 +238,6 @@ INSERT OR IGNORE INTO user_settings (key, value) VALUES
   ('whatsapp_scan_per_contact_min', '20'),   -- C2: throttle entre checks de Status (15-30 min)
   ('instagram_scan_per_handle_min', '45');    -- C3: throttle entre checks de Stories (30-60 min)
 
--- Sites de promoções (links de sites com ofertas para monitorar)
-CREATE TABLE IF NOT EXISTS promotion_sites (
-  id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  url TEXT NOT NULL,
-  category TEXT,
-  enabled INTEGER DEFAULT 1,
-  last_checked_at TEXT,
-  created_at TEXT NOT NULL DEFAULT (datetime('now'))
-);
-
 -- ---------------------------------------------------------------------------
 -- FRENTE 4 — Monitoramento de Grupos + Sistema de Triggers
 -- ---------------------------------------------------------------------------

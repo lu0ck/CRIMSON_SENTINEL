@@ -21,8 +21,6 @@ import {
   Clock,
   Download,
   Upload,
-  Globe,
-  ExternalLink,
   Merge,
 } from "lucide-react";
 import type {
@@ -31,7 +29,6 @@ import type {
   PriceObservation,
   Promotion,
   RoutePlan,
-  PromotionSite,
 } from "../types";
 import { MapPicker } from "./MapPicker";
 
@@ -83,7 +80,6 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
   const [observations, setObservations] = useState<PriceObservation[]>([]);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [routes, setRoutes] = useState<RoutePlan[]>([]);
-  const [promoSites, setPromoSites] = useState<PromotionSite[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Formulários
@@ -91,12 +87,6 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
   const [showItemForm, setShowItemForm] = useState(false);
   const [showPromoForm, setShowPromoForm] = useState(false);
   const [showObsForm, setShowObsForm] = useState(false);
-  const [showPsiteForm, setShowPsiteForm] = useState(false);
-
-  // Novo site de promoção
-  const [psiteName, setPsiteName] = useState("");
-  const [psiteUrl, setPsiteUrl] = useState("");
-  const [psiteCategory, setPsiteCategory] = useState("");
 
   // Novo estabelecimento
   const [estName, setEstName] = useState("");
@@ -331,20 +321,18 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [e, i, o, p, r, ps] = await Promise.all([
+      const [e, i, o, p, r] = await Promise.all([
         apiJson("/api/establishments"),
         apiJson("/api/shopping-list-items"),
         apiJson("/api/price-observations"),
         apiJson("/api/promotions"),
         apiJson("/api/routes"),
-        apiJson("/api/promotion-sites"),
       ]);
       setEstablishments(e);
       setItems(i);
       setObservations(o);
       setPromotions(p);
       setRoutes(r);
-      setPromoSites(ps);
     } catch (err: any) {
       toast("FALHA AO CARREGAR MÓDULO LOCAL", "error", String(err?.message || err));
     } finally {
@@ -810,46 +798,6 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       loadAll();
     } catch (err: any) {
       toast("FALHA AO EXCLUIR ROTA", "error", String(err?.message || err));
-    }
-  };
-
-  // ---- Sites de promoções ---------------------------------------------------
-
-  const savePsite = async () => {
-    if (!psiteName.trim() || !psiteUrl.trim()) {
-      toast("NOME E URL SÃO OBRIGATÓRIOS", "error");
-      return;
-    }
-    try {
-      const site: PromotionSite = {
-        id: `psite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name: psiteName.trim(),
-        url: psiteUrl.trim(),
-        category: psiteCategory.trim() || undefined,
-        createdAt: new Date().toISOString(),
-      };
-      await apiJson("/api/promotion-sites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(site),
-      });
-      playSound("click");
-      toast(`SITE ADICIONADO: ${site.name.toUpperCase()}`, "success");
-      setPsiteName(""); setPsiteUrl(""); setPsiteCategory("");
-      setShowPsiteForm(false);
-      loadAll();
-    } catch (err: any) {
-      toast("FALHA AO SALVAR SITE", "error", String(err?.message || err));
-    }
-  };
-
-  const deletePsite = async (id: string) => {
-    try {
-      await apiJson(`/api/promotion-sites/${id}`, { method: "DELETE" });
-      playSound("click");
-      loadAll();
-    } catch (err: any) {
-      toast("FALHA AO EXCLUIR SITE", "error", String(err?.message || err));
     }
   };
 

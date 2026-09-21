@@ -16,8 +16,6 @@ import {
   Clock,
   Download,
   Upload,
-  Globe,
-  ExternalLink,
   Merge,
 } from "lucide-react";
 import type {
@@ -25,7 +23,6 @@ import type {
   ShoppingListItem,
   PriceObservation,
   Promotion,
-  PromotionSite,
 } from "../types";
 import { MapPicker } from "./MapPicker";
 
@@ -76,19 +73,13 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [observations, setObservations] = useState<PriceObservation[]>([]);
   const [promotions, setPromotions] = useState<Promotion[]>([]);
-  const [promoSites, setPromoSites] = useState<PromotionSite[]>([]);
   const [loading, setLoading] = useState(true);
 
   const [showEstForm, setShowEstForm] = useState(false);
   const [showItemForm, setShowItemForm] = useState(false);
   const [showPromoForm, setShowPromoForm] = useState(false);
   const [showObsForm, setShowObsForm] = useState(false);
-  const [showPsiteForm, setShowPsiteForm] = useState(false);
   const [showEstMap, setShowEstMap] = useState(false);
-
-  const [psiteName, setPsiteName] = useState("");
-  const [psiteUrl, setPsiteUrl] = useState("");
-  const [psiteCategory, setPsiteCategory] = useState("");
 
   const [estName, setEstName] = useState("");
   const [estCep, setEstCep] = useState("");
@@ -161,18 +152,16 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [e, i, o, p, ps] = await Promise.all([
+      const [e, i, o, p] = await Promise.all([
         apiJson("/api/establishments"),
         apiJson("/api/shopping-list-items"),
         apiJson("/api/price-observations"),
         apiJson("/api/promotions"),
-        apiJson("/api/promotion-sites"),
       ]);
       setEstablishments(e);
       setItems(i);
       setObservations(o);
       setPromotions(p);
-      setPromoSites(ps);
     } catch (err: any) {
       toast("FALHA AO CARREGAR MÓDULO MERCADO", "error", String(err?.message || err));
     } finally {
@@ -521,46 +510,6 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
       loadAll();
     } catch (err: any) {
       toast("FALHA AO EXCLUIR PROMOÇÃO", "error", String(err?.message || err));
-    }
-  };
-
-  // ---- Sites de promoções ----------------------------------------------------
-
-  const savePsite = async () => {
-    if (!psiteName.trim() || !psiteUrl.trim()) {
-      toast("NOME E URL SÃO OBRIGATÓRIOS", "error");
-      return;
-    }
-    try {
-      const site: PromotionSite = {
-        id: `psite-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-        name: psiteName.trim(),
-        url: psiteUrl.trim(),
-        category: psiteCategory.trim() || undefined,
-        createdAt: new Date().toISOString(),
-      };
-      await apiJson("/api/promotion-sites", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(site),
-      });
-      playSound("click");
-      toast(`SITE ADICIONADO: ${site.name.toUpperCase()}`, "success");
-      setPsiteName(""); setPsiteUrl(""); setPsiteCategory("");
-      setShowPsiteForm(false);
-      loadAll();
-    } catch (err: any) {
-      toast("FALHA AO SALVAR SITE", "error", String(err?.message || err));
-    }
-  };
-
-  const deletePsite = async (id: string) => {
-    try {
-      await apiJson(`/api/promotion-sites/${id}`, { method: "DELETE" });
-      playSound("click");
-      loadAll();
-    } catch (err: any) {
-      toast("FALHA AO EXCLUIR SITE", "error", String(err?.message || err));
     }
   };
 
@@ -1100,104 +1049,6 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
           </div>
         )}
       </AnimatePresence>
-
-      {/* ===== SITES DE PROMOÇÕES ===== */}
-      <section>
-        <div className="flex items-center justify-between">
-          <SectionTitle icon={<Globe size={16} />}>SITES DE PROMOÇÕES</SectionTitle>
-          <button
-            onClick={() => setShowPsiteForm(!showPsiteForm)}
-            className="hud-button text-[10px] px-3 py-1 flex items-center gap-1"
-          >
-            <Plus size={12} /> {showPsiteForm ? "FECHAR" : "NOVO SITE"}
-          </button>
-        </div>
-
-        {showPsiteForm && (
-          <div className="hud-border bg-black/40 p-5 mt-4 flex flex-col gap-4">
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div className="flex flex-col gap-1">
-                <label className={labelCls}>NOME *</label>
-                <input
-                  className={inputCls}
-                  value={psiteName}
-                  onChange={(e) => setPsiteName(e.target.value)}
-                  placeholder="Ex: Tático Barato Todo Dia"
-                />
-              </div>
-              <div className="flex flex-col gap-1 md:col-span-2">
-                <label className={labelCls}>URL *</label>
-                <input
-                  className={inputCls}
-                  value={psiteUrl}
-                  onChange={(e) => setPsiteUrl(e.target.value)}
-                  placeholder="https://exemplo.com/ofertas"
-                />
-              </div>
-              <div className="flex flex-col gap-1">
-                <label className={labelCls}>CATEGORIA</label>
-                <input
-                  className={inputCls}
-                  value={psiteCategory}
-                  onChange={(e) => setPsiteCategory(e.target.value)}
-                  placeholder="Ex: supermercado, farmácia"
-                />
-              </div>
-            </div>
-            <button
-              onClick={() => { playSound("click"); savePsite(); }}
-              className="hud-button flex items-center gap-2 text-xs self-start"
-            >
-              <Plus size={14} /> SALVAR SITE
-            </button>
-          </div>
-        )}
-
-        <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-3">
-          {promoSites.map((site) => (
-            <div key={site.id} className="hud-border bg-black/40 p-4 flex items-center gap-4">
-              <Globe size={14} className="text-crimson/50 shrink-0" />
-              <div className="flex-1 min-w-0">
-                <span className="text-xs font-mono font-bold text-crimson/80 block truncate">
-                  {site.name.toUpperCase()}
-                </span>
-                <a
-                  href={site.url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-[9px] font-mono text-crimson/40 hover:text-crimson/70 truncate block"
-                >
-                  {site.url}
-                </a>
-                {site.category && (
-                  <span className="text-[8px] font-mono text-crimson/30 uppercase">
-                    {site.category}
-                  </span>
-                )}
-              </div>
-              <a
-                href={site.url}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="hud-button text-[9px] px-2 py-1 shrink-0 flex items-center gap-1"
-              >
-                <ExternalLink size={10} /> ABRIR
-              </a>
-              <button
-                onClick={() => { playSound("click"); deletePsite(site.id); }}
-                className="text-crimson/30 hover:text-crimson transition-colors shrink-0"
-              >
-                <Trash2 size={14} />
-              </button>
-            </div>
-          ))}
-          {promoSites.length === 0 && (
-            <div className="hud-border p-8 text-center text-crimson/30 font-mono text-xs md:col-span-2">
-              NENHUM SITE CADASTRADO
-            </div>
-          )}
-        </div>
-      </section>
     </div>
   );
 }
