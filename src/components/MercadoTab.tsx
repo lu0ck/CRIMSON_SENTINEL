@@ -809,7 +809,11 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
 
         <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
           {establishments.map((est) => (
-            <div key={est.id} className="hud-border bg-black/40 p-4 flex items-center gap-4">
+            <div
+              key={est.id}
+              className={`hud-border bg-black/40 p-4 flex items-center gap-4 ${est.priceUrl ? "cursor-pointer hover:border-crimson/40" : ""}`}
+              onClick={() => est.priceUrl && window.open(est.priceUrl, "_blank")}
+            >
               <div className="w-10 h-10 bg-crimson/5 border border-crimson/20 flex items-center justify-center shrink-0">
                 <Store size={16} className="text-crimson/70" />
               </div>
@@ -829,7 +833,7 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
               </div>
               {est.priceUrl && (
                 <button
-                  onClick={() => scanEstablishmentPrices(est.id)}
+                  onClick={(e) => { e.stopPropagation(); scanEstablishmentPrices(est.id); }}
                   disabled={scanningEstId === est.id}
                   className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1.5 shrink-0"
                 >
@@ -837,7 +841,7 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
                   SCAN PREÇOS
                 </button>
               )}
-              <button onClick={() => deleteEstablishment(est.id)} className="text-crimson/30 hover:text-crimson shrink-0">
+              <button onClick={(e) => { e.stopPropagation(); deleteEstablishment(est.id); }} className="text-crimson/30 hover:text-crimson shrink-0">
                 <Trash2 size={14} />
               </button>
             </div>
