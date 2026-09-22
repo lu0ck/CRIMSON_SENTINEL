@@ -632,7 +632,7 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
   const userLat = SettingsRepository.getNumber("user_lat");
   const userLng = SettingsRepository.getNumber("user_lng");
   const radiusMeters = SettingsRepository.getNumber("geolocation_search_radius_m") ?? 5000;
-  const hasUserLocation = !(userLat === 0 && userLng === 0);
+  const hasUserLocation = !!userLat && !!userLng;
 
   let targets: import("../types").Establishment[];
   if (establishmentId) {
@@ -677,7 +677,7 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
             detectedAt: new Date().toISOString(),
           });
           if (promo) {
-            await alertFlashPromotion(promo, est.name, flash.reason, est.priceUrl);
+            await alertFlashPromotion(promo, est.name, flash.reason, r.url);
             safeLog(`[scan-worker] FLASH detectado em ${item.name} @ ${est.name}: ${flash.reason}`);
           }
         }

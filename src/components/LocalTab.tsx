@@ -35,6 +35,7 @@ import { MapPicker } from "./MapPicker";
 interface LocalTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
   playSound: (type: "click" | "success" | "error" | "scan" | "notify") => void;
+  profileId?: string;
   pollJob: (
     jobId: string,
     signal?: AbortSignal,
@@ -74,7 +75,7 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
   );
 }
 
-export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
+export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabProps) {
   const [establishments, setEstablishments] = useState<Establishment[]>([]);
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [observations, setObservations] = useState<PriceObservation[]>([]);
@@ -589,7 +590,7 @@ export function LocalTab({ addToast, playSound, pollJob }: LocalTabProps) {
       const data = await apiJson("/api/local-price-scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ establishmentId: id }),
+        body: JSON.stringify({ establishmentId: id, profileId }),
       });
       const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan");
       const rv = result || {};

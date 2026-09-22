@@ -472,7 +472,7 @@ export interface ScrapeOptions {
 
 type ScrapeStrategy = {
   name: string;
-  fn: () => Promise<ScrapeResult | null>;
+  fn: (opts?: { signal?: AbortSignal }) => Promise<ScrapeResult | null>;
 };
 
 // FASE 14 — compõe o melhor resultado entre estratégias:

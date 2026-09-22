@@ -1975,6 +1975,7 @@ const queued = await response.json();
                     addToast={addToast}
                     playSound={playSound}
                     pollJob={pollJob}
+                    profileId={activeProfileId}
                   />
                 </ErrorBoundary>
               </motion.div>
@@ -2212,6 +2213,7 @@ const queued = await response.json();
                     addToast={addToast}
                     playSound={playSound}
                     pollJob={pollJob}
+                    profileId={activeProfileId}
                   />
                 </ErrorBoundary>
               </motion.div>
