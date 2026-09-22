@@ -89,6 +89,8 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
   const [estCity, setEstCity] = useState("");
   const [estCategory, setEstCategory] = useState("");
   const [estPriceUrl, setEstPriceUrl] = useState("");
+  const [estInstagram, setEstInstagram] = useState("");
+  const [estWhatsapp, setEstWhatsapp] = useState("");
 
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState("1");
@@ -338,6 +340,8 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
         city: estCity.trim() || undefined,
         category: estCategory.trim() || undefined,
         priceUrl: estPriceUrl.trim() || undefined,
+        instagramHandle: estInstagram.trim() || undefined,
+        whatsappNumber: estWhatsapp.trim() || undefined,
       };
       await apiJson("/api/establishments", {
         method: "POST",
@@ -346,7 +350,7 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
       });
       playSound("click");
       toast(`ESTABELECIMENTO REGISTRADO: ${est.name.toUpperCase()}`, "success");
-      setEstName(""); setEstLat(""); setEstLng(""); setEstAddress(""); setEstCity(""); setEstCategory(""); setEstPriceUrl(""); setEstCep("");
+      setEstName(""); setEstLat(""); setEstLng(""); setEstAddress(""); setEstCity(""); setEstCategory(""); setEstPriceUrl(""); setEstCep(""); setEstInstagram(""); setEstWhatsapp("");
       setShowEstForm(false);
       setShowEstMap(false);
       loadAll();
@@ -781,6 +785,14 @@ export function MercadoTab({ addToast, playSound, pollJob }: MercadoTabProps) {
                   <span className="text-[9px] font-mono text-crimson/40">
                     USE {"{term}"} NO LUGAR DO NOME DO ITEM — EX: https://mercado.com.br/busca?q={"{"}term{"}"}
                   </span>
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className={labelCls}>INSTAGRAM</label>
+                  <input className={inputCls} value={estInstagram} onChange={(e) => setEstInstagram(e.target.value)} placeholder="@supermercado ou URL" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className={labelCls}>WHATSAPP</label>
+                  <input className={inputCls} value={estWhatsapp} onChange={(e) => setEstWhatsapp(e.target.value)} placeholder="+55 11 99999-9999" />
                 </div>
               </div>
 
