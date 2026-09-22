@@ -358,10 +358,10 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     try {
       const { jobId } = await apiJson("/api/social/scan-all", { method: "POST" });
       const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
-      toast(`SCAN CONCLUÍDO — ${result?.sources || 0} FONTE(S)`, "info");
+      toast(`CAPTURA AUTOMÁTICA — ${result?.sources || 0} FONTE(S)`, "info");
       loadScanLog();
     } catch (err: any) {
-      toast("FALHA NO SCAN", "error", String(err?.message || err));
+      toast("FALHA NA CAPTURA", "error", String(err?.message || err));
     } finally {
       setScanning(false);
     }
@@ -392,10 +392,10 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       const { jobId } = await apiJson("/api/social/instagram/scan", { method: "POST" });
       const result = await pollJob(jobId, undefined, 2000, 3_600_000, "social");
       const n = Number(result?.saved ?? 0);
-      toast(`SCAN INSTAGRAM CONCLUÍDO — ${n} PROMOÇÃO(ÕES)`, n > 0 ? "success" : "info");
+      toast(`CAPTURA INSTAGRAM CONCLUÍDA — ${n} PROMOÇÃO(ÕES)`, n > 0 ? "success" : "info");
       loadInstagramHealth();
     } catch (err: any) {
-      toast("FALHA NO SCAN INSTAGRAM", "error", String(err?.message || err));
+      toast("FALHA NA CAPTURA INSTAGRAM", "error", String(err?.message || err));
     } finally {
       setIgScanning(false);
     }
@@ -410,7 +410,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
         body: JSON.stringify({ intervalMs: ms }),
       });
       setIntervalMs(ms);
-      toast(`SCAN SOCIAL A CADA ${Math.round(ms / 60000)} MIN`, "success");
+      toast(`CAPTURA AUTOMÁTICA A CADA ${Math.round(ms / 60000)} MIN`, "success");
     } catch (err: any) {
       toast("FALHA AO SALVAR AGENDAMENTO", "error", String(err?.message || err));
     } finally {
@@ -449,7 +449,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
             {nextSocialScanMinutes !== null && (
               <div className="flex items-center gap-1.5 text-[10px] font-mono text-crimson/50">
                 <Clock size={12} />
-                <span>PRÓXIMO SCAN {fmtNextScan(nextSocialScanMinutes)}</span>
+                <span>PRÓXIMA CAPTURA {fmtNextScan(nextSocialScanMinutes)}</span>
               </div>
             )}
             <select
@@ -457,12 +457,12 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               value={intervalMs}
               disabled={savingInterval}
               onChange={(e) => updateInterval(Number(e.target.value))}
-              title="Frequência do scan automático"
+              title="Frequência da captura automática"
             >
-              <option value={60 * 60 * 1000}>SCAN A CADA 1H</option>
-              <option value={6 * 60 * 60 * 1000}>SCAN A CADA 6H</option>
-              <option value={12 * 60 * 60 * 1000}>SCAN A CADA 12H</option>
-              <option value={24 * 60 * 60 * 1000}>SCAN A CADA 24H</option>
+              <option value={60 * 60 * 1000}>CAPTURA A CADA 1H</option>
+              <option value={6 * 60 * 60 * 1000}>CAPTURA A CADA 6H</option>
+              <option value={12 * 60 * 60 * 1000}>CAPTURA A CADA 12H</option>
+              <option value={24 * 60 * 60 * 1000}>CAPTURA A CADA 24H</option>
             </select>
             <button
               onClick={() => { playSound("click"); scanAll().catch(() => {}); }}
@@ -470,7 +470,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               className="hud-button flex items-center gap-2 disabled:opacity-50"
             >
               {scanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
-              {scanning ? "ESCANEANDO..." : "SCAN ALL"}
+              {scanning ? "CAPTURANDO..." : "CAPTURA AUTOMÁTICA"}
             </button>
             <button
               onClick={() => { playSound("click"); setShowForm(!showForm); }}
@@ -573,7 +573,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
                   )}
                   {s.lastCheckedAt && (
                     <span className="text-[9px] font-mono text-crimson/30">
-                      ÚLTIMO SCAN: {new Date(s.lastCheckedAt).toLocaleString("pt-BR")}
+                      ÚLTIMA CAPTURA: {new Date(s.lastCheckedAt).toLocaleString("pt-BR")}
                     </span>
                   )}
                 </div>
@@ -777,7 +777,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
                 className="hud-button flex items-center gap-2 disabled:opacity-50"
               >
                 {igScanning ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
-                {igScanning ? "ESCANEANDO..." : "SCAN STORIES"}
+                {igScanning ? "CAPTURANDO..." : "CAPTURA STORIES"}
               </button>
             </div>
           )}
@@ -843,7 +843,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
               <Power size={14} className="text-crimson/50 shrink-0 mt-0.5" />
               <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
                 Instagram desativado no painel. Clique em ATIVAR no topo para iniciar o
-                serviço e liberar LOGIN/SCAN de Stories.
+                serviço e liberar LOGIN/CAPTURA de Stories.
               </p>
             </div>
           ) : !igOk ? (
@@ -868,7 +868,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
                 <CheckCircle2 size={14} /> SESSÃO ATIVA {igUsername ? `— @${igUsername.toUpperCase()}` : ""}
               </div>
               <p className="text-[9px] font-mono text-crimson/40">
-                O SCAN LÊ OS STORIES DOS HANDLES EM establishments.instagram_handle E EXTRAI PREÇOS VIA GEMINI VISION.
+                A CAPTURA LÊ OS STORIES DOS HANDLES EM establishments.instagram_handle E EXTRAI PREÇOS VIA GEMINI VISION.
               </p>
             </div>
           )}
