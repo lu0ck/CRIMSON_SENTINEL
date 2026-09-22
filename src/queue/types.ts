@@ -106,6 +106,8 @@ export interface SocialCaptureJobPayload {
   url?: string; // perfil/post do Instagram
   sourceId?: string; // se veio de uma fonte cadastrada
   profileId?: string; // chave Gemini para enriquecimento
+  imageBase64?: string; // imagem (print de encarte) em base64
+  imageMimeType?: string; // MIME type da imagem (ex: image/png)
 }
 
 export interface SocialScanAllJobPayload {

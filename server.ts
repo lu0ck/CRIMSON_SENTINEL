@@ -79,7 +79,7 @@ async function startServer() {
     next();
   });
 
-  app.use(express.json());
+  app.use(express.json({ limit: "10mb" }));
 
   // API Routes
   app.get("/api/data", (req, res) => {
@@ -1073,15 +1073,15 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  // Captura de texto social (WhatsApp colado ou URL do Instagram) → enfileira.
+  // Captura de texto social (WhatsApp colado, URL do Instagram ou imagem) → enfileira.
   app.post("/api/social/capture", async (req, res) => {
-    const { channel, text, url, sourceId, profileId } = req.body || {};
+    const { channel, text, url, sourceId, profileId, imageBase64, imageMimeType } = req.body || {};
     if (channel !== "whatsapp" && channel !== "instagram") {
       return res.status(400).json({ error: "channel deve ser whatsapp ou instagram" });
     }
     try {
       const queue = getSocialQueue();
-      const job = await queue.add("social-capture", { type: "social-capture", channel, text, url, sourceId, profileId });
+      const job = await queue.add("social-capture", { type: "social-capture", channel, text, url, sourceId, profileId, imageBase64, imageMimeType });
       safeLog(`[social] captura enfileirada job ${job.id}`);
       res.json({ jobId: job.id, status: "queued" });
     } catch (error: any) {

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/cn";
 import {
@@ -16,6 +16,8 @@ import {
   Clock,
   LogIn,
   Power,
+  Image,
+  Upload,
 } from "lucide-react";
 
 type ToastType = "success" | "error" | "info";
@@ -67,6 +69,9 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [newHint, setNewHint] = useState("");
 
   const [pasteText, setPasteText] = useState("");
+  const [captureImageFile, setCaptureImageFile] = useState<File | null>(null);
+  const [captureImagePreview, setCaptureImagePreview] = useState<string | null>(null);
+  const imageInputRef = useRef<HTMLInputElement>(null);
 
   // Configuração do agendamento (FASE 9)
   const [intervalMs, setIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
@@ -302,6 +307,46 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       setPasteText("");
     } catch (err: any) {
       toast("FALHA NA CAPTURA", "error", String(err?.message || err));
+    } finally {
+      setCapturing(false);
+    }
+  };
+
+  const onImageSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!file.type.startsWith("image/")) {
+      toast("ARQUIVO INVÁLIDO", "error", "Selecione uma imagem (PNG, JPG, etc)");
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast("IMAGEM GRANDE DEMAIS", "error", "Máximo 5MB");
+      return;
+    }
+    setCaptureImageFile(file);
+    const reader = new FileReader();
+    reader.onload = () => setCaptureImagePreview(String(reader.result));
+    reader.readAsDataURL(file);
+  };
+
+  const captureImage = async () => {
+    if (!captureImageFile || capturing) return;
+    setCapturing(true);
+    try {
+      const base64 = captureImagePreview?.split(",")[1] || "";
+      const result = await runCapture({
+        channel: "whatsapp",
+        imageBase64: base64,
+        imageMimeType: captureImageFile.type,
+      });
+      const saved = result?.saved?.length || 0;
+      const dup = result?.skippedDuplicates?.length || 0;
+      toast(`CAPTURA IMAGEM: ${saved} PROMOÇÃO(ÕES)`, saved > 0 ? "success" : "info", dup ? `${dup} duplicada(s)` : undefined);
+      setCaptureImageFile(null);
+      setCaptureImagePreview(null);
+      if (imageInputRef.current) imageInputRef.current.value = "";
+    } catch (err: any) {
+      toast("FALHA NA CAPTURA DA IMAGEM", "error", String(err?.message || err));
     } finally {
       setCapturing(false);
     }
@@ -574,6 +619,54 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
             >
               {capturing ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
               {capturing ? "PROCESSANDO..." : "EXTRAIR PROMOÇÕES"}
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ===== CAPTURA POR IMAGEM (OCR/VISÃO) ===== */}
+      <section>
+        <SectionTitle icon={<Image size={16} />}>CAPTURA MANUAL — ENVIE UMA IMAGEM</SectionTitle>
+        <div className="hud-border bg-black/40 p-5 mt-4 flex flex-col gap-3">
+          <p className="text-[10px] font-mono text-crimson/40">
+            Envie um print de encarte ou oferta — o sistema extrai os preços via visão computacional (Gemini Vision).
+          </p>
+          <input
+            ref={imageInputRef}
+            type="file"
+            accept="image/*"
+            className="hidden"
+            onChange={onImageSelected}
+          />
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => { playSound("click"); imageInputRef.current?.click(); }}
+              disabled={capturing}
+              className="hud-button flex items-center gap-2 disabled:opacity-50"
+            >
+              <Upload size={14} /> SELECIONAR IMAGEM
+            </button>
+            {captureImageFile && (
+              <span className="text-[10px] font-mono text-crimson/50 truncate flex-1">
+                {captureImageFile.name} ({Math.round(captureImageFile.size / 1024)}KB)
+              </span>
+            )}
+          </div>
+          {captureImagePreview && (
+            <img
+              src={captureImagePreview}
+              alt="Preview"
+              className="max-h-48 object-contain hud-border self-start"
+            />
+          )}
+          <div className="flex justify-end">
+            <button
+              onClick={() => { playSound("click"); captureImage(); }}
+              disabled={capturing || !captureImageFile}
+              className="hud-button flex items-center gap-2 disabled:opacity-50"
+            >
+              {capturing ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
+              {capturing ? "PROCESSANDO..." : "EXTRAIR DA IMAGEM"}
             </button>
           </div>
         </div>

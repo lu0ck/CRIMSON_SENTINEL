@@ -31,7 +31,7 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
     return { skipped: true, reason: "social_monitoring_enabled=false" };
   }
 
-  const { channel, text, url, sourceId, profileId } = job.data;
+  const { channel, text, url, sourceId, profileId, imageBase64, imageMimeType } = job.data;
   const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
   const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
@@ -40,6 +40,38 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
 
   let rawText = text?.trim() || "";
   let method = "deterministic";
+
+  // Imagem (print de encarte): extrai preços via Gemini Vision.
+  if (!rawText && imageBase64 && apiKey) {
+    try {
+      const { GoogleGenAI } = await import("@google/genai");
+      const { AI_MODELS } = await import("../lib/aiModels.ts");
+      const ai = new GoogleGenAI({ apiKey });
+      const r = await ai.models.generateContent({
+        model: AI_MODELS.VISION,
+        contents: [
+          {
+            role: "user",
+            parts: [
+              { inlineData: { data: imageBase64, mimeType: imageMimeType || "image/png" } },
+              {
+                text:
+                  "Extraia produtos e preços desta imagem de encarte/oferta/promoção de supermercado. " +
+                  'Responda como JSON array: [{"productName":"...","promoPrice":...,"regularPrice":...}],' +
+                  " se nada relevante, retorne []. Inclua apenas preços claramente visíveis.",
+              },
+            ],
+          },
+        ],
+      });
+      if (r.text) {
+        rawText = r.text;
+        method = "gemini-vision";
+      }
+    } catch (err: any) {
+      safeLog(`[social-worker] gemini vision falhou na imagem: ${err.message}`);
+    }
+  }
 
   // Instagram: se não houver texto colado, tenta capturar captions da URL.
   if (!rawText && url && channel === "instagram") {
