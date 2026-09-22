@@ -207,7 +207,21 @@ async function handleSocialScanAll(job: Job<SocialMonitorJobPayload & { type: "s
       safeLog(`[social-worker] falha ao enfileirar captura de ${source.name}: ${err.message}`);
     }
   }
-  recordInAppAlert("social", `scan-all-${Date.now()}`, "SCAN CONCLUÍDO", `${sources.length} fonte(s) ativa(s), ${enqueued} captura(s) enfileirada(s)`);
+
+  // Inclui Instagram Stories no scan-all se estiver habilitado.
+  if (isInstagramEnabled()) {
+    try {
+      await queue.add("instagram-stories-scan", {
+        type: "instagram-stories-scan",
+        triggeredBy: "manual",
+      } as SocialMonitorJobPayload);
+      enqueued++;
+    } catch (err: any) {
+      safeLog(`[social-worker] falha ao enfileirar instagram-stories-scan: ${err.message}`);
+    }
+  }
+
+  recordInAppAlert("social", `scan-all-${Date.now()}`, "CAPTURA AUTOMÁTICA", `${sources.length} fonte(s) ativa(s), ${enqueued} captura(s) enfileirada(s)`);
 
   return { sources: sources.length, enqueued };
 }
@@ -382,9 +396,15 @@ async function handleInstagramStoriesScan(
       }
     }
 
+    // Normaliza handle: extrai username de URL ou remove @ inicial.
+    let handle = est.instagramHandle!.trim();
+    const urlMatch = handle.match(/instagram\.com\/([^/?#]+)/i);
+    if (urlMatch) handle = urlMatch[1];
+    handle = handle.replace(/^@/, "");
+
     try {
       // download=true para podermos passar imagem/vídeo ao Gemini vision
-      const stories = await fetchStories(est.instagramHandle!, { download: !!apiKey, timeoutMs: 20_000 });
+      const stories = await fetchStories(handle, { download: !!apiKey, timeoutMs: 20_000 });
       for (const st of stories) {
         captured++;
         // 1. Tenta extrair preços do caption (texto)
@@ -456,6 +476,13 @@ async function handleInstagramStoriesScan(
       }
       // Throttle leve entre handles — aguarda 5s para não sobrecarregar
       await new Promise((r) => setTimeout(r, 5000));
+      // Persiste throttle: grava lastCheckedAt para este establishment.
+      const existing = socialSources.find(
+        (s: any) => s.channel === "instagram" && s.establishmentHint?.toLowerCase() === est.name.toLowerCase()
+      );
+      if (existing) {
+        SocialSourceRepository.setLastChecked(existing.id);
+      }
     } catch (err: any) {
       safeLog(`[social-worker] erro instagramStories ${est.name}: ${err.message}`);
     }
