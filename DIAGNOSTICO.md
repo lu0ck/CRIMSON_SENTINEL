@@ -705,3 +705,40 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.17 market-handlers + fallback sem price_url (#32 — FASE 16 bloco B)
+
+**Problema (roadmap FASE 16, "Sites dos comércios"):** estabelecimentos **sem `establishments.price_url`** eram descartados em silêncio no `handleLocalPriceScan` (`filter(e => e.priceUrl)` no bulk + `if (!est.priceUrl) continue`) → toast "0 ERROS" enganoso. `chain` já existia no schema/OSM (`tags.brand`) mas não havia UI de edição nem registry por rede; `handleLocalPriceScan` **não passava** Serper/Tavily → SEARCH_VERIFY morto no caminho local.
+
+**Escopo de #32 (cascade 3-tier, MVP search só com `establishmentId` explícito):**
+
+| Tier | Condição | Resultado |
+|---|---|---|
+| **1 — Search** | handler resolve (chain/nome) **e** (Serper\|Tavily) **e** (NVIDIA\|Gemini) | query `«item» «rede» preço` → snippet → extrai preço → `price_observations` `source:"scraping"` (dedup/flash iguais) |
+| **2 — Social** | handler/chain mas sem keys ou sem preço válido | `socialDependent: 1`, **sem** row, **não** conta em `errors` |
+| **3 — Skip** | sem priceUrl, sem chain/handler | `socialDependent: 1` + reason (1 outcome por est., não por item) |
+
+**Arquivos:**
+
+| Arquivo | Change |
+|---|---|
+| `src/lib/market-handlers.ts` | **novo** — `MarketHandler`, seed (tatico, bretas, carrefour, pao-de-acucar, assai, atacadao), `resolveMarketHandler`, `buildMarketSearchQuery`, `searchMarketPrice` (Tavily→Serper + NVIDIA→Gemini) |
+| `src/lib/localPriceScrape.ts` | cascade tiers 1–3; status `"social-dependent"`; counter `socialDependent` + `socialReason`; apiKeys `+ serper/tavily` |
+| `src/workers/scanWorker.ts` | keys `serper/tavily` (profile \|\| `process.env`, padrão `/api/status`); remove `continue` em `!priceUrl` (cascade interna); return `+ socialDependent`; Overpass update: `brand` → `chain` se vazio |
+| `src/queue/types.ts` | comentário: price_url **ou** market-handler |
+| `MercadoTab.tsx` | campo **REDE / CHAIN** no form; toast `SOCIAL {n}` |
+| `LocalTab.tsx` | toast `SOCIAL {n}` |
+| `GUIA_VPS.md` | Tier B7: est. com chain sem price_url + keys → observação; sem keys → `socialDependent≥1` |
+| `roadmap.md` / `README.md` | pendência #32 RESOLVIDA; Sites dos comércios aponta §6.17 |
+| `DIAGNOSTICO.md` | esta seção (§6.17) |
+
+**Decisões documentadas:**
+- Bulk (`establishmentId` ausente) **não** roda search (custo por item×est); continua `filter(priceUrl)` + log
+- Cron sem `profileId` → keys via `process.env.SERPER_API_KEY` / `TAVILY_API_KEY`
+- `source` continua `"scraping"` + `notes=query` (sem union/schema novo)
+- Tier 2/3 **não** inflam `errors` (evita toast enganoso "N ERROS")
+- Seed mínimo de redes; expandir conforme OSM/UI
+
+**Validação #32:** `npx tsc --noEmit` → 0 erros; regressão fake-market com `price_url` inalterada; est. com chain sem priceUrl + keys → grava observação; sem keys → `socialDependent≥1`, errors estáveis.
+
+---
+

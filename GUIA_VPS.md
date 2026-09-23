@@ -1,7 +1,7 @@
 # Guia VPS — SENTINELA (FASE 16 / #31)
 
 Runbook para subir e validar a stack completa **headless** em VPS (sem Electron).  
-Decisões e evidências no [`DIAGNOSTICO.md`](DIAGNOSTICO.md) §6.16.
+Decisões e evidências no [`DIAGNOSTICO.md`](DIAGNOSTICO.md) §6.16 (+ market-handlers §6.17 / #32).
 
 ---
 
@@ -240,8 +240,9 @@ curl -s -X POST http://127.0.0.1:3001/api/social/capture \
 | B4 | `GET /api/price-history` | série local com pontos |
 | B5 | `POST /api/location` + `POST /api/establishments/discover` | job Overpass (sem key) |
 | B6 | `POST /api/route` com itens + Casa | rota OSRM/haversine |
+| B7 | Est. **com REDE/CHAIN**, **sem** `price_url` (#32): scan com keys → grava observação; **sem** keys → `socialDependent ≥ 1`, `errors` estáveis | cascade market-handlers |
 
-Evidência local do caminho fake-market: DIAGNOSTICO §6.11.1 (recorded 2 → dup 2 → history).
+Evidência local do caminho fake-market: DIAGNOSTICO §6.11.1 (recorded 2 → dup 2 → history). Cascade #32: DIAGNOSTICO §6.17.
 
 ### Tier C — precisa de segredos / contas
 

@@ -623,6 +623,9 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     lmStudioUrl: profile?.lmStudioUrl,
     nvidiaApiKey: profile?.nvidiaApiKey,
     geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+    // #32 — keys de busca para market-handlers (padrão process.env igual /api/status)
+    serperApiKey: profile?.serperApiKey || process.env.SERPER_API_KEY,
+    tavilyApiKey: profile?.tavilyApiKey || process.env.TAVILY_API_KEY,
   };
 
   const items = ShoppingListRepository.getAll();
@@ -651,7 +654,7 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
 
   const outcomes: LocalPriceScanOutcome[] = [];
   for (const est of targets) {
-    if (!est.priceUrl) continue;
+    // #32 — sem price_url: cascade market-handler / social-dependent dentro de scanEstablishmentPrices
     safeLog(`[scan-worker] local-price-scan ${est.name} (${items.length} itens)`);
     const outcome = await scanEstablishmentPrices(est, items, apiKeys);
     outcomes.push(outcome);
@@ -690,7 +693,16 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
   const recorded = outcomes.reduce((a, o) => a + o.recorded, 0);
   const duplicates = outcomes.reduce((a, o) => a + o.duplicates, 0);
   const errors = outcomes.reduce((a, o) => a + o.errors, 0);
-  return { establishmentId, establishments: outcomes.length, recorded, duplicates, errors, outcomes };
+  const socialDependent = outcomes.reduce((a, o) => a + (o.socialDependent || 0), 0);
+  return {
+    establishmentId,
+    establishments: outcomes.length,
+    recorded,
+    duplicates,
+    errors,
+    socialDependent,
+    outcomes,
+  };
 }
 
 // A2 — handler de análise movido do `server.ts` (era chamada síncrona de
@@ -827,6 +839,8 @@ async function handleDiscoverEstablishments(job: Job<ScanJobPayload & { type: "d
       est.whatsappNumber = d.phone;
       est.source = "discovered";
       est.osmId = d.osmId;
+      // #32 — brand do OSM vira chain p/ market-handlers
+      if (d.brand && !est.chain) est.chain = d.brand;
       EstablishmentRepository.save(est);
       updated++;
       continue;

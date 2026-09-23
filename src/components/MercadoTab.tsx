@@ -91,6 +91,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const [estAddress, setEstAddress] = useState("");
   const [estCity, setEstCity] = useState("");
   const [estCategory, setEstCategory] = useState("");
+  const [estChain, setEstChain] = useState("");
   const [estPriceUrl, setEstPriceUrl] = useState("");
   const [estInstagram, setEstInstagram] = useState("");
   const [estWhatsapp, setEstWhatsapp] = useState("");
@@ -405,6 +406,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         address: estAddress.trim() || undefined,
         city: estCity.trim() || undefined,
         category: estCategory.trim() || undefined,
+        chain: estChain.trim() || undefined,
         priceUrl: estPriceUrl.trim() || undefined,
         instagramHandle: estInstagram.trim() || undefined,
         whatsappNumber: estWhatsapp.trim() || undefined,
@@ -416,7 +418,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       });
       playSound("click");
       toast(`ESTABELECIMENTO REGISTRADO: ${est.name.toUpperCase()}`, "success");
-      setEstName(""); setEstLat(""); setEstLng(""); setEstAddress(""); setEstCity(""); setEstCategory(""); setEstPriceUrl(""); setEstCep(""); setEstInstagram(""); setEstWhatsapp("");
+      setEstName(""); setEstLat(""); setEstLng(""); setEstAddress(""); setEstCity(""); setEstCategory(""); setEstChain(""); setEstPriceUrl(""); setEstCep(""); setEstInstagram(""); setEstWhatsapp("");
       setShowEstForm(false);
       setShowEstMap(false);
       loadAll();
@@ -494,7 +496,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       });
       const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan");
       const rv = result || {};
-      const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}`;
+      const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}${rv.socialDependent ? ` • SOCIAL ${rv.socialDependent}` : ""}`;
       playSound("scan");
       toast(`SCAN DE PREÇOS CONCLUÍDO (${rv.establishments ?? 0} EST.)`, "success", summary);
       loadAll();
@@ -916,6 +918,13 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                 <div className="flex flex-col gap-1">
                   <label className={labelCls}>CATEGORIA</label>
                   <input className={inputCls} value={estCategory} onChange={(e) => setEstCategory(e.target.value)} placeholder="SUPERMERCADO" />
+                </div>
+                <div className="flex flex-col gap-1">
+                  <label className={labelCls}>REDE / CHAIN</label>
+                  <input className={inputCls} value={estChain} onChange={(e) => setEstChain(e.target.value)} placeholder="TATICO, BRETAS, CARREFOUR..." />
+                  <span className="text-[9px] font-mono text-crimson/40">
+                    SEM URL DE PREÇO — USA BUSCA "«ITEM» «REDE» PREÇO" (#32)
+                  </span>
                 </div>
                 <div className="flex flex-col gap-1 md:col-span-2">
                   <label className={labelCls}>ENDEREÇO</label>

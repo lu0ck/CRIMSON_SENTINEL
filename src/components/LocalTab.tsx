@@ -616,7 +616,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
       });
       const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan");
       const rv = result || {};
-      const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}`;
+      const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}${rv.socialDependent ? ` • SOCIAL ${rv.socialDependent}` : ""}`;
       playSound("scan");
       toast(`SCAN DE PREÇOS CONCLUÍDO (${rv.establishments ?? 0} EST.)`, "success", summary);
       loadAll();
