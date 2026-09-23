@@ -25,6 +25,7 @@ import type {
   Promotion,
 } from "../types";
 import { MapPicker } from "./MapPicker";
+import { ITEM_UNITS, type ItemUnit } from "../lib/units";
 
 interface MercadoTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
@@ -95,7 +96,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
 
   const [itemName, setItemName] = useState("");
   const [itemQty, setItemQty] = useState("1");
-  const [itemUnit, setItemUnit] = useState("");
+  const [itemUnit, setItemUnit] = useState<ItemUnit>("UN");
   const [itemCategory, setItemCategory] = useState("");
   const [itemTarget, setItemTarget] = useState("");
 
@@ -275,12 +276,17 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       toast("NOME DO ITEM É OBRIGATÓRIO", "error");
       return;
     }
+    const qty = parseFloat(itemQty);
+    if (isNaN(qty) || qty <= 0) {
+      toast("QUANTIDADE DEVE SER MAIOR QUE ZERO", "error");
+      return;
+    }
     try {
       const item: ShoppingListItem = {
         id: newId("item"),
         name: itemName.trim(),
-        quantity: parseFloat(itemQty) || 1,
-        unit: itemUnit.trim() || undefined,
+        quantity: qty,
+        unit: itemUnit,
         category: itemCategory.trim() || undefined,
         targetPrice: itemTarget ? parseFloat(itemTarget) : undefined,
         checked: false,
@@ -292,7 +298,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       });
       playSound("click");
       toast(`ITEM ADICIONADO: ${item.name.toUpperCase()}`, "success");
-      setItemName(""); setItemQty("1"); setItemUnit(""); setItemCategory(""); setItemTarget("");
+      setItemName(""); setItemQty("1"); setItemUnit("UN"); setItemCategory(""); setItemTarget("");
       setShowItemForm(false);
       loadAll();
     } catch (err: any) {
@@ -593,11 +599,28 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className={labelCls}>QUANTIDADE</label>
-                  <input type="number" className={inputCls} value={itemQty} onChange={(e) => setItemQty(e.target.value)} />
+                  <input
+                    type="number"
+                    step="any"
+                    min="0"
+                    className={inputCls}
+                    value={itemQty}
+                    onChange={(e) => setItemQty(e.target.value)}
+                  />
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className={labelCls}>UNIDADE</label>
-                  <input className={inputCls} value={itemUnit} onChange={(e) => setItemUnit(e.target.value)} placeholder="KG / UN / L" />
+                  <select
+                    className={inputCls}
+                    value={itemUnit}
+                    onChange={(e) => setItemUnit(e.target.value as ItemUnit)}
+                  >
+                    {ITEM_UNITS.map((u) => (
+                      <option key={u} value={u}>
+                        {u}
+                      </option>
+                    ))}
+                  </select>
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className={labelCls}>PREÇO ALVO (OPCIONAL)</label>

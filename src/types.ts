@@ -74,7 +74,7 @@ export interface ShoppingListItem {
   id: string;
   name: string;
   quantity?: number;
-  unit?: string;
+  unit?: import("./lib/units").ItemUnit;
   category?: string;
   checked?: boolean;
   targetPrice?: number;

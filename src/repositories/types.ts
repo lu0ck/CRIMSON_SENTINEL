@@ -9,6 +9,7 @@ import type {
   RoutePlan,
   RouteStop,
 } from "../types";
+import { normalizeUnit } from "../lib/units";
 
 export interface ProfileRow {
   id: string;
@@ -240,7 +241,7 @@ export function shoppingListItemRowToShoppingListItem(row: ShoppingListItemRow):
     id: row.id,
     name: row.name,
     quantity: row.quantity,
-    unit: row.unit ?? undefined,
+    unit: normalizeUnit(row.unit),
     category: row.category ?? undefined,
     checked: !!row.checked,
     targetPrice: row.target_price ?? undefined,

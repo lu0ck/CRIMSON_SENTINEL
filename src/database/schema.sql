@@ -105,8 +105,8 @@ CREATE INDEX IF NOT EXISTS idx_establishments_coords ON establishments(lat, lng)
 CREATE TABLE IF NOT EXISTS shopping_list_items (
   id TEXT PRIMARY KEY,
   name TEXT NOT NULL,
-  quantity INTEGER DEFAULT 1,
-  unit TEXT, -- "un", "kg", "g", "L", "ml"
+  quantity REAL DEFAULT 1,  -- aceita fracionário (ex.: 0.5 kg)
+  unit TEXT CHECK (unit IN ('kg','mg','g','L','ml','un') OR unit IS NULL), -- #23
   category TEXT, -- "mercearia", "hortifruti", "limpeza", etc.
   checked INTEGER DEFAULT 0,
   target_price REAL,

@@ -1,5 +1,6 @@
 import { getDb } from "../database/db";
 import type { ShoppingListItem } from "../types";
+import { normalizeUnit } from "../lib/units";
 import {
   type ShoppingListItemRow,
   shoppingListItemRowToShoppingListItem,
@@ -43,7 +44,7 @@ export const ShoppingListRepository = {
         id: item.id,
         name: item.name,
         quantity: item.quantity ?? 1,
-        unit: item.unit ?? null,
+        unit: normalizeUnit(item.unit) ?? null,
         category: item.category ?? null,
         checked: item.checked ? 1 : 0,
         target_price: item.targetPrice ?? null,

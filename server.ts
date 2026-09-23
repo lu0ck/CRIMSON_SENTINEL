@@ -37,6 +37,7 @@ import { isTrustedHost } from "./src/lib/trustedDomains.ts";
 import { filterAndDedupe } from "./src/lib/compare.ts";
 import { AI_MODELS } from "./src/lib/aiModels.ts";
 import { isInstagramEnabled } from "./src/lib/instagramEnabled.ts";
+import { normalizeUnit } from "./src/lib/units.ts";
 import {
   buildEcommerceEntities,
   buildLocalEntities,
@@ -906,7 +907,13 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
   app.post("/api/shopping-list-items", (req, res) => {
     try {
-      ShoppingListRepository.save(req.body);
+      const body = { ...req.body };
+      // #23: normaliza unidade para o enum canônico (KG/MG/G/L/ML/UN).
+      if (typeof body.unit === "string") {
+        const u = normalizeUnit(body.unit);
+        body.unit = u;
+      }
+      ShoppingListRepository.save(body);
       res.json({ status: "ok", item: ShoppingListRepository.getById(req.body.id) });
     } catch (error: any) {
       res.status(500).json({ error: error.message });

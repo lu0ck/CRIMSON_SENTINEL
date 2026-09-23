@@ -83,9 +83,8 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
   const [routes, setRoutes] = useState<RoutePlan[]>([]);
   const [loading, setLoading] = useState(true);
 
-  // Formulários
+  // Formulários (item form vive na aba MERCADO)
   const [showEstForm, setShowEstForm] = useState(false);
-  const [showItemForm, setShowItemForm] = useState(false);
   const [showPromoForm, setShowPromoForm] = useState(false);
   const [showObsForm, setShowObsForm] = useState(false);
 
@@ -100,13 +99,6 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
   const [estCep, setEstCep] = useState("");
   const [showEstMap, setShowEstMap] = useState(false);
   const [showRouteMap, setShowRouteMap] = useState(false);
-
-  // Novo item de compra
-  const [itemName, setItemName] = useState("");
-  const [itemQty, setItemQty] = useState("1");
-  const [itemUnit, setItemUnit] = useState("");
-  const [itemCategory, setItemCategory] = useState("");
-  const [itemTarget, setItemTarget] = useState("");
 
   // Nova promoção
   const [promoEstId, setPromoEstId] = useState("");
@@ -631,36 +623,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
   };
 
   // ---- Itens da lista de compras ------------------------------------------
-
-  const saveItem = async () => {
-    if (!itemName.trim()) {
-      toast("NOME DO ITEM É OBRIGATÓRIO", "error");
-      return;
-    }
-    try {
-      const item: ShoppingListItem = {
-        id: newId("item"),
-        name: itemName.trim(),
-        quantity: parseFloat(itemQty) || 1,
-        unit: itemUnit.trim() || undefined,
-        category: itemCategory.trim() || undefined,
-        targetPrice: itemTarget ? parseFloat(itemTarget) : undefined,
-        checked: false,
-      };
-      await apiJson("/api/shopping-list-items", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(item),
-      });
-      playSound("click");
-      toast(`ITEM ADICIONADO: ${item.name.toUpperCase()}`, "success");
-      setItemName(""); setItemQty("1"); setItemUnit(""); setItemCategory(""); setItemTarget("");
-      setShowItemForm(false);
-      loadAll();
-    } catch (err: any) {
-      toast("FALHA AO SALVAR ITEM", "error", String(err?.message || err));
-    }
-  };
+  // (formulário vive na aba MERCADO — MercadoTab; aqui só toggle/delete)
 
   const toggleItem = async (item: ShoppingListItem) => {
     try {
@@ -1044,6 +1007,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
                     {item.checked ? "✓ " : ""}
                     {item.name.toUpperCase()}
                     {item.quantity ? ` x${item.quantity}` : ""}
+                    {item.unit ? item.unit.toUpperCase() : ""}
                   </button>
                 ))}
                 {items.length === 0 && (
