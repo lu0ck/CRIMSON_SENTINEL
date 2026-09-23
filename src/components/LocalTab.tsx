@@ -123,6 +123,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
 
   // Roteirização
   const [selectedItemIds, setSelectedItemIds] = useState<string[]>([]);
+  const prevPendingRef = useRef<Set<string> | null>(null);
   const [startLat, setStartLat] = useState("-23.5505");
   const [startLng, setStartLng] = useState("-46.6333");
   const [routeName, setRouteName] = useState("");
@@ -334,6 +335,24 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
       setObservations(o);
       setPromotions(p);
       setRoutes(r);
+      // Itens automáticos na rota: inclui todos os pendentes (!checked).
+      // Merge-aware: preserva exclusões manuais do usuário entre reloads;
+      // só adiciona itens pendentes realmente novos.
+      const pendingIds = (i as ShoppingListItem[]).filter((it) => !it.checked).map((it) => it.id);
+      setSelectedItemIds((prev) => {
+        const prevPending = prevPendingRef.current;
+        if (prevPending === null) {
+          prevPendingRef.current = new Set(pendingIds);
+          return pendingIds;
+        }
+        const prevSet = new Set(prev);
+        // Pendentes que já existiam: mantém só se o usuário ainda os selecionou
+        const kept = pendingIds.filter((id) => prevPending.has(id) && prevSet.has(id));
+        // Pendentes novos (item criado desde o último load): entram automaticamente
+        const brandNew = pendingIds.filter((id) => !prevPending.has(id));
+        prevPendingRef.current = new Set(pendingIds);
+        return [...new Set([...kept, ...brandNew])];
+      });
     } catch (err: any) {
       toast("FALHA AO CARREGAR MÓDULO LOCAL", "error", String(err?.message || err));
     } finally {
@@ -755,8 +774,19 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
   };
 
   const generateRoute = async () => {
-    if (selectedItemIds.length === 0) {
-      toast("SELECIONE PELO MENOS UM ITEM DA LISTA DE COMPRAS", "error");
+    // Seleção automática: se nada selecionado, usa todos os pendentes.
+    let idsToSend = selectedItemIds;
+    if (idsToSend.length === 0) {
+      idsToSend = items.filter((it) => !it.checked).map((it) => it.id);
+      if (idsToSend.length > 0) setSelectedItemIds(idsToSend);
+    }
+    if (idsToSend.length === 0) {
+      toast(
+        items.length === 0
+          ? "LISTA DE COMPRAS VAZIA — ADICIONE ITENS NA ABA MERCADO"
+          : "TODOS OS ITENS JÁ FORAM COMPRADOS (CHECKED)",
+        "error"
+      );
       return;
     }
     const lat = parseFloat(startLat);
@@ -788,7 +818,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          shoppingListItemIds: selectedItemIds,
+          shoppingListItemIds: idsToSend,
           startLat: hasStart ? lat : undefined,
           startLng: hasStart ? lng : undefined,
           name: routeName.trim() || undefined,
@@ -980,31 +1010,52 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
       <section>
         <SectionTitle icon={<RouteIcon size={16} />}>ROTEIRIZAÇÃO DE COMPRAS</SectionTitle>
         <div className="hud-border-map bg-black/40 p-6 mt-4 flex flex-col gap-6">
-          <div className="flex flex-col gap-2">
-            <span className={labelCls}>ITENS SELECIONADOS ({selectedCount})</span>
-            <div className="flex flex-wrap gap-2">
-              {items.map((item) => (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center justify-between">
+                <span className={labelCls}>ITENS DA ROTA — AUTOMÁTICOS, PENDENTES ({selectedCount})</span>
                 <button
-                  key={item.id}
-                  onClick={() => toggleSelectedItem(item.id)}
-                  className={cn(
-                    "text-[10px] font-mono px-3 py-1 border transition-all",
-                    selectedItemIds.includes(item.id)
-                      ? "border-crimson bg-crimson/20 text-crimson glow-text"
-                      : "border-crimson/30 text-crimson/60 hover:border-crimson/70"
-                  )}
+                  onClick={() => {
+                    playSound("click");
+                    setSelectedItemIds(items.filter((it) => !it.checked).map((it) => it.id));
+                  }}
+                  className="text-[9px] font-mono text-crimson/50 hover:text-crimson border border-crimson/30 px-2 py-0.5 transition-all"
                 >
-                  {item.name.toUpperCase()}
-                  {item.quantity ? ` x${item.quantity}` : ""}
+                  RESTAURAR PADRÃO
                 </button>
-              ))}
-              {items.length === 0 && (
-                <span className="text-[10px] font-mono text-crimson/30">
-                  ADICIONE ITENS NA LISTA DE COMPRAS ABAIXO
-                </span>
-              )}
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {items.map((item) => (
+                  <button
+                    key={item.id}
+                    onClick={() => !item.checked && toggleSelectedItem(item.id)}
+                    disabled={item.checked}
+                    className={cn(
+                      "text-[10px] font-mono px-3 py-1 border transition-all",
+                      item.checked
+                        ? "border-crimson/20 text-crimson/30 line-through cursor-not-allowed opacity-50"
+                        : selectedItemIds.includes(item.id)
+                        ? "border-crimson bg-crimson/20 text-crimson glow-text"
+                        : "border-crimson/30 text-crimson/60 hover:border-crimson/70"
+                    )}
+                    title={item.checked ? "Já comprado — fora da rota" : "Clique para excluir da rota"}
+                  >
+                    {item.checked ? "✓ " : ""}
+                    {item.name.toUpperCase()}
+                    {item.quantity ? ` x${item.quantity}` : ""}
+                  </button>
+                ))}
+                {items.length === 0 && (
+                  <span className="text-[10px] font-mono text-crimson/30">
+                    LISTA VAZIA — ADICIONE ITENS NA ABA MERCADO
+                  </span>
+                )}
+                {items.length > 0 && items.every((it) => it.checked) && (
+                  <span className="text-[10px] font-mono text-crimson/30">
+                    TODOS OS ITENS JÁ FORAM COMPRADOS
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="flex flex-col gap-1">
