@@ -17,7 +17,7 @@ import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
 import { normalizeProductUrl, generateProductId } from "./src/lib/url.ts";
 import { getScanQueue, getRouteQueue, getSocialQueue } from "./src/queue/queues.ts";
-import { registerSchedulers, registerSocialScheduler, registerLocalPriceScanScheduler, registerTriggerEvaluateScheduler, unregisterSocialScheduler, listSocialScheduledJob } from "./src/queue/schedulers.ts";
+import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, listSocialScheduledJob } from "./src/queue/schedulers.ts";
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
@@ -95,9 +95,26 @@ async function startServer() {
     }
   });
 
-  app.post("/api/data", (req, res) => {
+  app.post("/api/data", async (req, res) => {
     try {
       AppDataRepository.saveAll(req.body);
+      // #25 — AUTO-REFRESH INTERVAL (profiles.refreshInterval em horas) alimenta
+      // o scheduler scan-interval-12h; sincroniza scan_interval_ms e re-registra.
+      try {
+        const hours = Number(req.body?.profiles?.[0]?.refreshInterval);
+        if (Number.isFinite(hours) && hours > 0) {
+          const ms = Math.round(hours * 60 * 60 * 1000);
+          const current = SettingsRepository.getNumber("scan_interval_ms");
+          if (current !== ms) {
+            SettingsRepository.set("scan_interval_ms", ms);
+            const dailyHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
+            await registerSchedulers({ scanIntervalMs: ms, dailyHour });
+            safeLog(`[scheduler] scan_interval_ms sincronizado via refreshInterval: ${hours}h (${ms}ms)`);
+          }
+        }
+      } catch (syncErr: any) {
+        safeLog("[scheduler] falha ao sincronizar scan_interval_ms: " + syncErr?.message);
+      }
       res.json({ status: "ok" });
     } catch (error) {
       safeLog("Error saving data: " + error);
@@ -1421,6 +1438,55 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // #25 — settings do scan e-commerce (intervalo + hora diária), espelha social/local.
+  app.get("/api/scan/settings", async (req, res) => {
+    try {
+      const intervalMs = SettingsRepository.getNumber("scan_interval_ms") ?? 12 * 60 * 60 * 1000;
+      const dailyHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
+      const { listScheduledJobs } = await import("./src/queue/schedulers.ts");
+      const jobs = await listScheduledJobs();
+      res.json({
+        intervalMs,
+        dailyHour,
+        intervalScheduler: jobs.find((s) => s.id === "scan-interval-12h") ?? null,
+        dailyScheduler: jobs.find((s) => s.id === "scan-daily-cron") ?? null,
+      });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.put("/api/scan/settings", async (req, res) => {
+    const { intervalMs, dailyHour } = req.body || {};
+    try {
+      if (intervalMs !== undefined) {
+        const newInterval = Number(intervalMs);
+        if (!Number.isFinite(newInterval) || newInterval <= 0) {
+          return res.status(400).json({ error: "intervalMs deve ser um número positivo (ms)" });
+        }
+        SettingsRepository.set("scan_interval_ms", Math.round(newInterval));
+      }
+      if (dailyHour !== undefined) {
+        const hour = Number(dailyHour);
+        if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
+          return res.status(400).json({ error: "dailyHour deve ser inteiro 0-23" });
+        }
+        SettingsRepository.set("scan_daily_hour", hour);
+      }
+      const finalInterval =
+        SettingsRepository.getNumber("scan_interval_ms") ?? 12 * 60 * 60 * 1000;
+      const finalHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
+      await registerSchedulers({ scanIntervalMs: finalInterval, dailyHour: finalHour });
+      safeLog(
+        `[scan] agendador atualizado: interval=${Math.round(finalInterval / 60000)}min daily=${finalHour}h`
+      );
+      res.json({ status: "ok", intervalMs: finalInterval, dailyHour: finalHour });
+    } catch (error: any) {
+      safeLog("[scan] erro ao atualizar agendador: " + error.message);
+      res.status(500).json({ error: error.message || "Failed to update scheduler" });
+    }
+  });
+
   // Configuração do agendamento social (FASE 9).
   app.get("/api/social/settings", async (req, res) => {
     try {
@@ -1627,7 +1693,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  app.post("/api/backup/import", (req, res) => {
+  app.post("/api/backup/import", async (req, res) => {
     try {
       const backup = req.body;
       if (!backup?.data || !backup?.version) {
@@ -1664,6 +1730,13 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       } catch (err) {
         db.exec("ROLLBACK");
         throw err;
+      }
+      // #25 — user_settings (intervalos) foram reescritos: re-registra todos os schedulers.
+      try {
+        await registerAllSchedulers();
+        safeLog("[scheduler] schedulers re-registrados após backup import");
+      } catch (schedErr: any) {
+        safeLog("[scheduler] falha ao re-registrar após import: " + schedErr?.message);
       }
       res.json({ status: "ok", imported });
     } catch (error: any) {
@@ -1760,35 +1833,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     console.log("=".repeat(80));
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
 
-    // Registra os schedulers BullMQ (substituem setTimeout/setTimeout recursivo + setInterval)
+    // #25 — registra todos os schedulers BullMQ a partir de user_settings
+    // (idempotente; o mesmo helper é reusado após backup import e mudanças de intervalo)
     try {
-      const scanIntervalMs = SettingsRepository.getNumber('scan_interval_ms') ?? (12 * 60 * 60 * 1000);
-      const dailyHour = SettingsRepository.getNumber('scan_daily_hour') ?? 15;
-      await registerSchedulers({ scanIntervalMs, dailyHour });
+      await registerAllSchedulers();
     } catch {
       safeLog("[scheduler] Falha ao registrar schedulers — Redis indisponível?");
-    }
-
-    try {
-      const socialIntervalMs = SettingsRepository.getNumber('social_scan_interval_ms') ?? (6 * 60 * 60 * 1000);
-      await registerSocialScheduler({ intervalMs: socialIntervalMs });
-    } catch {
-      safeLog("[scheduler] Falha ao registrar scheduler social — Redis indisponível?");
-    }
-
-    // FASE 12 — scan de preços locais recorrente (mesmo padrão do social)
-    try {
-      const localIntervalMs = SettingsRepository.getNumber('local_price_scan_interval_ms') ?? (6 * 60 * 60 * 1000);
-      await registerLocalPriceScanScheduler({ intervalMs: localIntervalMs });
-    } catch {
-      safeLog("[scheduler] Falha ao registrar scheduler de preços locais — Redis indisponível?");
-    }
-
-    // FRENTE 4 — trigger evaluator (a cada 1h)
-    try {
-      await registerTriggerEvaluateScheduler();
-    } catch {
-      safeLog("[scheduler] Falha ao registrar trigger-evaluate scheduler — Redis indisponível?");
     }
 
     // WhatsApp listener (se habilitado) — grupos + conversas diretas com flyers.

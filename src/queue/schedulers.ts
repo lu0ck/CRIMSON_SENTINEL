@@ -1,13 +1,33 @@
 import { getScanQueue, getSocialQueue, QUEUE_NAMES } from "./queues";
 import type { ScanJobPayload, SocialMonitorJobPayload } from "./types";
+import { SettingsRepository } from "../repositories/settingsRepository";
 
 // Chave para o scheduler diário. Mantida constante para que BullMQ não duplique.
 const REPEAT_DAILY_KEY = "scan-daily-cron";
+// Nome legado ("12h") — chave fixa no Redis; o intervalo real é configurável.
 const REPEAT_INTERVAL_KEY = "scan-interval-12h";
 const SOCIAL_SCAN_KEY = "social-scan-cron";
 const INSTAGRAM_SCAN_KEY = "instagram-stories-scan-cron";
 const LOCAL_PRICE_SCAN_KEY = "local-price-scan-cron";
 const TRIGGER_EVALUATE_KEY = "trigger-evaluate-cron";
+
+// #25 — registra TODOS os schedulers a partir de user_settings.
+// Idempotente (upsertJobScheduler); seguro no boot, após backup import
+// e após mudança de intervalo em runtime.
+export async function registerAllSchedulers(): Promise<void> {
+  const scanIntervalMs =
+    SettingsRepository.getNumber("scan_interval_ms") ?? 12 * 60 * 60 * 1000;
+  const dailyHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
+  const socialIntervalMs =
+    SettingsRepository.getNumber("social_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
+  const localIntervalMs =
+    SettingsRepository.getNumber("local_price_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
+
+  await registerSchedulers({ scanIntervalMs, dailyHour });
+  await registerSocialScheduler({ intervalMs: socialIntervalMs });
+  await registerLocalPriceScanScheduler({ intervalMs: localIntervalMs });
+  await registerTriggerEvaluateScheduler();
+}
 
 export async function registerSchedulers(opts?: {
   scanIntervalMs?: number;
@@ -113,7 +133,7 @@ export async function registerSocialScheduler(opts?: {
     }
   );
 
-  // Instagram stories scan (a cada 6h)
+  // Instagram stories scan (segue o mesmo intervalo do social scan)
   await queue.upsertJobScheduler(
     INSTAGRAM_SCAN_KEY,
     { every: intervalMs },
