@@ -357,7 +357,7 @@ Análise local determinística (sem rede) + narrativa do núcleo SENTINEL (Gemin
 - ✅ E2E determinístico: 2 estabelecimentos + 3 itens + promoção de café. Resultado: multi-parada R$49,70 vs tudo-em-um R$52,30 → economia R$2,60 (5%); promo aplicada (Café R$17,90 no Atacadão); flags NO ALVO corretas.
 - ✅ Pipeline IA: job `local-insight` enfileirado → `state: completed` com `returnvalue` (insights + texto). Sem `GEMINI_API_KEY` no ambiente, `method: deterministic` (fallback funciona).
 - ✅ Typecheck: 41 erros pré-existentes, **zero novos**; `vite build` OK; 4 processos pm2 online.
-- ⏳ Pendente: configurar `GEMINI_API_KEY` (via `.env` ou perfil) para validar caminho Gemini real.
+- ✅ **#29 (2026-09-23)** — bug de `profileId` corrigido em `LocalTab.analyzeWithAI` (body mandava `{}`); App agora passa `hasGeminiKey` e o badge do relatório diferencia `GEMINI` / `DETERMINISTIC SEM CHAVE` / `GEMINI FALHOU`. Caminho Gemini do perfil → worker validável na UI.
 
 **Nota FASE 7→8:** próximo passo natural é o monitoramento social (`socialWorker`: WhatsApp/Instagram) previsto nas Fases 9/10.
 

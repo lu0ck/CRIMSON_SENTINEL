@@ -2214,6 +2214,7 @@ const queued = await response.json();
                     playSound={playSound}
                     pollJob={pollJob}
                     profileId={activeProfileId}
+                    hasGeminiKey={!!activeProfile?.geminiApiKey}
                   />
                 </ErrorBoundary>
               </motion.div>

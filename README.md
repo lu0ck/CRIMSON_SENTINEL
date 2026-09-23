@@ -134,7 +134,7 @@ Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `
 Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento social (WhatsApp/Instagram), insights locais, scan recorrente de preços locais, auditorias de segurança (bind/Host), dedup/mescla de estabelecimentos. Roadmap detalhado, histórico e decisões em `DIAGNOSTICO.md`.
 
 **Pendências abertas:**
-- **FASE 7** — validar o caminho **Gemini real** dos insights locais (precisa `GEMINI_API_KEY` no perfil; hoje apenas o fallback determinístico foi exercitado).
+- ~~**FASE 7** — validar o caminho **Gemini real** dos insights locais~~ — **RESOLVIDO (#29)**: `LocalTab` agora envia `profileId`; badge diferencia GEMINI / fallback.
 - ~~**Instagram × PM2**~~ — **RESOLVIDO (#28)**: dono único PM2; spawn do `server.ts` removido; toggle usa `pm2 startOrReload`/`pm2 stop`; credenciais em `python_instagram/.ig.env` (gitignored).
 - **Cluster 4×** — validar o `crimson-scan-worker` em cluster (até 20 jobs simultâneos) num scan real com muitos produtos.
 

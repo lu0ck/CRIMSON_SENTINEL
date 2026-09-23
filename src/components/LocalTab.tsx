@@ -37,6 +37,8 @@ interface LocalTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
   playSound: (type: "click" | "success" | "error" | "scan" | "notify") => void;
   profileId?: string;
+  /** #29 — true se o perfil ativo tem geminiApiKey (dica no badge do relatório). */
+  hasGeminiKey?: boolean;
   pollJob: (
     jobId: string,
     signal?: AbortSignal,
@@ -76,7 +78,7 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
   );
 }
 
-export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabProps) {
+export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey }: LocalTabProps) {
   const [establishments, setEstablishments] = useState<Establishment[]>([]);
   const [items, setItems] = useState<ShoppingListItem[]>([]);
   const [observations, setObservations] = useState<PriceObservation[]>([]);
@@ -298,10 +300,12 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
     setAiAnalyzing(true);
     setAiText("");
     try {
+      // #29 — profileId obrigatório: sem ele o worker não lê geminiApiKey do perfil
+      // e sempre cai em deterministic (bug da FASE 7 — key só via env).
       const { jobId } = await apiJson("/api/local-insights/analyze", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ profileId }),
       });
       const result = await pollJob(jobId, undefined, 2000, 600_000, "scan");
       setAiText(result?.text || "");
@@ -1382,6 +1386,16 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
                     <div className="flex items-center gap-2 mb-2 text-[8px] font-mono text-crimson/50 tracking-widest">
                       <Sparkles size={12} /> RELATÓRIO SENTINELA
                       {aiMethod && <span className="text-crimson/30">• {aiMethod.toUpperCase()}</span>}
+                      {aiMethod === "deterministic" && !hasGeminiKey && (
+                        <span className="text-amber-500/70" title="Configure a chave Gemini no perfil CONFIG">
+                          • SEM CHAVE — FALLBACK
+                        </span>
+                      )}
+                      {aiMethod === "deterministic" && hasGeminiKey && (
+                        <span className="text-amber-500/70" title="Gemini falhou ou retornou vazio; resumo determinístico">
+                          • GEMINI FALHOU
+                        </span>
+                      )}
                     </div>
                     <pre className="text-[11px] font-mono text-crimson/80 whitespace-pre-wrap font-sans">
                       {aiText}
