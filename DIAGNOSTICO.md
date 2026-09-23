@@ -742,3 +742,36 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.18 bulk/cron market-search (#33 — FASE 16 bloco B)
+
+**Problema:** #32 deixou o **bulk** (`establishmentId` ausente, incl. cron `local-price-scan-cron`) só em `filter(e => e.priceUrl)` — redes sem URL nunca entravam no scan agendado; FASE 16 passo 2 ("sistema varre fontes") falhava em segundo plano. Decisão documentada em §6.17 ("bulk não roda search") estava correta para custo aberto; #33 reabre **só com keys + cap**.
+
+**Escopo de #33:**
+
+| Change | Detalhe |
+|---|---|
+| Bulk inclui só-chain | Se `(Serper\|Tavily)` **e** `(NVIDIA\|Gemini)`: est. **sem** `priceUrl` que `resolveMarketHandler(chain\|name)` entram nos `targets` |
+| Cap de custo | **`MARKET_SEARCH_BULK_MAX = 8`** est. só-chain por run (slice do registry; evita N×items Serper no cron) |
+| Sem keys | Bulk continua **só** `price_url` (comportamento #32 preservado) |
+| Filtro raio | Aplica-se **depois** de montar `withUrl + chainOnly` (mesmo centro/raio) |
+
+**Arquivos:**
+
+| Arquivo | Change |
+|---|---|
+| `src/workers/scanWorker.ts` | import `resolveMarketHandler`; branch bulk com `canMarketSearch` + `MARKET_SEARCH_BULK_MAX` |
+| `src/queue/types.ts` | comentário: bulk = price_url + até 8 só-chain se keys |
+| `GUIA_VPS.md` | Tier **B8**: bulk com keys → est. chain entram; sem keys → só price_url |
+| `roadmap.md` / `README.md` | pendência #33 RESOLVIDA |
+| `DIAGNOSTICO.md` | esta seção (§6.18) |
+
+**Decisões:**
+- **Reversão parcial** de §6.17 "bulk não roda search": só com keys + cap 8 (não ilimitado)
+- Cron sem `profileId` → keys via `process.env.SERPER_API_KEY`/`TAVILY_API_KEY` (já em #32)
+- Seed de redes **não** expandido neste commit (6 do #32; expandir conforme OSM/UI)
+- Proveniência continua `source:"scraping"` + `notes=query`
+
+**Validação #33:** `npx tsc --noEmit` → 0; bulk **sem** keys → targets só com price_url; bulk **com** keys → log `+N est. só-chain (cap 8)`; raio ainda filtra.
+
+---
+

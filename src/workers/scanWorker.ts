@@ -19,6 +19,7 @@ import { PriceObservationRepository } from "../repositories/priceObservationRepo
 import { PromotionRepository } from "../repositories/promotionRepository";
 import { SettingsRepository } from "../repositories/settingsRepository";
 import { scanEstablishmentPrices, type LocalPriceScanOutcome } from "../lib/localPriceScrape";
+import { resolveMarketHandler } from "../lib/market-handlers";
 import { overpassDiscoverEstablishments, haversineKm, type GeoPoint } from "../lib/geo";
 import { isFlashPrice, createFlashPromotion } from "../lib/flashDetect";
 import { alertFlashPromotion, recordInAppAlert } from "../lib/notify";
@@ -642,13 +643,36 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     const est = EstablishmentRepository.getById(establishmentId);
     targets = est ? [est] : [];
   } else {
-    targets = EstablishmentRepository.getAll().filter((e) => e.priceUrl);
+    // #33 — bulk/cron: price_url sempre; sem price_url só se handler resolve
+    // E houver keys de busca (Serper|Tavily + NVIDIA|Gemini). Cap de custo:
+    // no máximo MARKET_SEARCH_BULK_MAX est. só-chain por run (evita N×items
+    // chamadas Serper no cron sem profileId).
+    const MARKET_SEARCH_BULK_MAX = 8;
+    const canMarketSearch =
+      !!(apiKeys.serperApiKey || apiKeys.tavilyApiKey) &&
+      !!(apiKeys.nvidiaApiKey || apiKeys.geminiApiKey);
+    const all = EstablishmentRepository.getAll();
+    const withUrl = all.filter((e) => e.priceUrl);
+    let chainOnly: import("../types").Establishment[] = [];
+    if (canMarketSearch) {
+      chainOnly = all
+        .filter((e) => !e.priceUrl && resolveMarketHandler(e.chain || e.name))
+        .slice(0, MARKET_SEARCH_BULK_MAX);
+      if (chainOnly.length > 0) {
+        safeLog(
+          `[scan-worker] local-price-scan bulk: +${chainOnly.length} est. só-chain (cap ${MARKET_SEARCH_BULK_MAX}) p/ market-search`
+        );
+      }
+    }
+    targets = [...withUrl, ...chainOnly];
     if (hasUserLocation) {
       const center: GeoPoint = { lat: userLat, lng: userLng };
       targets = targets.filter((e) => haversineKm(center, { lat: e.lat, lng: e.lng }) * 1000 <= radiusMeters);
-      safeLog(`[scan-worker] local-price-scan: filtro raio ${radiusMeters}m manteve ${targets.length} est. de ${EstablishmentRepository.getAll().length}`);
+      safeLog(`[scan-worker] local-price-scan: filtro raio ${radiusMeters}m manteve ${targets.length} est. de ${all.length}`);
     } else {
-      safeLog("[scan-worker] local-price-scan: sem user_lat/user_lng, varrendo todos com price_url");
+      safeLog(
+        `[scan-worker] local-price-scan: sem user_lat/user_lng, varrendo ${withUrl.length} com price_url${chainOnly.length ? ` + ${chainOnly.length} só-chain` : ""}`
+      );
     }
   }
 

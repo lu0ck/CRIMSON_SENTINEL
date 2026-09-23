@@ -47,6 +47,7 @@
 - ~~**Cluster 4×** — validar o scan-worker em cluster (até 20 jobs simultâneos)~~ — **RESOLVIDO (#30)**: lock `120s/60s` (cobre estratégia 90s) + `scripts/stress-cluster-20.sh`. Execução local 20 jobs: pico `active=17`, 4 workers, **0 stalled**, API 200, veredito **APROVADO** (`RELATORIO_TESTE_CLUSTER.md`). Re-rodar na VPS: `bash scripts/stress-cluster-20.sh`.
 - ~~**Doc VPS + checklist E2E**~~ — **RESOLVIDO (#31)**: [`GUIA_VPS.md`](GUIA_VPS.md) (bootstrap Debian/Ubuntu, 8 processos PM2, `BIND_HOST`/túnel, health checks, checklist E2E tiers A/B/C, stress na VPS, backup) + seção `DIAGNOSTICO` §6.16. **Gate FASE 16** ainda pendente: rodar o checklist **em VPS real** (Tier A+B mínimos; C com chaves/QR).
 - ~~**market-handlers + fallback sem price_url**~~ — **RESOLVIDO (#32)**: registry `src/lib/market-handlers.ts` + cascade 3-tier (search → social-dependent) em `localPriceScrape`; campo REDE/CHAIN na UI; toast `SOCIAL {n}`; search **só** com `establishmentId` explícito (bulk continua `price_url`). DIAGNOSTICO §6.17.
+- ~~**bulk/cron market-search**~~ — **RESOLVIDO (#33)**: bulk/cron inclui est. só-chain (sem `price_url`) **quando há keys** Serper/Tavily + NVIDIA/Gemini, **cap 8** por run; sem keys = só `price_url`. DIAGNOSTICO §6.18.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---

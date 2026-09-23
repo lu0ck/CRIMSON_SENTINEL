@@ -142,6 +142,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**Cluster 4×**~~ — **RESOLVIDO (#30)**: lock 120s/60s + `scripts/stress-cluster-20.sh`. Execução local 20 jobs → **APROVADO** em `RELATORIO_TESTE_CLUSTER.md` (pico 17 concurrent, 4 workers, 0 stalled). VPS: `bash scripts/stress-cluster-20.sh`.
 - ~~**Doc VPS + E2E**~~ — **RESOLVIDO (#31)**: runbook em [`GUIA_VPS.md`](GUIA_VPS.md) (bootstrap, health checks, checklist E2E A/B/C, carga, backup) + DIAGNOSTICO §6.16. Gate final FASE 16: executar Tier A–C **na VPS real**.
 - ~~**market-handlers + fallback sem price_url**~~ — **RESOLVIDO (#32)**: registry por rede + cascade search/social; campo REDE na UI; toast `SOCIAL {n}`. DIAGNOSTICO §6.17.
+- ~~**bulk/cron market-search**~~ — **RESOLVIDO (#33)**: cron/bulk inclui só-chain com keys (cap 8); sem keys = só price_url. DIAGNOSTICO §6.18.
 
 ---
 

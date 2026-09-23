@@ -37,7 +37,7 @@ export interface LocalInsightJobPayload {
 export interface LocalPriceScanJobPayload {
   type: "local-price-scan";
   profileId?: string; // chaves de scraping (Gemini/NVIDIA/LM Studio + Serper/Tavily)
-  establishmentId?: string; // se ausente, varre todos com price_url (bulk); com id, aceita market-handler sem price_url (#32)
+  establishmentId?: string; // bulk: price_url + até 8 só-chain se keys (#33); com id: market-handler sem price_url (#32)
 }
 
 // B1 — descoberta geográfica de estabelecimentos via Overpass API
