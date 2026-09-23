@@ -31,7 +31,7 @@
 ```
 
 - **Fila única de scan** com 4 instâncias PM2 em cluster (`concurrency: 5` cada) → até **20 jobs simultâneos** sem OOM.
-- **Lock anti-travamento**: `lockDuration: 65s`, `stalledInterval: 30s`, `maxStalledCount: 1`.
+- **Lock anti-travamento**: `lockDuration: 120s`, `stalledInterval: 60s`, `maxStalledCount: 1` (cobre timeout de 90s por estratégia de scrape — #30).
 - **Toda IA roda em worker** (nunca no handler HTTP): LM Studio → NVIDIA → Gemini, em cascata.
 - **Persistência** em SQLite (`crimson.db` na raiz do projeto; `USER_DATA_PATH` sobrescreve o caminho em produção), acessada via repositórios em `src/repositories/`.
 
@@ -136,7 +136,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 **Pendências abertas:**
 - ~~**FASE 7** — validar o caminho **Gemini real** dos insights locais~~ — **RESOLVIDO (#29)**: `LocalTab` agora envia `profileId`; badge diferencia GEMINI / fallback.
 - ~~**Instagram × PM2**~~ — **RESOLVIDO (#28)**: dono único PM2; spawn do `server.ts` removido; toggle usa `pm2 startOrReload`/`pm2 stop`; credenciais em `python_instagram/.ig.env` (gitignored).
-- **Cluster 4×** — validar o `crimson-scan-worker` em cluster (até 20 jobs simultâneos) num scan real com muitos produtos.
+- ~~**Cluster 4×**~~ — **RESOLVIDO (#30)**: lock 120s/60s + `scripts/stress-cluster-20.sh`. Execução local 20 jobs → **APROVADO** em `RELATORIO_TESTE_CLUSTER.md` (pico 17 concurrent, 4 workers, 0 stalled). VPS: `bash scripts/stress-cluster-20.sh`.
 
 ---
 

@@ -886,9 +886,11 @@ export function startScanWorker() {
       // A3: concorrência configurável (default 5). Com 4 instâncias pm2 em
       // exec_mode cluster = até 20 jobs simultâneos sem OOM.
       concurrency: SettingsRepository.getNumber("scan_concurrency") || 5,
-      // A4: proteção contra jobs travados (lock do BullMQ).
-      lockDuration: 65_000,
-      stalledInterval: 30_000,
+      // A4/#30: lock deve cobrir UMA estratégia de scrape (timeout 90s em
+      // scraper.ts) + margem. Antes 65s < 90s → sob 20 jobs concorrentes,
+      // renovação podia falhar e BullMQ re-entregava (stalled, maxStalledCount 1).
+      lockDuration: 120_000,
+      stalledInterval: 60_000,
       maxStalledCount: 1,
     }
   );

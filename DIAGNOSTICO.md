@@ -474,6 +474,43 @@ O ambiente foi migrado para outro disco; o projeto agora vive em `/mnt/SSD_Games
 
 **E2E pós-migração validado**: fake market → job `local-price-scan` consumido pelo cluster → `recorded: 2` (R$12,34, method PLAYWRIGHT_STEALTH) → re-scan dedup (`dup: 2`) → séries visíveis em `/api/price-history`. Scheduler social visível (`social-scan-cron`, next ok). 8 processos online (api + 4×scan cluster + route + social + instagram-service).
 
+---
+
+## 6.15b Stress cluster scan-worker (#30)
+
+**Problema (roadmap pendência):** validar 4×cluster / até 20 jobs simultâneos "num scan real com muitos produtos". O `stress-test-24h.sh` só **amostrava** `/api/status` — não enfileirava carga.
+
+**Risco de lock descoberto:** estratégia de scrape tem `timeoutMs = 90_000` (`scraper.ts:620`) mas o worker usava `lockDuration: 65_000` + `maxStalledCount: 1` → sob carga, lock podia expirar antes do fim de uma estratégia → stalled + re-delivery + falha.
+
+**Mudanças:**
+| Arquivo | Change |
+|---|---|
+| `src/workers/scanWorker.ts` | `lockDuration: 120_000`, `stalledInterval: 60_000` (cobre 90s + margem); comentário #30 |
+| `scripts/stress-cluster-20.sh` | **novo** — enfileira N=20 `POST /api/scrape`, amostra filas Redis + workers pm2, gera `RELATORIO_TESTE_CLUSTER.md` (APROVADO/REVISAR) |
+| `README.md` | lock documentado 120s/60s |
+
+**Uso (VPS / stack completa):**
+```bash
+# pré: Redis + pm2 start ecosystem + API :3001
+bash scripts/stress-cluster-20.sh
+# opcional (retries attempts:3 podem segurar delayed ~2min):
+N_JOBS=20 TIMEOUT_S=600 bash scripts/stress-cluster-20.sh
+```
+
+**Critérios de aprovação (relatório):**
+- 4× `sentinela-scan-worker` online
+- `count_ids_in_zset`: jobs nossos em completed+failed == N_JOBS (pending=0)
+- `stalled_hits=0` no log
+- API 200 em todas as amostras markadas (`^SAMPLE`)
+
+**Validação nesta sessão:** `npx tsc --noEmit` → 0 erros.
+
+**Bug de métrica do script (corrigido):** a 1ª execução gerou `REVISAR` só por `qlen` errado — `completed`/`failed`/`delayed` são **ZSET** (BullMQ) mas o script chamava `LLEN`, e `redis-cli` imprime `WRONGTYPE` no **stdout** com exit 0 (o `2>/dev/null` não ajuda). Havia ainda case-mismatch: comparava `[ "$op" = "zcard" ]` mas os call sites passavam `ZCARD` → caía no ramo `LLEN` também para `delayed`. Fix: `qlen` detecta o tipo via `TYPE` (list→LLEN, zset→ZCARD, none→0) e valida saída numérica; contagem final por `ZSCORE` dos job IDs enfileirados (`count_ids_in_zset`). Mesmo fix de ZCARD aplicado em `stress-test-24h.sh`.
+
+**Evidência 1ª execução (carga/estabilidade):** 20/20 enfileirados (ids 372–391); pico `active=17`; `workers=4` em todas as amostras; **0** menções a stalled; API `status=ok` em todas as amostras markadas; jobs: 2 completed + 18 failed com `failedReason = Failed to scrape product data from all strategies` (URLs fake de stress — **não** stalled).
+
+**Evidência 2ª execução (script corrigido, 2026-09-23 16:04–16:14):** métricas numéricas limpas no log; drain até `wait=active=0` com `delayed` só de backoff; **veredito APROVADO** em `RELATORIO_TESTE_CLUSTER.md` (4 workers, todos os jobs nossos finalizados via `count_ids_in_zset`, `stalled_hits=0`, API 100% nas amostras markadas). `npx tsc --noEmit` → 0.
+
 ## 6.12 Status da FASE 12 (concluída) — Agendador do scan de preços locais + auditoria de código
 
 Três frentes: (1) o **scan de preços locais recorrente** como repeatable job do BullMQ; (2) **auditoria de alta prioridade** (domínios confiáveis, modelos de IA, catchup assíncrono); (3) pequenos fixes de robustez.

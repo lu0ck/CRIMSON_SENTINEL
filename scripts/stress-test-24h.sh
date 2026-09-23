@@ -143,9 +143,13 @@ sample() {
       local w a f c d
       w=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw LLEN "bull:$q:wait" 2>/dev/null || echo "?")
       a=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw LLEN "bull:$q:active" 2>/dev/null || echo "?")
-      f=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw LLEN "bull:$q:failed" 2>/dev/null || echo "?")
-      c=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw LLEN "bull:$q:completed" 2>/dev/null || echo "?")
+      # completed/failed são ZSET em BullMQ (LLEN → WRONGTYPE no stdout)
+      f=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw ZCARD "bull:$q:failed" 2>/dev/null || echo "?")
+      c=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw ZCARD "bull:$q:completed" 2>/dev/null || echo "?")
       d=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw ZCARD "bull:$q:delayed" 2>/dev/null || echo "?")
+      case "$f" in ''|*[!0-9]*) f="?" ;; esac
+      case "$c" in ''|*[!0-9]*) c="?" ;; esac
+      case "$d" in ''|*[!0-9]*) d="?" ;; esac
       line="$line $q.wait=$w $q.active=$a $q.failed=$f $q.completed=$c $q.delayed=$d"
     done
   fi
@@ -182,7 +186,7 @@ main() {
   local bline="BASELINE ts=$(date '+%F %T')"
   if have_cmd redis-cli; then
     for q in scan-queue route-queue social-monitor-queue; do
-      bline="$bline $q.failed=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw LLEN "bull:$q:failed" 2>/dev/null || echo '?')"
+      bline="$bline $q.failed=$(redis-cli -h "$REDIS_HOST" -p "$REDIS_PORT" --raw ZCARD "bull:$q:failed" 2>/dev/null || echo '?')"
     done
   fi
   if have_cmd pm2; then
