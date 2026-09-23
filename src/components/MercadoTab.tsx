@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useMemo, useState, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/cn";
 import {
@@ -99,6 +99,10 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const [itemUnit, setItemUnit] = useState<ItemUnit>("UN");
   const [itemCategory, setItemCategory] = useState("");
   const [itemTarget, setItemTarget] = useState("");
+  // #24 — autocomplete de nomes (sugestões de itens/promoções já cadastrados)
+  const [nameSuggestOpen, setNameSuggestOpen] = useState(false);
+  const [activeSuggest, setActiveSuggest] = useState(-1);
+  const nameSuggestRef = useRef<HTMLDivElement>(null);
 
   const [promoEstId, setPromoEstId] = useState("");
   const [promoProduct, setPromoProduct] = useState("");
@@ -115,6 +119,58 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const importFileRef = useRef<HTMLInputElement>(null);
 
   const [expandedObs, setExpandedObs] = useState<string | null>(null);
+
+  // #24 — sugestões de nome: nomes de itens + produtos de promoções, filtrados por substring
+  const nameSuggestions = useMemo(() => {
+    const q = itemName.trim().toLowerCase();
+    if (q.length < 2) return [];
+    const pool = [
+      ...items.map((i) => i.name),
+      ...promotions.map((p) => p.productName),
+    ];
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const raw of pool) {
+      const name = (raw || "").trim();
+      if (!name) continue;
+      const lower = name.toLowerCase();
+      if (lower === q || !lower.includes(q)) continue;
+      if (seen.has(lower)) continue;
+      seen.add(lower);
+      out.push(name);
+      if (out.length >= 8) break;
+    }
+    return out;
+  }, [itemName, items, promotions]);
+
+  const showNameSuggest = nameSuggestOpen && nameSuggestions.length > 0;
+
+  const selectNameSuggestion = (name: string) => {
+    setItemName(name);
+    setNameSuggestOpen(false);
+    setActiveSuggest(-1);
+  };
+
+  // Fecha o dropdown ao clicar fora
+  useEffect(() => {
+    if (!showNameSuggest) return;
+    const onDown = (e: MouseEvent) => {
+      if (nameSuggestRef.current && !nameSuggestRef.current.contains(e.target as Node)) {
+        setNameSuggestOpen(false);
+        setActiveSuggest(-1);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showNameSuggest]);
+
+  // Limpa sugestões ao fechar o form
+  useEffect(() => {
+    if (!showItemForm) {
+      setNameSuggestOpen(false);
+      setActiveSuggest(-1);
+    }
+  }, [showItemForm]);
 
   const toast = (message: string, type: ToastType, details?: string) =>
     addToast(message, type, details);
@@ -299,6 +355,8 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       playSound("click");
       toast(`ITEM ADICIONADO: ${item.name.toUpperCase()}`, "success");
       setItemName(""); setItemQty("1"); setItemUnit("UN"); setItemCategory(""); setItemTarget("");
+      setNameSuggestOpen(false);
+      setActiveSuggest(-1);
       setShowItemForm(false);
       loadAll();
     } catch (err: any) {
@@ -590,12 +648,75 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
               exit={{ opacity: 0, height: 0 }}
-              className="hud-border bg-black/40 p-5 mt-4 overflow-hidden"
+              className="hud-border bg-black/40 p-5 mt-4 overflow-visible"
             >
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                <div className="flex flex-col gap-1 md:col-span-3">
+                <div className="flex flex-col gap-1 md:col-span-3 relative" ref={nameSuggestRef}>
                   <label className={labelCls}>NOME DO ITEM *</label>
-                  <input className={inputCls} value={itemName} onChange={(e) => setItemName(e.target.value)} placeholder="ARROZ 5KG" />
+                  <input
+                    className={inputCls}
+                    value={itemName}
+                    onChange={(e) => {
+                      setItemName(e.target.value);
+                      setNameSuggestOpen(true);
+                      setActiveSuggest(-1);
+                    }}
+                    onFocus={() => setNameSuggestOpen(true)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        setNameSuggestOpen(false);
+                        setActiveSuggest(-1);
+                        return;
+                      }
+                      if (!showNameSuggest) return;
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setActiveSuggest((i) => (i + 1) % nameSuggestions.length);
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setActiveSuggest((i) =>
+                          i <= 0 ? nameSuggestions.length - 1 : i - 1
+                        );
+                      } else if (e.key === "Enter" && activeSuggest >= 0) {
+                        e.preventDefault();
+                        selectNameSuggestion(nameSuggestions[activeSuggest]);
+                      }
+                    }}
+                    placeholder="ARROZ 5KG"
+                    role="combobox"
+                    aria-expanded={showNameSuggest}
+                    aria-autocomplete="list"
+                    autoComplete="off"
+                  />
+                  {showNameSuggest && (
+                    <div
+                      role="listbox"
+                      className="absolute left-0 right-0 top-full mt-1 z-[70] border border-crimson/30 bg-black/95 backdrop-blur-md shadow-lg shadow-crimson/10 max-h-48 overflow-y-auto"
+                    >
+                      <div className="px-2 py-1 text-[8px] font-mono text-crimson/50 tracking-widest border-b border-crimson/20 bg-crimson/5 sticky top-0">
+                        SUGESTÕES ({nameSuggestions.length})
+                      </div>
+                      {nameSuggestions.map((s, idx) => (
+                        <button
+                          key={`${s}-${idx}`}
+                          type="button"
+                          role="option"
+                          aria-selected={activeSuggest === idx}
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            selectNameSuggestion(s);
+                          }}
+                          onMouseEnter={() => setActiveSuggest(idx)}
+                          className={cn(
+                            "block w-full text-left px-2 py-1.5 text-xs font-mono text-white/90 hover:bg-crimson/15 transition-colors",
+                            activeSuggest === idx && "bg-crimson/20"
+                          )}
+                        >
+                          {s}
+                        </button>
+                      ))}
+                    </div>
+                  )}
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className={labelCls}>QUANTIDADE</label>
