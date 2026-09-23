@@ -24,6 +24,26 @@ interface TriggerRow {
   created_at: string;
 }
 
+export interface TriggerFireLogEntry {
+  id: number;
+  triggerId: string;
+  triggerName: string;
+  condition: string;
+  entityId: string | null;
+  matchedValue: string | null;
+  firedAt: string;
+}
+
+interface TriggerFireLogRow {
+  id: number;
+  trigger_id: string;
+  entity_id: string | null;
+  matched_value: string | null;
+  fired_at: string;
+  trigger_name: string;
+  condition: string;
+}
+
 function rowToTrigger(row: TriggerRow): Trigger {
   return {
     id: row.id,
@@ -93,6 +113,37 @@ export const TriggerRepository = {
         "INSERT INTO trigger_fire_log (trigger_id, entity_id, matched_value) VALUES (?, ?, ?)"
       )
       .run(triggerId, entityId ?? null, matchedValue ?? null);
+  },
+
+  // #26 — histórico de disparos com JOIN no trigger (nome + condição)
+  getFireLog(limit = 30, triggerId?: string): TriggerFireLogEntry[] {
+    const sql = triggerId
+      ? `SELECT f.id, f.trigger_id, f.entity_id, f.matched_value, f.fired_at,
+                t.name AS trigger_name, t.condition
+         FROM trigger_fire_log f
+         JOIN triggers t ON t.id = f.trigger_id
+         WHERE f.trigger_id = ?
+         ORDER BY f.fired_at DESC, f.id DESC
+         LIMIT ?`
+      : `SELECT f.id, f.trigger_id, f.entity_id, f.matched_value, f.fired_at,
+                t.name AS trigger_name, t.condition
+         FROM trigger_fire_log f
+         JOIN triggers t ON t.id = f.trigger_id
+         ORDER BY f.fired_at DESC, f.id DESC
+         LIMIT ?`;
+    const rows = (triggerId
+      ? getDb().prepare(sql).all(triggerId, Math.max(1, Math.min(limit, 200)))
+      : getDb().prepare(sql).all(Math.max(1, Math.min(limit, 200)))
+    ) as TriggerFireLogRow[];
+    return rows.map((row) => ({
+      id: row.id,
+      triggerId: row.trigger_id,
+      triggerName: row.trigger_name,
+      condition: row.condition,
+      entityId: row.entity_id,
+      matchedValue: row.matched_value,
+      firedAt: row.fired_at,
+    }));
   },
 
   hasFiredRecently(triggerId: string, cooldownMs: number): boolean {

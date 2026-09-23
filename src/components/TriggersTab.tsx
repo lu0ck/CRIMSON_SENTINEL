@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/cn";
-import { ShieldAlert, Loader2, Plus, Trash2, Radio, Zap, TrendingDown, Bell, Hash, Package } from "lucide-react";
+import { ShieldAlert, Loader2, Plus, Trash2, Radio, Zap, TrendingDown, Bell, Hash, Package, Clock } from "lucide-react";
 
 type ToastType = "success" | "error" | "info";
 
@@ -21,6 +21,22 @@ interface Trigger {
   enabled: boolean;
   lastFiredAt?: string;
   createdAt: string;
+}
+
+interface TriggerFireLogEntry {
+  id: number;
+  triggerId: string;
+  triggerName: string;
+  condition: string;
+  entityId: string | null;
+  matchedValue: string | null;
+  firedAt: string;
+}
+
+function formatFireLogTime(firedAt: string): string {
+  // sqlite grava UTC "YYYY-MM-DD HH:MM:SS" — padroniza para Date local
+  const iso = firedAt.includes("T") ? firedAt : firedAt.replace(" ", "T") + "Z";
+  return new Date(iso).toLocaleString("pt-BR");
 }
 
 async function apiJson(url: string, options?: RequestInit) {
@@ -54,6 +70,7 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
   const [loading, setLoading] = useState(true);
   const [showForm, setShowForm] = useState(false);
   const [evaluating, setEvaluating] = useState(false);
+  const [fireLog, setFireLog] = useState<TriggerFireLogEntry[]>([]);
 
   const [newName, setNewName] = useState("");
   const [newEntity, setNewEntity] = useState<"product" | "keyword" | "promo">("keyword");
@@ -76,8 +93,23 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
     }
   };
 
+  const loadFireLog = async () => {
+    try {
+      const data = await apiJson("/api/triggers/fire-log?limit=20");
+      setFireLog(Array.isArray(data) ? data : []);
+    } catch {
+      // ignore
+    }
+  };
+
   useEffect(() => {
     loadTriggers();
+    loadFireLog();
+    // #26 — refresh do log (disparos do cron 1h) sem F5
+    const interval = setInterval(() => {
+      loadFireLog();
+    }, 60_000);
+    return () => clearInterval(interval);
   }, []);
 
   const addTrigger = async () => {
@@ -118,6 +150,7 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
       await apiJson(`/api/triggers/${id}`, { method: "DELETE" });
       toast("TRIGGER REMOVIDO", "info");
       loadTriggers();
+      loadFireLog();
     } catch (err: any) {
       toast("FALHA", "error", String(err?.message || err));
     }
@@ -130,6 +163,7 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
       await pollJob(jobId, undefined, 2000, 60_000, "social");
       toast("TRIGGERS AVALIADOS", "info");
       loadTriggers();
+      loadFireLog();
     } catch (err: any) {
       toast("FALHA", "error", String(err?.message || err));
     } finally {
@@ -352,6 +386,54 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
           })}
         </div>
       )}
+      {/* ===== HISTÓRICO DE DISPAROS (#26) ===== */}
+      <section>
+        <div className="flex items-center justify-between">
+          <SectionTitle icon={<Clock size={16} />}>HISTÓRICO DE DISPAROS</SectionTitle>
+          <button
+            onClick={() => { playSound("click"); loadFireLog(); }}
+            className="hud-button text-[9px] flex items-center gap-1"
+          >
+            ATUALIZAR
+          </button>
+        </div>
+        <div className="hud-border bg-black/40 p-4 mt-4 flex flex-col gap-2 max-h-64 overflow-y-auto">
+          {fireLog.length === 0 ? (
+            <span className="text-[10px] font-mono text-crimson/30 text-center py-4">
+              NENHUM DISPARO REGISTRADO
+            </span>
+          ) : (
+            fireLog.map((entry) => (
+              <motion.div
+                key={entry.id}
+                initial={{ opacity: 0, y: 6 }}
+                animate={{ opacity: 1, y: 0 }}
+                className="flex items-start gap-3 border-b border-crimson/10 pb-2 last:border-0"
+              >
+                <span className="text-[9px] font-mono mt-0.5 text-amber-500">●</span>
+                <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono text-crimson/70 font-bold">
+                      {entry.triggerName}
+                    </span>
+                    <span className="text-[7px] font-mono text-crimson/30 border border-crimson/20 px-1">
+                      {(CONDITION_INFO[entry.condition]?.label) || entry.condition}
+                    </span>
+                  </div>
+                  {entry.matchedValue && (
+                    <span className="text-[9px] font-mono text-crimson/50 truncate">
+                      {entry.matchedValue}
+                    </span>
+                  )}
+                  <span className="text-[8px] font-mono text-crimson/30">
+                    {formatFireLogTime(entry.firedAt)}
+                  </span>
+                </div>
+              </motion.div>
+            ))
+          )}
+        </div>
+      </section>
     </div>
   );
 }

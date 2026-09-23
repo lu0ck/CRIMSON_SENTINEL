@@ -1256,6 +1256,18 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // #26 — histórico de disparos (espelha GET /api/social/groups/messages)
+  app.get("/api/triggers/fire-log", async (req, res) => {
+    try {
+      const limit = Number(req.query.limit) || 30;
+      const triggerId = req.query.triggerId as string | undefined;
+      const { TriggerRepository } = await import("./src/repositories/triggerRepository.ts");
+      res.json(TriggerRepository.getFireLog(limit, triggerId));
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // C2 — endpoints WhatsApp real (whatsapp-web.js)
   // Toggle WhatsApp on/off via DB (sem .env)
   app.get("/api/social/whatsapp/toggle", (_req, res) => {
@@ -1672,7 +1684,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         "profiles", "product_lists", "products", "price_history",
         "establishments", "shopping_list_items", "price_observations",
         "promotions", "routes", "route_stops", "social_sources",
-        "user_settings", "notification_log",
+        "user_settings", "notification_log", "triggers", "trigger_fire_log",
       ];
       const data: Record<string, any[]> = {};
       for (const table of tables) {
@@ -1704,7 +1716,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         "notification_log", "route_stops", "routes", "promotions",
         "price_observations", "shopping_list_items", "establishments",
         "price_history", "products", "product_lists", "profiles",
-        "social_sources", "user_settings",
+        "social_sources", "user_settings", "triggers", "trigger_fire_log",
       ];
       const imported: Record<string, number> = {};
       db.exec("BEGIN TRANSACTION");

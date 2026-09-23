@@ -29,6 +29,8 @@ const entityMeta = (entityType: string) => {
       return { icon: <XCircle size={14} />, label: "SCRAPE", color: "text-red-500" };
     case "compare":
       return { icon: <Bell size={14} />, label: "COMPARAR", color: "text-crimson" };
+    case "trigger":
+      return { icon: <ShieldAlert size={14} />, label: "TRIGGER", color: "text-amber-500" };
     default:
       return { icon: <Bell size={14} />, label: entityType.toUpperCase(), color: "text-crimson" };
   }

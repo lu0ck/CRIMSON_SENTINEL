@@ -464,6 +464,7 @@ async function handleTriggerEvaluate(
 
     let matched = false;
     let matchedValue = "";
+    let matchedEntityId: string | undefined;
 
     switch (trigger.condition) {
       case "price_lte": {
@@ -474,6 +475,7 @@ async function handleTriggerEvaluate(
           if (p.currentPrice != null && p.currentPrice <= threshold) {
             matched = true;
             matchedValue = `${p.name}: R$ ${p.currentPrice}`;
+            matchedEntityId = p.id;
             break;
           }
         }
@@ -489,6 +491,7 @@ async function handleTriggerEvaluate(
             if (dropPct >= minDropPct) {
               matched = true;
               matchedValue = `${p.name}: R$ ${p.previousPrice} → R$ ${p.currentPrice} (${dropPct.toFixed(1)}% queda)`;
+              matchedEntityId = p.id;
               break;
             }
           }
@@ -515,6 +518,7 @@ async function handleTriggerEvaluate(
           if (consecutive >= minConsecutive) {
             matched = true;
             matchedValue = `${p.name}: ${consecutive} quedas consecutivas (R$ ${history[0].price} → R$ ${history[history.length - 1].price})`;
+            matchedEntityId = p.id;
             break;
           }
         }
@@ -528,6 +532,7 @@ async function handleTriggerEvaluate(
           if (keywords.some((kw) => name.includes(kw))) {
             matched = true;
             matchedValue = promo.productName;
+            matchedEntityId = promo.id;
             break;
           }
         }
@@ -538,6 +543,7 @@ async function handleTriggerEvaluate(
         if (recentPromos.length > 0) {
           matched = true;
           matchedValue = `${recentPromos.length} promoções recentes`;
+          matchedEntityId = recentPromos[0]?.id;
         }
         break;
       }
@@ -545,8 +551,22 @@ async function handleTriggerEvaluate(
 
     if (matched) {
       TriggerRepository.setLastFired(trigger.id);
-      TriggerRepository.logFire(trigger.id, undefined, matchedValue);
+      TriggerRepository.logFire(trigger.id, matchedEntityId, matchedValue);
       fired++;
+
+      // #26 — alerta in-app (Central de Alertas) além dos canais externos
+      try {
+        const { recordInAppAlert } = await import("../lib/notify.ts");
+        recordInAppAlert(
+          "trigger",
+          trigger.id,
+          `🔔 TRIGGER "${trigger.name}"`,
+          matchedValue,
+          1
+        );
+      } catch {
+        // in-app é best-effort — não bloqueia envio externo
+      }
 
       // Enviar notificação
       const channels = trigger.channels.split(",").map((c) => c.trim());
