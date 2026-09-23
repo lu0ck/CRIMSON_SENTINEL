@@ -351,6 +351,11 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
       if (data.address) setLocAddress(data.address);
       if (data.cep) setLocCep(data.cep);
       if (data.radiusMeters) setLocRadiusKm(String(Math.round(data.radiusMeters / 1000)));
+      // Casa: pré-preenche o ponto de partida da rota com a localização salva.
+      if (data.lat && data.lng) {
+        setStartLat(String(data.lat));
+        setStartLng(String(data.lng));
+      }
     } catch {
       // sem localização salva — mantém defaults
     }
@@ -756,8 +761,9 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
     }
     const lat = parseFloat(startLat);
     const lng = parseFloat(startLng);
-    if (isNaN(lat) || isNaN(lng)) {
-      toast("COORDENADAS DE PARTIDA INVÁLIDAS", "error");
+    const hasStart = !isNaN(lat) && !isNaN(lng);
+    if (!hasStart && !(currentLoc?.lat && currentLoc?.lng)) {
+      toast("DEFINA A LOCALIZAÇÃO (CASA) OU INFORME AS COORDENADAS DE PARTIDA", "error");
       return;
     }
     setGenerating(true);
@@ -783,8 +789,8 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           shoppingListItemIds: selectedItemIds,
-          startLat: lat,
-          startLng: lng,
+          startLat: hasStart ? lat : undefined,
+          startLng: hasStart ? lng : undefined,
           name: routeName.trim() || undefined,
           vehicle,
           startTime,
@@ -1013,6 +1019,29 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
               <label className={labelCls}>NOME DA ROTA (OPCIONAL)</label>
               <input className={inputCls} value={routeName} onChange={(e) => setRouteName(e.target.value)} placeholder="COMPRA DO MÊS" />
             </div>
+          </div>
+
+          <div className="flex items-center gap-3">
+            <button
+              onClick={() => {
+                playSound("click");
+                const srcLat = currentLoc?.lat ?? locLat;
+                const srcLng = currentLoc?.lng ?? locLng;
+                if (srcLat && srcLng) {
+                  setStartLat(String(srcLat));
+                  setStartLng(String(srcLng));
+                  toast("PONTO DE PARTIDA = CASA", "success", String(currentLoc?.address || ""));
+                } else {
+                  toast("SALVE SUA LOCALIZAÇÃO PRIMEIRO (SEÇÃO LOCALIZAÇÃO E DESCOBERTA)", "error");
+                }
+              }}
+              className="hud-button flex items-center gap-2 text-xs"
+            >
+              <MapPin size={14} /> USAR CASA
+            </button>
+            {currentLoc?.address && (
+              <span className="text-[9px] font-mono text-crimson/40 truncate">{currentLoc.address}</span>
+            )}
           </div>
 
           <button

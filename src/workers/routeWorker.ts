@@ -83,7 +83,20 @@ function calculateTravelCost(
 }
 
 async function handleRoute(job: Job<RouteJobPayload & { type: "route" }>) {
-  const { shoppingListItemIds, startLat, startLng, establishmentIds, name, vehicle, startTime } = job.data;
+  const { shoppingListItemIds, establishmentIds, name, vehicle, startTime } = job.data;
+  // Fallback defensivo: se o payload vier sem partida, usa a Casa (user_lat/user_lng).
+  let { startLat, startLng } = job.data;
+  if (startLat === undefined || startLng === undefined) {
+    const { SettingsRepository } = await import("../repositories/settingsRepository");
+    const homeLat = SettingsRepository.getNumber("user_lat");
+    const homeLng = SettingsRepository.getNumber("user_lng");
+    if (homeLat === null || homeLng === null || isNaN(homeLat) || isNaN(homeLng)) {
+      throw new Error("Ponto de partida ausente e Casa (user_lat/user_lng) não configurada");
+    }
+    startLat = homeLat;
+    startLng = homeLng;
+    safeLog(`[route-worker] usando Casa como partida (${homeLat},${homeLng})`);
+  }
   safeLog(
     `[route-worker] planejando rota com ${shoppingListItemIds.length} itens a partir de (${startLat},${startLng}) vehicle=${vehicle?.type ?? "none"} startTime=${startTime ?? "default"}`
   );

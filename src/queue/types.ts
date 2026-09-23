@@ -84,8 +84,9 @@ export interface RouteVehicle {
 export interface RouteJobPayload {
   type: "route";
   shoppingListItemIds: string[];
-  startLat: number;
-  startLng: number;
+  // Opcional: se ausente, o server/worker usa user_lat/user_lng (Casa).
+  startLat?: number;
+  startLng?: number;
   // Opcional: estabelecimentos explícitos. Se ausente, o worker deriva os
   // estabelecimentos dos itens via price_observations.
   establishmentIds?: string[];

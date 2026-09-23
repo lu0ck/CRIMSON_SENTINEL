@@ -691,16 +691,29 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     if (!Array.isArray(shoppingListItemIds) || shoppingListItemIds.length === 0) {
       return res.status(400).json({ error: "shoppingListItemIds é obrigatório" });
     }
-    if (typeof startLat !== "number" || typeof startLng !== "number") {
-      return res.status(400).json({ error: "startLat e startLng são obrigatórios" });
+    // Ponto de partida: usa o informado ou cai para a Casa (user_lat/user_lng).
+    let resolvedStartLat = typeof startLat === "number" ? startLat : undefined;
+    let resolvedStartLng = typeof startLng === "number" ? startLng : undefined;
+    if (resolvedStartLat === undefined || resolvedStartLng === undefined) {
+      const homeLat = SettingsRepository.getNumber("user_lat");
+      const homeLng = SettingsRepository.getNumber("user_lng");
+      if (homeLat !== null && homeLng !== null && !isNaN(homeLat) && !isNaN(homeLng)) {
+        resolvedStartLat = homeLat;
+        resolvedStartLng = homeLng;
+        safeLog(`[route] startLat/startLng ausentes — usando Casa (${homeLat},${homeLng})`);
+      } else {
+        return res.status(400).json({
+          error: "Defina sua localização (Casa) em LOCALIZAÇÃO E DESCOBERTA ou informe startLat/startLng",
+        });
+      }
     }
     try {
       const queue = getRouteQueue();
       const job = await queue.add("route", {
         type: "route",
         shoppingListItemIds,
-        startLat,
-        startLng,
+        startLat: resolvedStartLat,
+        startLng: resolvedStartLng,
         establishmentIds,
         name,
         vehicle,
