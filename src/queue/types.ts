@@ -96,6 +96,8 @@ export interface RouteJobPayload {
   // B4: horário de saída. ISOString para sair exatamente nesse horário;
   // "suggest" para o worker escolher janela de menor movimento entre 7h-20h.
   startTime?: string | "suggest";
+  // #22: volta para a Casa no fim da rota (default true — round-trip).
+  roundTrip?: boolean;
 }
 
 // ---- social-monitor-queue -------------------------------------------------

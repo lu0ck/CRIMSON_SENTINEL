@@ -74,10 +74,11 @@ A UI fica em **http://localhost:3001**.
 - **Localização**: `POST /api/location` (endereço via Nominatim **ou** lat/lng + raio). Fica em `user_settings`.
 - **Descoberta de mercados**: `POST /api/establishments/discover` → enfileira job no scan-queue → Overpass (OpenStreetMap) busca supermercados no raio e faz *upsert* (dedup por `osmId`).
 - **Scan de preços locais**: `POST /api/local-price-scan` — usa a `price_url` dos estabelecimentos (`{term}` = nome do item) e respeita o raio da localização.
-- **Roteirização** (`POST /api/route`): resolve o TSP pela ordem dos itens, calcula **distâncias/durations via OSRM** com fallback haversine, e aceita:
+- **Roteirização** (`POST /api/route`): otimiza **menor preço por item** (observação + promoção ativa), poda para `route_max_stops`, **agrupa lojas** quando a economia não supera o custo extra de deslocamento e resolve o TSP (+ 2-opt) com **volta para a Casa** (`roundTrip`, default `true`). Calcula distâncias/durations via OSRM com fallback haversine e aceita:
   - `vehicle`: `car`/`motorcycle` (consumo km/L + preço do combustível), `public` (tarifa), `bike`, `foot`;
   - `startTime`: ISO específico **ou** `"suggest"` (heurística Popular Times escolhe janela de menor movimento 7h–20h);
-  - retorna `suggestedDepartureAt`, `arrivalTimeEstimate` e `quietScore` por parada.
+  - `roundTrip`: `boolean` (default `true` — fecha o ciclo na Casa);
+  - retorna `suggestedDepartureAt`, `arrivalTimeEstimate` e `quietScore` por parada (+15min de compra por parada no `totalTimeMin`).
 
 ### Promoções-relâmpago (flash)
 - Detecção automática (média dos últimos N dias × threshold **ou** abaixo do menor preço histórico × 0.99) ao registrar preços — `src/lib/flashDetect.ts`.

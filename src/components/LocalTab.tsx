@@ -136,6 +136,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
   const [vehFuelPrice, setVehFuelPrice] = useState("6.0");
   const [vehPublicFare, setVehPublicFare] = useState("4.4");
   const [startTimeMode, setStartTimeMode] = useState<"suggest" | "specific">("suggest");
+  const [roundTrip, setRoundTrip] = useState(true); // #22: volta p/ Casa
   const [startTimeSpecific, setStartTimeSpecific] = useState("");
 
   // B1 — localização do usuário + descoberta de mercados
@@ -824,6 +825,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
           name: routeName.trim() || undefined,
           vehicle,
           startTime,
+          roundTrip,
         }),
       });
       if (!queued.jobId) throw new Error(queued.error || "Falha ao enfileirar rota");
@@ -1161,6 +1163,18 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
                 <option value="suggest">SUGERIR MENOR MOVIMENTO</option>
                 <option value="specific">HORÁRIO ESPECÍFICO</option>
               </select>
+            </div>
+            <div className="flex flex-col gap-1">
+              <label className={labelCls}>ROTA</label>
+              <label className="flex items-center gap-2 text-xs cursor-pointer select-none mt-2">
+                <input
+                  type="checkbox"
+                  checked={roundTrip}
+                  onChange={(e) => setRoundTrip(e.target.checked)}
+                  className="accent-crimson"
+                />
+                VOLTAR P/ CASA
+              </label>
             </div>
             <div className="flex flex-col gap-1 md:col-span-2">
               <label className={`${labelCls} ${startTimeMode === "specific" ? "text-crimson" : "text-crimson/40"}`}>

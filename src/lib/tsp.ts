@@ -7,12 +7,15 @@ export interface TspResult {
   distanceKm: number; // distância do caminho (não fecha o ciclo)
 }
 
-// Distância do caminho na ordem dada (soma das arestas consecutivas, sem
-// voltar ao início).
-function pathDistance(order: number[], matrix: number[][]): number {
+// Distância do caminho na ordem dada (soma das arestas consecutivas).
+// roundTrip=true fecha o ciclo (volta ao start) — casa no fim da rota.
+function pathDistance(order: number[], matrix: number[][], roundTrip = false): number {
   let d = 0;
   for (let i = 0; i < order.length - 1; i++) {
     d += matrix[order[i]][order[i + 1]];
+  }
+  if (roundTrip && order.length > 1) {
+    d += matrix[order[order.length - 1]][order[0]];
   }
   return d;
 }
@@ -53,7 +56,8 @@ export function nearestNeighbor(startIdx: number, matrix: number[][]): number[] 
 }
 
 // 2-opt: reverte segmentos quando reduz a distância. Roda até estabilizar.
-export function twoOpt(order: number[], matrix: number[][]): number[] {
+// O start (índice 0) nunca sai do lugar; roundTrip inclui a volta ao início.
+export function twoOpt(order: number[], matrix: number[][], roundTrip = false): number[] {
   let best = order.slice();
   let improved = true;
   while (improved) {
@@ -63,7 +67,7 @@ export function twoOpt(order: number[], matrix: number[][]): number[] {
         const candidate = best.slice();
         const segment = candidate.splice(i, j - i + 1).reverse();
         candidate.splice(i, 0, ...segment);
-        if (pathDistance(candidate, matrix) < pathDistance(best, matrix) - 1e-9) {
+        if (pathDistance(candidate, matrix, roundTrip) < pathDistance(best, matrix, roundTrip) - 1e-9) {
           best = candidate;
           improved = true;
         }
@@ -74,11 +78,11 @@ export function twoOpt(order: number[], matrix: number[][]): number[] {
 }
 
 // Resolve o TSP para a matriz completa. startIdx = índice do ponto de partida
-// (tipicamente 0). Retorna a ordem ótima e a distância do caminho.
-export function solveTsp(matrix: number[][], startIdx = 0): TspResult {
+// (tipicamente 0). roundTrip=true → a distância inclui a volta ao start.
+export function solveTsp(matrix: number[][], startIdx = 0, roundTrip = false): TspResult {
   if (matrix.length === 0) return { order: [], distanceKm: 0 };
   if (matrix.length === 1) return { order: [startIdx], distanceKm: 0 };
   const nn = nearestNeighbor(startIdx, matrix);
-  const order = twoOpt(nn, matrix);
-  return { order, distanceKm: pathDistance(order, matrix) };
+  const order = twoOpt(nn, matrix, roundTrip);
+  return { order, distanceKm: pathDistance(order, matrix, roundTrip) };
 }

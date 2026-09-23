@@ -687,7 +687,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   // B4 — payload estendido com `vehicle` (combustível/tarifa) e `startTime`
   // ("suggest" para sugerir horário de menor movimento).
   app.post("/api/route", async (req, res) => {
-    const { shoppingListItemIds, startLat, startLng, establishmentIds, name, vehicle, startTime } = req.body;
+    const { shoppingListItemIds, startLat, startLng, establishmentIds, name, vehicle, startTime, roundTrip } = req.body;
     if (!Array.isArray(shoppingListItemIds) || shoppingListItemIds.length === 0) {
       return res.status(400).json({ error: "shoppingListItemIds é obrigatório" });
     }
@@ -697,7 +697,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     if (resolvedStartLat === undefined || resolvedStartLng === undefined) {
       const homeLat = SettingsRepository.getNumber("user_lat");
       const homeLng = SettingsRepository.getNumber("user_lng");
-      if (homeLat !== null && homeLng !== null && !isNaN(homeLat) && !isNaN(homeLng)) {
+      if (homeLat !== undefined && homeLng !== undefined && !isNaN(homeLat) && !isNaN(homeLng)) {
         resolvedStartLat = homeLat;
         resolvedStartLng = homeLng;
         safeLog(`[route] startLat/startLng ausentes — usando Casa (${homeLat},${homeLng})`);
@@ -718,9 +718,11 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         name,
         vehicle,
         startTime,
+        // #22: default true (volta para a Casa).
+        roundTrip: typeof roundTrip === "boolean" ? roundTrip : true,
       });
       safeLog(
-        `[route] enfileirado job ${job.id} para ${shoppingListItemIds.length} itens vehicle=${vehicle?.type ?? "none"} startTime=${startTime ?? "default"}`
+        `[route] enfileirado job ${job.id} para ${shoppingListItemIds.length} itens vehicle=${vehicle?.type ?? "none"} startTime=${startTime ?? "default"} roundTrip=${typeof roundTrip === "boolean" ? roundTrip : true}`
       );
       res.json({ jobId: job.id, status: "queued" });
     } catch (error: any) {
