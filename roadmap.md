@@ -45,6 +45,7 @@
 - ~~**FASE 7** — validar o caminho **Gemini real** dos insights locais~~ — **RESOLVIDO (#29)**: bug `LocalTab` não enviava `profileId` no analyze; com a chave no perfil, badge `method: gemini`. Fallback determinístico permanece para sem-chave/erro.
 - ~~**Instagram × PM2**~~ — **RESOLVIDO (#28)**: dono único **PM2** (`sentinela-instagram-service`); `server.ts` não faz mais spawn em :8721. Toggle/login gravam `python_instagram/.ig.env` e usam `pm2 startOrReload/stop`. Boot espelha o toggle (`syncInstagramWithPm2`).
 - ~~**Cluster 4×** — validar o scan-worker em cluster (até 20 jobs simultâneos)~~ — **RESOLVIDO (#30)**: lock `120s/60s` (cobre estratégia 90s) + `scripts/stress-cluster-20.sh`. Execução local 20 jobs: pico `active=17`, 4 workers, **0 stalled**, API 200, veredito **APROVADO** (`RELATORIO_TESTE_CLUSTER.md`). Re-rodar na VPS: `bash scripts/stress-cluster-20.sh`.
+- ~~**Doc VPS + checklist E2E**~~ — **RESOLVIDO (#31)**: [`GUIA_VPS.md`](GUIA_VPS.md) (bootstrap Debian/Ubuntu, 8 processos PM2, `BIND_HOST`/túnel, health checks, checklist E2E tiers A/B/C, stress na VPS, backup) + seção `DIAGNOSTICO` §6.16. **Gate FASE 16** ainda pendente: rodar o checklist **em VPS real** (Tier A+B mínimos; C com chaves/QR).
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---
@@ -116,7 +117,7 @@
 **Segundo plano / VPS**:
 - Tudo nos workers BullMQ existentes (scan/social) com **repeatable jobs** (social 6h + local-price-scan) e catch-up no boot.
 - Produto roda **headless no VPS** (sem Electron): api (Node/PM2) + venv Instagram + Redis (docker ou nativo) + `BIND_HOST` + SQLite; WhatsApp linkado via QR à distância (uma vez); contas **secundárias dedicadas** (ToS).
-- **Validação ponta a ponta em VPS** antes de dar como FASE concluída; documentação de setup no `DIAGNOSTICO`.
+- **Validação ponta a ponta em VPS** antes de dar como FASE concluída; documentação de setup: **`GUIA_VPS.md` + `DIAGNOSTICO` §6.16** (#31).
 
 **Riscos assumidos** (registrados no roadmap): redes locais podem **não ter catálogo online** (vira coleta social/manual); web scraping e automação de WhatsApp/Instagram **violam ToS** — uso de conta secundária; qualidade depende das fontes publicadas.
 

@@ -113,6 +113,8 @@ curl -s "localhost:3001/api/jobs/scan-queue/<JOB_ID>"
 
 Teste de estresse de 24h: `bash scripts/stress-test-24h.sh` (gera `RELATORIO_TESTE_24H.md`).
 
+Em **VPS** (stack completa headless): ver [`GUIA_VPS.md`](GUIA_VPS.md) — bootstrap, 8 processos, checklist E2E tiers A/B/C e `bash scripts/stress-cluster-20.sh`.
+
 ---
 
 ## 🔑 Variáveis de ambiente
@@ -126,6 +128,7 @@ Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `
 - `DIAGNOSTICO.md` — histórico completo de fases (1–13), auditorias e decisões técnicas
 - `INSTRUCOES_LOCAL.md` — guia do módulo local/ROTA (preços, roteirização, insights)
 - `GUIA_SOCIAL.md` — configuração dos módulos WhatsApp/Instagram (C2/C3)
+- `GUIA_VPS.md` — **deploy headless em VPS**, health checks e checklist E2E (#31)
 
 ---
 
@@ -137,6 +140,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**FASE 7** — validar o caminho **Gemini real** dos insights locais~~ — **RESOLVIDO (#29)**: `LocalTab` agora envia `profileId`; badge diferencia GEMINI / fallback.
 - ~~**Instagram × PM2**~~ — **RESOLVIDO (#28)**: dono único PM2; spawn do `server.ts` removido; toggle usa `pm2 startOrReload`/`pm2 stop`; credenciais em `python_instagram/.ig.env` (gitignored).
 - ~~**Cluster 4×**~~ — **RESOLVIDO (#30)**: lock 120s/60s + `scripts/stress-cluster-20.sh`. Execução local 20 jobs → **APROVADO** em `RELATORIO_TESTE_CLUSTER.md` (pico 17 concurrent, 4 workers, 0 stalled). VPS: `bash scripts/stress-cluster-20.sh`.
+- ~~**Doc VPS + E2E**~~ — **RESOLVIDO (#31)**: runbook em [`GUIA_VPS.md`](GUIA_VPS.md) (bootstrap, health checks, checklist E2E A/B/C, carga, backup) + DIAGNOSTICO §6.16. Gate final FASE 16: executar Tier A–C **na VPS real**.
 
 ---
 

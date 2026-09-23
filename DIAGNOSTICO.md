@@ -671,4 +671,37 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 - ✅ `npx tsc --noEmit` → **exit 0**
 - Smoke: imports sem duplicação de módulo (`price`/`text`/`itemMatch`/`datetime` puros, sem estado)
 
+---
+
+## 6.16 Doc VPS + checklist E2E (#31 — FASE 16 bloco A)
+
+**Problema (roadmap FASE 16, "Segundo plano / VPS"):** o produto deve rodar **headless em VPS** e a fase só fecha com **validação ponta a ponta em VPS** + **documentação de setup**. Até #30 a evidência de carga era local; não havia runbook único de bootstrap, health checks nem checklist E2E.
+
+**Escopo de #31 (docs, sem mudança de runtime):**
+
+| Arquivo | Change |
+|---|---|
+| `GUIA_VPS.md` | **novo** — arquitetura 8 processos, bootstrap Ubuntu/Debian, matriz `.env`, produção vs dev, `BIND_HOST`/túnel SSH, health checks, checklist E2E **Tier A/B/C**, stress na VPS, backup/rollback, troubleshooting |
+| `README.md` | índice de documentos + ponte "Verificação" → GUIA_VPS; pendência #31 marcada RESOLVIDA |
+| `roadmap.md` | pendência #31; FASE 16 "Segundo plano / VPS" aponta GUIA_VPS + §6.16; gate final = executar checklist **em VPS real** |
+| `INSTRUCOES_LOCAL.md` | fix tabela PM2: `crimson-*` → **`sentinela-*`** (contradizia `ecosystem.config.cjs`; §6.15 alegava o fix mas o arquivo ainda estava errado) |
+| `DIAGNOSTICO.md` | esta seção (§6.16) |
+
+**Decisões documentadas (não novas de código):**
+- Processos alvo: `sentinela-api` + `sentinela-scan-worker`×4 + `route` + `social` + `instagram-service` = **8**
+- `USER_DATA_PATH=~/.config/crimson-sentinel` obrigatório (anti split-brain de `crimson.db`)
+- `BIND_HOST=127.0.0.1` default; acesso remoto via **SSH tunnel**; aviso: `/api/data` expõe segredos — não expor sem auth
+- `ecosystem` ainda `NODE_ENV=development` + `npm run dev` — produção (`npm run build` + serve `dist/`) documentado como opcional deliberado, **sem** alterar ecosystem neste commit
+- Instagram PM2-only (#28); credenciais em `.ig.env`
+
+**Checklist E2E (resumo — detalhe em GUIA_VPS §7):**
+- **A (sem segredo):** Redis PONG · lint 0 · 8/8 pm2 · `/api/status` + 4 crons · IG health · social capture dedup · `stress-cluster-20` → APROVADO
+- **B (rede, sem API key):** fake-market local-price-scan (`recorded:2` → dup → history) · discover Overpass · rota OSRM
+- **C (segredos):** Gemini `method: gemini` (#29) · scrape vitrine · notificações · IG login · WhatsApp QR
+
+**Gate FASE 16 (fora deste commit):** executar Tier A–C **na VPS real** e anexar evidência (saída pm2, `/api/status`, relatório stress da VPS).
+
+**Validação #31:** `npx tsc --noEmit` → 0 erros; docs linkam `GUIA_VPS.md`; nomes de processo `sentinela-*` coerentes com `ecosystem.config.cjs`.
+
+---
 

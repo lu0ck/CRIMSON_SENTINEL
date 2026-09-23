@@ -51,14 +51,16 @@ npm run pm2:start
 pm2 ls
 ```
 
-Deverá ver 5 processos:
+Deverá ver **5 apps · 8 processos**:
 | Processo | Função |
 |---|---|
-| `crimson-api` | API Express (porta 3001) |
-| `crimson-scan-worker` (×4, cluster) | scraping, scan-all, compare, analyze, local-price-scan, discover |
-| `crimson-route-worker` | roteirização (TSP/OSRM) |
-| `crimson-social-worker` | captura/scan WhatsApp e Instagram |
+| `sentinela-api` | API Express (porta 3001) |
+| `sentinela-scan-worker` (×4, cluster) | scraping, scan-all, compare, analyze, local-price-scan, discover |
+| `sentinela-route-worker` | roteirização (TSP/OSRM) |
+| `sentinela-social-worker` | captura/scan WhatsApp e Instagram |
 | `sentinela-instagram-service` | microserviço Python instagrapi (porta 8721) |
+
+Para VPS headless, use o runbook [`GUIA_VPS.md`](GUIA_VPS.md).
 
 Acesse **http://localhost:3001**.
 
@@ -101,4 +103,4 @@ npm run electron:build      # gera instalador em release/
 | Jobs nunca executam | `docker compose ps` — Redis deve estar UP; veja `pm2 logs` |
 | `analyze` sempre falha | Configure `GEMINI_API_KEY` (ou LM Studio/NVIDIA) no perfil da UI |
 | Scan social retorna "skipped" | Aba SOCIAL: ative WhatsApp/Instagram no painel e confira sessão (QR/login) |
-| `sentinela-instagram-service` em erro | `bash scripts/setup-instagram.sh` e reinicie `pm2 restart sentinela-instagram-service` |
+| `sentinela-instagram-service` em erro | `bash scripts/setup-instagram.sh` e reinicie `npx pm2 restart sentinela-instagram-service` |
