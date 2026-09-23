@@ -565,10 +565,10 @@ Três frentes: (1) o **scan de preços locais recorrente** como repeatable job d
 ### 6.13.4 WhatsApp real (sessão via whatsapp-web.js) — verificado, já completo
 
 **Frentes C2 já implementadas e deixadas como estavam (não reescritas):**
-- `src/social/whatsappSession.ts`: sessão com `LocalAuth` persistente + QR via `qrcode-terminal`; eventos `qr/authenticated/ready/auth_failure/disconnected`; `fetchContactStatuses` lê Status dos contatos cadastrados; `isWhatsappReady`.
-- Endpoints: `GET/POST /api/social/whatsapp/toggle` (user_settings `whatsapp_enabled`), `GET /api/social/whatsapp/qr` (inicia sessão + QR), `GET /api/social/whatsapp/status`, `POST /api/social/whatsapp/scan`.
-- Worker `handleWhatsappStatusScan`: respeita `whatsapp_enabled` + `social_monitoring_enabled`, throttle por contato (`whatsapp_scan_per_contact_min`, default 20m), extrai promoções e dispara alertas.
-- UI (SocialTab): toggle ATIVAR/DESATIVAR, status CONECTADO/NÃO AUTENTICADO, GERAR QR (renderiza ANSI), SCAN STATUS.
-- Deps `whatsapp-web.js` + `qrcode-terminal` já no package.json. Riscos de banimento documentados no header do módulo e no aviso do rodapé da aba.
+- `src/social/whatsappSession.ts`: sessão com `LocalAuth` persistente + QR via `qrcode-terminal`; eventos `qr/authenticated/ready/auth_failure/disconnected`; listener `message_create` processa grupos (`@g.us`) e conversas diretas (`@c.us`), baixando mídia (flyers) via `downloadMedia`; `isWhatsappReady`.
+- Endpoints: `GET/POST /api/social/whatsapp/toggle` (user_settings `whatsapp_enabled`), `GET /api/social/whatsapp/qr` (inicia sessão + QR), `GET /api/social/whatsapp/status`.
+- **Monitoramento em tempo real** (sem scan manual): mensagens de grupo e diretas chegam via listener; imagens de flyer são enfileiradas em `social-capture` (channel whatsapp) e interpretadas por Gemini Vision.
+- UI (SocialTab): toggle ATIVAR/DESATIVAR, status CONECTADO/DESCONECTADO, GERAR QR (renderiza imagem escaneável via lib `qrcode`).
+- Deps `whatsapp-web.js` + `qrcode-terminal` + `qrcode` já no package.json. Riscos de banimento documentados no header do módulo e no aviso do rodapé da aba.
 
 

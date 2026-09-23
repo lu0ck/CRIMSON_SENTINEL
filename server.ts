@@ -1283,25 +1283,6 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  // Enfileira scan de Status dos contatos salvos em establishments.whatsapp_number.
-  // O worker respeita throttle configurável (whatsapp_scan_per_contact_min).
-  app.post("/api/social/whatsapp/scan", async (req, res) => {
-    if (!SettingsRepository.getBool("whatsapp_enabled")) {
-      return res.status(403).json({ error: "WhatsApp desativado. Ative-o no painel social." });
-    }
-    try {
-      const queue = getSocialQueue();
-      const job = await queue.add("whatsapp-status-scan", {
-        type: "whatsapp-status-scan",
-        triggeredBy: "manual" as const,
-      });
-      safeLog(`[social] whatsapp-status-scan enfileirado job ${job.id}`);
-      res.json({ jobId: job.id, status: "queued" });
-    } catch (err: any) {
-      res.status(500).json({ error: err.message });
-    }
-  });
-
   // C3 — Instagram credentials (stored in DB, no .env needed)
   app.get("/api/social/instagram/credentials", async (_req, res) => {
     try {
@@ -1788,7 +1769,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       safeLog("[scheduler] Falha ao registrar trigger-evaluate scheduler — Redis indisponível?");
     }
 
-    // FRENTE 4 — WhatsApp group listener (se habilitado)
+    // WhatsApp listener (se habilitado) — grupos + conversas diretas com flyers.
     try {
       if (SettingsRepository.getBool("whatsapp_enabled")) {
         const { startWhatsappSession, isWhatsappReady } = await import("./src/social/whatsappSession.ts");
@@ -1796,12 +1777,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         if (!(await isWhatsappReady())) {
           startWhatsappSession({
             onQr: () => {},
-            onAuthenticated: () => safeLog("[whatsapp] autenticado (group listener)"),
-            onReady: () => safeLog("[whatsapp] pronto — group listener ativo"),
+            onAuthenticated: () => safeLog("[whatsapp] autenticado (listener)"),
+            onReady: () => safeLog("[whatsapp] pronto — listener ativo"),
             onAuthFailure: (m) => safeLog(`[whatsapp] auth fail: ${m}`),
             onDisconnected: () => safeLog("[whatsapp] desconectado"),
             onGroupMessage: (msg) => {
-              GroupMessageRepository.save({
+              const messageId = GroupMessageRepository.save({
                 source: "whatsapp",
                 groupName: msg.groupName,
                 groupId: msg.groupId,
@@ -1810,22 +1791,57 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
                 receivedAt: msg.receivedAt,
                 processed: false,
               });
-              // Enfileirar processamento
+              if (!msg.text) return;
               const queue = getSocialQueue();
               queue.add("group-message-process", {
                 type: "group-message-process",
-                messageId: 0,
+                messageId,
                 source: "whatsapp",
                 groupName: msg.groupName,
                 groupId: msg.groupId,
                 text: msg.text,
               }).catch((e: any) => safeLog(`[whatsapp] erro ao enfileirar msg grupo: ${e.message}`));
             },
-          }).catch((e: any) => safeLog(`[whatsapp] init group listener falhou: ${e.message}`));
+            onDirectMessage: (msg) => {
+              const queue = getSocialQueue();
+              // Imagem (flyer): enfileira social-capture com visão Gemini (já existente).
+              if (msg.imageBase64) {
+                queue.add("social-capture", {
+                  type: "social-capture",
+                  channel: "whatsapp",
+                  text: msg.text || "",
+                  imageBase64: msg.imageBase64,
+                  imageMimeType: msg.imageMimeType || "image/jpeg",
+                }).catch((e: any) => safeLog(`[whatsapp] erro ao enfileirar flyer: ${e.message}`));
+                safeLog(`[whatsapp] flyer recebido de ${msg.chatId}`);
+                return;
+              }
+              // Texto: salva e processa como mensagem de conversa.
+              if (msg.text) {
+                const messageId = GroupMessageRepository.save({
+                  source: "whatsapp",
+                  groupName: msg.sender,
+                  groupId: msg.chatId,
+                  sender: msg.sender,
+                  text: msg.text,
+                  receivedAt: msg.receivedAt,
+                  processed: false,
+                });
+                queue.add("group-message-process", {
+                  type: "group-message-process",
+                  messageId,
+                  source: "whatsapp",
+                  groupName: msg.sender,
+                  groupId: msg.chatId,
+                  text: msg.text,
+                }).catch((e: any) => safeLog(`[whatsapp] erro ao enfileirar msg direta: ${e.message}`));
+              }
+            },
+          }).catch((e: any) => safeLog(`[whatsapp] init listener falhou: ${e.message}`));
         }
       }
     } catch (e: any) {
-      safeLog(`[whatsapp] group listener init: ${e.message}`);
+      safeLog(`[whatsapp] listener init: ${e.message}`);
     }
 
     // C3 — auto-start Instagram microservice

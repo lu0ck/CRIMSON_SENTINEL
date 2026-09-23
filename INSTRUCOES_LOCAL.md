@@ -37,12 +37,11 @@ nano .env
 Mínimo funcional: `GEMINI_API_KEY`. Opcionais recomendados: webhooks de notificação
 (`DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN` + `TELEGRAM_CHAT_ID`).
 
-Módulos sociais ficam **desligados por padrão**:
+Módulos sociais ficam **desligados por padrão** (ativação via painel aba SOCIAL):
 ```env
 SOCIAL_MONITORING_ENABLED=false
-WHATSAPP_ENABLED=false
-INSTAGRAM_ENABLED=false
 ```
+WhatsApp e Instagram ligam/desligam **na UI** (`user_settings`), sem `.env`.
 Ligue-os apenas quando tiver uma conta secundária dedicada (ver `python_instagram/README.md`).
 
 ## 5. Rode com PM2 (recomendado)
@@ -101,5 +100,5 @@ npm run electron:build      # gera instalador em release/
 |---|---|
 | Jobs nunca executam | `docker compose ps` — Redis deve estar UP; veja `pm2 logs` |
 | `analyze` sempre falha | Configure `GEMINI_API_KEY` (ou LM Studio/NVIDIA) no perfil da UI |
-| Scan social retorna "skipped" | `pm2 env 0 | grep WHATSAPP_ENABLED`; confira flags e sessão (QR/login) |
+| Scan social retorna "skipped" | Aba SOCIAL: ative WhatsApp/Instagram no painel e confira sessão (QR/login) |
 | `crimson-instagram-service` em erro | `pip install -r python_instagram/requirements.txt` e reinicie `pm2 restart crimson-instagram-service` |

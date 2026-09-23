@@ -5,7 +5,6 @@ import type { ScanJobPayload, SocialMonitorJobPayload } from "./types";
 const REPEAT_DAILY_KEY = "scan-daily-cron";
 const REPEAT_INTERVAL_KEY = "scan-interval-12h";
 const SOCIAL_SCAN_KEY = "social-scan-cron";
-const WHATSAPP_SCAN_KEY = "whatsapp-status-scan-cron";
 const INSTAGRAM_SCAN_KEY = "instagram-stories-scan-cron";
 const LOCAL_PRICE_SCAN_KEY = "local-price-scan-cron";
 const TRIGGER_EVALUATE_KEY = "trigger-evaluate-cron";
@@ -114,16 +113,6 @@ export async function registerSocialScheduler(opts?: {
     }
   );
 
-  // WhatsApp status scan (a cada 6h)
-  await queue.upsertJobScheduler(
-    WHATSAPP_SCAN_KEY,
-    { every: intervalMs },
-    {
-      name: "whatsapp-status-scan",
-      data: { type: "whatsapp-status-scan", triggeredBy: "cron" } as SocialMonitorJobPayload,
-    }
-  );
-
   // Instagram stories scan (a cada 6h)
   await queue.upsertJobScheduler(
     INSTAGRAM_SCAN_KEY,
@@ -135,7 +124,7 @@ export async function registerSocialScheduler(opts?: {
   );
 
   console.log(
-    `[scheduler] scan social registrado: a cada ${Math.round(intervalMs / 60000)}min (social + whatsapp + instagram)`
+    `[scheduler] scan social registrado: a cada ${Math.round(intervalMs / 60000)}min (social + instagram)`
   );
 }
 
@@ -146,7 +135,7 @@ export async function unregisterSocialScheduler(): Promise<void> {
   } catch {
     return;
   }
-  for (const id of [SOCIAL_SCAN_KEY, WHATSAPP_SCAN_KEY, INSTAGRAM_SCAN_KEY]) {
+  for (const id of [SOCIAL_SCAN_KEY, INSTAGRAM_SCAN_KEY]) {
     try {
       await queue.removeJobScheduler(id);
       console.log(`[scheduler] removido ${id}`);

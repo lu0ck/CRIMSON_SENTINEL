@@ -84,13 +84,13 @@ A UI fica em **http://localhost:3001**.
 - Expiração em 24h (`expires_at`), badge `RELÂMPAGO` na UI e alerta prioritário no Telegram (`flash_telegram_priority`).
 
 ### Monitoramento Social
-- **WhatsApp (C2)** — `whatsapp-web.js` lê os *Status* dos contatos salvos em `establishments.whatsapp_number` e extrai promoções.
-  - `GET /api/social/whatsapp/qr` (QR para o celular), `GET /api/social/whatsapp/status`, `POST /api/social/whatsapp/scan`.
-  - Throttle: `user_settings.whatsapp_scan_per_contact_min` (default 20min).
-- **Instagram Stories (C3)** — microserviço **Python (instagrapi)** baixa Stories dos handles cadastrados, e o **Gemini Vision** (`gemini-2.0-flash`) extrai preços da imagem.
+- **WhatsApp** — `whatsapp-web.js` monitora **conversas em tempo real**: mensagens de grupo e diretas; **imagens de flyer são baixadas automaticamente** e interpretadas via Gemini Vision.
+  - `GET /api/social/whatsapp/qr` (QR para o celular), `GET /api/social/whatsapp/status`, `POST /api/social/whatsapp/toggle`.
+  - Listener `message_create` no boot do server — sem scan manual.
+- **Instagram Stories (C3)** — microserviço **Python (instagrapi)** baixa Stories dos handles cadastrados, e o **Gemini Vision** (`gemini-3.6-flash`) extrai preços da imagem.
   - `GET /api/social/instagram/health`, `POST /api/social/instagram/login`, `POST /api/social/instagram/scan`.
   - Throttle: `user_settings.instagram_scan_per_handle_min` (default 45min).
-- **Captura manual**: `POST /api/social/capture` (texto colado do WhatsApp ou URL de perfil público).
+- **Captura manual**: `POST /api/social/capture` (texto colado, imagem de encarte ou URL de perfil público).
 - **Toggles**: WhatsApp e Instagram são ligados/desligados **no painel (aba SOCIAL)** — sem `.env`. O toggle do Instagram também sobe/derruba o microserviço Python. Padrão: ambos **desligados**.
 - **⚠️ Aviso**: os módulos C2/C3 usam APIs **não oficiais** e violam os ToS. Use SEMPRE conta secundária dedicada.
 

@@ -49,8 +49,8 @@ Crie ou edite o arquivo `.env` na raiz do projeto:
 # Habilita o módulo de monitoramento social
 SOCIAL_MONITORING_ENABLED=true
 
-# Habilita escaneamento de WhatsApp Status (C2)
-WHATSAPP_ENABLED=true
+# Habilita monitoramento de conversas do WhatsApp (flyers)
+# (ative no painel aba SOCIAL — WHATSAPP_ENABLED não é lido pelo código)
 
 # Habilita escaneamento de Instagram Stories (C3)
 INSTAGRAM_ENABLED=true
@@ -172,24 +172,22 @@ Leite integral 1L: R$4,99 (era R$6,49)
 3. Abra o WhatsApp na conta secundária → **Aparelhos conectados** → Escaneie o QR
 4. O status deve mudar para "CONECTADO"
 
-#### 4.2 — Configurar contatos para monitorar
+#### 4.2 — Configurar estabelecimentos (opcional)
 
-Para que o WhatsApp Status funcione, os estabelecimentos precisam ter o campo `whatsapp_number` preenchido:
+Para atribuir promoções detectadas em conversas diretas ao estabelecimento correto, preencha o campo `whatsapp_number`:
 
 1. Na aba **LOCAL**, edite ou crie um estabelecimento
 2. Preencha o campo de número de WhatsApp com o DDD + número. Ex: `11999887766`
 
-#### 4.3 — Executar o scan
+#### 4.3 — Monitoramento automático
 
-1. Clique em **"SCAN STATUS"**
-2. O sistema:
-   - Verifica cada estabelecimento com WhatsApp cadastrado
-   - Verifica se o Status do contato foi atualizado nas últimas horas
-   - Lê os textos das mensagens de Status
-   - Extrai promoções com IA
-   - Cria promoções como "RELÂMPAGO" (duração de 24h)
+Após conectar a sessão (QR), o sistema monitora **em tempo real**:
 
-**Throttle:** O sistema espera **20 minutos** entre verificações do mesmo contato.
+- **Mensagens de grupo** — texto é processado e promoções são extraídas com IA
+- **Conversas diretas** — texto processado + **imagens de flyer são baixadas automaticamente** e interpretadas via Gemini Vision
+- Todas as promoções detectadas salvas com `source: "whatsapp"` e disparam alertas
+
+Não há scan manual de Status — o monitoramento é contínuo via listener.
 
 ---
 
@@ -275,7 +273,7 @@ Clique no ícone de **lixeira** ao lado da fonte para removê-la permanentemente
 | `POST` | `/api/social/scan-all` | Enfileira scan de todas as fontes |
 | `GET` | `/api/social/whatsapp/qr` | Gera QR code do WhatsApp |
 | `GET` | `/api/social/whatsapp/status` | Status da conexão WhatsApp |
-| `POST` | `/api/social/whatsapp/scan` | Enfileira scan de Status |
+| `POST` | `/api/social/whatsapp/toggle` | Ativa/desativa o monitoramento |
 | `GET` | `/api/social/instagram/health` | Health check do microserviço |
 | `POST` | `/api/social/instagram/login` | Login no Instagram |
 | `POST` | `/api/social/instagram/scan` | Enfileira scan de Stories |
@@ -321,7 +319,7 @@ Quando uma promoção é detectada, o sistema pode notificar via:
 
 | Problema | Causa | Solução |
 |----------|-------|---------|
-| "DESLIGADO" no WhatsApp | `WHATSAPP_ENABLED=false` no .env | Altere para `true` e reinicie |
+| "DESLIGADO" no WhatsApp | Toggle `whatsapp_enabled` desligado | Clique em ATIVAR no painel social |
 | "NAO AUTENTICADO" no WhatsApp | Sessão expirada | Clique em "GERAR QR" e escaneie novamente |
 | "SERVICO OFF" no Instagram | Microserviço Python não está rodando | Inicie com `uvicorn server:app --port 8721` |
 | "SEM SESSAO" no Instagram | Credenciais não configuradas | Configure `IG_USERNAME` e `IG_PASSWORD` no .env |

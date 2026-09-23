@@ -12,12 +12,11 @@
 // REGRAS OBRIGATÓRIAS para reduzir risco:
 //   - Use SEMPRE um número secundário dedicado (chip pré-pago separado).
 //   - NUNCA use seu número pessoal ou vinculado a contas profissionais.
-//   - Configure throttle (scan_per_contact_min = 20m) — nunca em loops apertados.
 //   - Manter a sessão persistida evita re-logins repetidos (gatilho principal de ban).
-//   - Habilite apenas via .env: WHATSAPP_ENABLED=true + SOCIAL_MONITORING_ENABLED=true
+//   - Habilite apenas via painel social: whatsapp_enabled=true + social_monitoring_enabled=true
 //
 // O usuário deste projeto ACEITA todos os riscos acima. A integração foi feita
-// isolada para ser fácil de desligar: basta WHATSAPP_ENABLED=false (default).
+// isolada para ser fácil de desligar: basta whatsapp_enabled=false (default).
 // =============================================================================
 
 import { safeLog } from "../lib/safeLog";
@@ -46,7 +45,22 @@ export interface WhatsappSessionEvents {
   onReady: () => void;
   onAuthFailure: (msg: string) => void;
   onDisconnected: () => void;
-  onGroupMessage?: (msg: { groupName: string; groupId: string; sender: string; text: string; receivedAt: string }) => void;
+  onGroupMessage?: (msg: {
+    groupName: string;
+    groupId: string;
+    sender: string;
+    text: string;
+    receivedAt: string;
+  }) => void;
+  // Conversa direta (@c.us): texto ou imagem de flyer de promoção.
+  onDirectMessage?: (msg: {
+    chatId: string;
+    sender: string;
+    text?: string;
+    imageBase64?: string;
+    imageMimeType?: string;
+    receivedAt: string;
+  }) => void;
 }
 
 let sessionInstance: any = null;
@@ -106,64 +120,65 @@ export async function startWhatsappSession(events: WhatsappSessionEvents): Promi
     events.onDisconnected();
   });
 
-  // Grupo listener — mensagens de grupos são repassadas ao callback
+  // Message listener — mensagens de grupo e conversas diretas são repassadas.
+  // Imagens (flyers de promoção) são baixadas automaticamente via downloadMedia.
   sessionInstance.on("message_create", async (msg: any) => {
     try {
-      if (!events.onGroupMessage) return;
-      if (!msg.from || !msg.body) return;
-      // Apenas mensagens de grupo (IDs terminam em @g.us)
-      if (!msg.from.endsWith("@g.us")) return;
-      // Ignorar mensagens enviadas pelo próprio bot
-      if (msg.fromMe) return;
-      const chat = await msg.getChat();
-      const contact = await msg.getContact();
-      events.onGroupMessage({
-        groupName: chat.name || msg.from,
-        groupId: msg.from,
-        sender: contact.pushname || contact.number || msg.author || "desconhecido",
-        text: msg.body,
-        receivedAt: new Date(msg.timestamp * 1000).toISOString(),
-      });
+      if (!msg.from || msg.fromMe) return;
+      const isGroup = msg.from.endsWith("@g.us");
+      const isDirect = msg.from.endsWith("@c.us");
+      if (!isGroup && !isDirect) return;
+      if (!events.onGroupMessage && !events.onDirectMessage) return;
+
+      const receivedAt = new Date(msg.timestamp * 1000).toISOString();
+      const text = (msg.body || "").toString();
+
+      // Baixa mídia se houver (imagem/documento com flyer).
+      let imageBase64: string | undefined;
+      let imageMimeType: string | undefined;
+      if (msg.hasMedia && (msg.type === "image" || msg.type === "sticker" || msg.type === "document")) {
+        try {
+          const media = await msg.downloadMedia();
+          if (media && media.data) {
+            imageBase64 = media.data; // já vem em base64
+            imageMimeType = media.mimetype || "image/jpeg";
+            safeLog(`[whatsapp] mídia baixada de ${msg.from}: ${imageMimeType}`);
+          }
+        } catch (err: any) {
+          safeLog(`[whatsapp] falha ao baixar mídia de ${msg.from}: ${err.message}`);
+        }
+      }
+
+      // Ignora mensagens sem texto E sem mídia
+      if (!text && !imageBase64) return;
+
+      if (isGroup && events.onGroupMessage) {
+        const chat = await msg.getChat();
+        const contact = await msg.getContact();
+        events.onGroupMessage({
+          groupName: chat.name || msg.from,
+          groupId: msg.from,
+          sender: contact.pushname || contact.number || msg.author || "desconhecido",
+          text,
+          receivedAt,
+        });
+      } else if (isDirect && events.onDirectMessage) {
+        const contact = await msg.getContact();
+        events.onDirectMessage({
+          chatId: msg.from,
+          sender: contact.pushname || contact.number || msg.from,
+          text: text || undefined,
+          imageBase64,
+          imageMimeType,
+          receivedAt,
+        });
+      }
     } catch (err: any) {
-      safeLog(`[whatsapp] erro no group listener: ${err.message}`);
+      safeLog(`[whatsapp] erro no message listener: ${err.message}`);
     }
   });
 
   await sessionInstance.initialize();
-}
-
-// Tenta buscar o texto do Status de um contato. whatsapp-web.js não expõe
-// diretamente um getter de Status — usamos workaround parseando o	display
-// do "status message" se acessível. Retorna [] se nada disponível.
-export async function fetchContactStatuses(whatsappNumbers: string[]): Promise<
-  { whatsappNumber: string; statusText?: string; capturedAt: string }[]
-> {
-  if (!sessionInstance) throw new Error("WhatsApp sessão não inicializada");
-  const results: { whatsappNumber: string; statusText?: string; capturedAt: string }[] = [];
-  for (const num of whatsappNumbers) {
-    try {
-      // Cada número precisa ser formatado como "numero@c.us"
-      const chatId = num.replace(/[^\d]/g, "") + "@c.us";
-      // Tentativa de leitura do Status via getContacts/getChats
-      const chats = await sessionInstance.getChats();
-      const statusChat = chats.find((c: any) => c.id && c.id._serialized === "status@broadcast");
-      if (!statusChat) continue;
-      const messages = await statusChat.fetchMessages({ limit: 50 });
-      // Filtrar mensagens do contato específico (autor do Status)
-      const fromContact = messages.filter(
-        (m: any) => m.author && m.author.replace(/[^\d]/g, "") === num.replace(/[^\d]/g, "")
-      );
-      for (const m of fromContact.slice(0, 5)) {
-        const text = (m.body || "").toString().trim();
-        if (text) {
-          results.push({ whatsappNumber: num, statusText: text, capturedAt: new Date().toISOString() });
-        }
-      }
-    } catch (err: any) {
-      safeLog(`[whatsapp] erro lendo Status de ${num}: ${err.message}`);
-    }
-  }
-  return results;
 }
 
 export async function isWhatsappReady(): Promise<boolean> {

@@ -115,14 +115,6 @@ export interface SocialScanAllJobPayload {
   triggeredBy: "manual" | "cron";
 }
 
-// C2 — scan do Status dos contatos salvos (establishments.whatsapp_number).
-// O worker usa whatsapp-web.js (lendo QR via GET /api/social/whatsapp/qr)
-// e respeita throttle por contato definido em user_settings.
-export interface WhatsappStatusScanJobPayload {
-  type: "whatsapp-status-scan";
-  triggeredBy: "manual" | "cron";
-}
-
 // C3 — scan de Stories do Instagram via microserviço Python (instagrapi).
 // Consulta handles cadastrados em establishments.instagram_handle, baixa
 // mídias, passa ao Gemini vision para extrair preços, grava promoções.
@@ -159,7 +151,6 @@ export interface TrackFromPromoJobPayload {
 export type SocialMonitorJobPayload =
   | SocialCaptureJobPayload
   | SocialScanAllJobPayload
-  | WhatsappStatusScanJobPayload
   | InstagramStoriesScanJobPayload
   | GroupMessageProcessJobPayload
   | TriggerEvaluateJobPayload

@@ -226,107 +226,6 @@ async function handleSocialScanAll(job: Job<SocialMonitorJobPayload & { type: "s
   return { sources: sources.length, enqueued };
 }
 
-// C2 — scan de Status do WhatsApp via whatsapp-web.js. Lê os Status dos
-// contatos salvos em establishments.whatsapp_number, extrai texto, passa
-// para o socialParse (Gemini opcional) e grava promotions source='whatsapp'.
-// Respeita throttle definido em user_settings.whatsapp_scan_per_contact_min.
-async function handleWhatsappStatusScan(job: Job<SocialMonitorJobPayload & { type: "whatsapp-status-scan" }>) {
-  if (!SettingsRepository.getBool("whatsapp_enabled")) {
-    return { skipped: true, reason: "whatsapp desativado" };
-  }
-  if (!SettingsRepository.getBool("social_monitoring_enabled")) {
-    return { skipped: true, reason: "social_monitoring_enabled=false" };
-  }
-  const { startWhatsappSession, fetchContactStatuses, isWhatsappReady } = await import("../social/whatsappSession.ts");
-
-  if (!(await isWhatsappReady())) {
-    safeLog("[social-worker] whatsapp: iniciando sessão (QR)");
-    await startWhatsappSession({
-      onQr: () => {},
-      onAuthenticated: () => safeLog("[social-worker] whatsapp autenticado"),
-      onReady: () => safeLog("[social-worker] whatsapp pronto"),
-      onAuthFailure: (m) => safeLog(`[social-worker] whatsapp auth fail: ${m}`),
-      onDisconnected: () => safeLog("[social-worker] whatsapp disconnected"),
-    }).catch((err: any) => {
-      safeLog(`[social-worker] whatsapp init falhou: ${err.message}`);
-    });
-    // Aguarda 2s para QR/autenticar; sustenta o job mesmo se não foi dessa vez.
-    await new Promise((r) => setTimeout(r, 2000));
-    if (!(await isWhatsappReady())) {
-      return { skipped: true, reason: "Sessão não está pronta — escaneie o QR via /api/social/whatsapp/qr" };
-    }
-  }
-
-  const allEstablishments = EstablishmentRepository.getAll();
-  const withWhatsapp = allEstablishments.filter((e) => e.whatsappNumber);
-  if (withWhatsapp.length === 0) {
-    return { skipped: true, reason: "Nenhum estabelecimento com whatsapp_number cadastrado" };
-  }
-  const throttleMin = SettingsRepository.getNumber("whatsapp_scan_per_contact_min") ?? 20;
-  const throttleMs = throttleMin * 60 * 1000;
-  // Mapa de "última checagem" via social_sources (chaveado por establishment_hint)
-  const socialSources = SocialSourceRepository.getAll() as any[];
-  const lastCheckedByName = new Map<string, string>();
-  for (const s of socialSources) {
-    if (s.channel === "whatsapp" && s.establishmentHint) {
-      lastCheckedByName.set(s.establishmentHint.toLowerCase(), s.lastCheckedAt);
-    }
-  }
-
-  let captured = 0;
-  let saved = 0;
-  const profile = ProfileRepository.getAll()[0];
-  const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
-
-  for (const est of withWhatsapp) {
-    const last = lastCheckedByName.get(est.name.toLowerCase());
-    if (last) {
-      const age = Date.now() - new Date(last).getTime();
-      if (age < throttleMs) {
-        safeLog(`[social-worker] whatsapp throttled: ${est.name}, último check há ${Math.round(age / 60000)}min`);
-        continue;
-      }
-    }
-
-    try {
-      const statuses = await fetchContactStatuses([est.whatsappNumber!]);
-      for (const st of statuses) {
-        if (!st.statusText) continue;
-        captured++;
-        const { promos } = await parsePromosFromTextWithAI(st.statusText, apiKey, est.name);
-        const enriched = enrichParsedPromos(promos, st.statusText, est.name);
-        for (const p of enriched) {
-          if (!p.establishmentId) p.establishmentId = est.id;
-          if (isDuplicatePromo(p)) continue;
-          const id = genPromoId("whatsapp");
-          PromotionRepository.save({
-            id,
-            establishmentId: p.establishmentId,
-            productName: p.productName,
-            regularPrice: p.regularPrice,
-            promoPrice: p.promoPrice,
-            source: "whatsapp",
-            rawText: st.statusText.slice(0, 2000),
-            detectedAt: st.capturedAt,
-            isActive: true,
-            isFlash: true,
-            expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
-          });
-          saved++;
-          alertActivePromotion(id, p.productName, est.name, p.promoPrice, p.regularPrice, est.priceUrl)
-            .catch((e) => safeLog(`[social-worker] erro alerta whatsapp: ${e}`));
-        }
-      }
-      // Throttle leve entre contatos — aguarda 5s para não sobrecarregar
-      await new Promise((r) => setTimeout(r, 5000));
-    } catch (err: any) {
-      safeLog(`[social-worker] erro whatsappStatus ${est.name}: ${err.message}`);
-    }
-  }
-  recordInAppAlert("social", `whatsapp-status-${Date.now()}`, "WHATSAPP STATUS", `${saved} promo(s) salva(s) de ${withWhatsapp.length} contato(s)`);
-  return { captured, saved, scanned: withWhatsapp.length };
-}
-
 // C3 — scan de Stories do Instagram via microserviço Python (instagrapi).
 // 1 req por vez, throttle agressivo entre handles (30-60min, default 45).
 // Baixa mídia e passa ao Gemini vision para extrair preços quando houver.
@@ -725,8 +624,6 @@ export function startSocialWorker() {
           return handleSocialCapture(job as Job<SocialMonitorJobPayload & { type: "social-capture" }>);
         case "social-scan-all":
           return handleSocialScanAll(job as Job<SocialMonitorJobPayload & { type: "social-scan-all" }>);
-        case "whatsapp-status-scan":
-          return handleWhatsappStatusScan(job as Job<SocialMonitorJobPayload & { type: "whatsapp-status-scan" }>);
         case "instagram-stories-scan":
           return handleInstagramStoriesScan(
             job as Job<SocialMonitorJobPayload & { type: "instagram-stories-scan" }>

@@ -1,6 +1,7 @@
 import { useEffect, useState, useRef } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/cn";
+import QRCode from "qrcode";
 import {
   Radio,
   Loader2,
@@ -102,6 +103,26 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [igSavingCreds, setIgSavingCreds] = useState(false);
   const [igShowPass, setIgShowPass] = useState(false);
 
+  // ---- WhatsApp (conversas + flyers) ----
+  const [waEnabled, setWaEnabled] = useState(false);
+  const [waReady, setWaReady] = useState(false);
+  const [waToggling, setWaToggling] = useState(false);
+  const [waQr, setWaQr] = useState<string | null>(null);
+  const [waQrDataUrl, setWaQrDataUrl] = useState<string | null>(null);
+  const [waQrStatus, setWaQrStatus] = useState<"idle" | "pending" | "qr" | "ready">("idle");
+  const [waQrLoading, setWaQrLoading] = useState(false);
+
+  // Renderiza o QR como imagem escaneável
+  useEffect(() => {
+    if (waQr) {
+      QRCode.toDataURL(waQr, { width: 240, margin: 1, color: { dark: "#00ff88", light: "#000000" } })
+        .then(setWaQrDataUrl)
+        .catch(() => setWaQrDataUrl(null));
+    } else {
+      setWaQrDataUrl(null);
+    }
+  }, [waQr]);
+
   const toast = (message: string, type: ToastType, details?: string) =>
     addToast(message, type, details);
 
@@ -147,6 +168,65 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       setWhatsappGroups(data.groups || []);
     } catch {
       // ignore
+    }
+  };
+
+  const loadWhatsappStatus = async () => {
+    try {
+      const data = await apiJson("/api/social/whatsapp/status");
+      setWaEnabled(!!data.enabled);
+      setWaReady(!!data.ready);
+      if (data.ready) setWaQrStatus("ready");
+    } catch {
+      // mantém defaults
+    }
+  };
+
+  const toggleWhatsapp = async (enabled: boolean) => {
+    setWaToggling(true);
+    try {
+      await apiJson("/api/social/whatsapp/toggle", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ enabled }),
+      });
+      setWaEnabled(enabled);
+      if (!enabled) {
+        setWaQr(null);
+        setWaQrStatus("idle");
+      }
+      toast(enabled ? "WHATSAPP ATIVADO" : "WHATSAPP DESATIVADO", "success");
+      setTimeout(() => loadWhatsappStatus(), 1500);
+    } catch (err: any) {
+      toast("FALHA AO ALTERAR WHATSAPP", "error", String(err?.message || err));
+    } finally {
+      setWaToggling(false);
+    }
+  };
+
+  const loadWhatsappQr = async () => {
+    if (waQrLoading) return;
+    setWaQrLoading(true);
+    try {
+      const data = await apiJson("/api/social/whatsapp/qr");
+      if (data.status === "ready") {
+        setWaQrStatus("ready");
+        setWaReady(true);
+        setWaQr(null);
+        toast("WHATSAPP CONECTADO", "success", "Sessão já autenticada");
+      } else if (data.status === "qr" && data.qr) {
+        setWaQrStatus("qr");
+        setWaQr(data.qr);
+      } else {
+        setWaQrStatus("pending");
+        // Tenta de novo em 4s — QR costuma demorar a aparecer
+        setTimeout(() => loadWhatsappQr(), 4000);
+        return;
+      }
+    } catch (err: any) {
+      toast("FALHA AO GERAR QR", "error", String(err?.message || err));
+    } finally {
+      setWaQrLoading(false);
     }
   };
 
@@ -238,12 +318,14 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     loadScanLog();
     loadGroupMessages();
     loadWhatsappGroups();
+    loadWhatsappStatus();
     loadIgCredentials();
     loadInstagramHealth();
     const t = setInterval(() => {
       loadStatus();
       loadScanLog();
       loadGroupMessages();
+      loadWhatsappStatus();
       loadInstagramHealth();
     }, 60_000);
     return () => clearInterval(t);
@@ -736,6 +818,100 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
         </section>
       )}
 
+      {/* ===== WHATSAPP — CONVERSAS + FLYERS ===== */}
+      <section>
+        <div className="flex items-center justify-between">
+          <SectionTitle icon={<MessageSquare size={16} />}>WHATSAPP — CONVERSAS COM FLYERS</SectionTitle>
+          <div className="flex items-center gap-2">
+            <span className={cn("text-[9px] font-mono", !waEnabled ? "text-crimson/40" : !waReady ? "text-red-500" : "text-green-500")}>
+              {!waEnabled ? "● DESLIGADO" : !waReady ? "● DESCONECTADO" : "● CONECTADO"}
+            </span>
+            {waEnabled ? (
+              <button
+                onClick={() => { playSound("click"); toggleWhatsapp(false).catch(() => {}); }}
+                disabled={waToggling}
+                className="hud-button flex items-center gap-2 text-red-400 disabled:opacity-50"
+              >
+                DESATIVAR
+              </button>
+            ) : (
+              <button
+                onClick={() => { playSound("click"); toggleWhatsapp(true).catch(() => {}); }}
+                disabled={waToggling}
+                className="hud-button flex items-center gap-2 disabled:opacity-50"
+              >
+                {waToggling ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                {waToggling ? "ATIVANDO..." : "ATIVAR"}
+              </button>
+            )}
+            <button
+              onClick={() => { playSound("click"); loadWhatsappQr().catch(() => {}); }}
+              disabled={waQrLoading || !waEnabled}
+              className="hud-button flex items-center gap-2 disabled:opacity-50"
+            >
+              {waQrLoading ? <Loader2 size={14} className="animate-spin" /> : <ScanLine size={14} />}
+              {waQrLoading ? "GERANDO..." : waQrStatus === "ready" ? "RECONECTAR" : "GERAR QR"}
+            </button>
+          </div>
+        </div>
+
+        <div className="hud-border bg-black/40 p-5 mt-4">
+          {!waEnabled ? (
+            <div className="flex items-start gap-3">
+              <Power size={14} className="text-crimson/50 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
+                WhatsApp desativado no painel. Clique em ATIVAR para iniciar a sessão e monitorar
+                conversas — imagens de flyers de promoção são baixadas e interpretadas automaticamente.
+                Use um número secundário — existe risco de banimento.
+              </p>
+            </div>
+          ) : waReady ? (
+            <div className="flex flex-col gap-2">
+              <div className="flex items-center gap-2 text-[10px] font-mono text-green-500">
+                <CheckCircle2 size={14} /> SESSÃO ATIVA — MONITORANDO CONVERSAS
+              </div>
+              <p className="text-[9px] font-mono text-crimson/40">
+                MENSAGENS DE GRUPO E CONVERSAS DIRETAS SÃO PROCESSADAS EM TEMPO REAL.
+                IMAGENS DE FLYER SÃO BAIXADAS E INTERPRETADAS VIA GEMINI VISION.
+              </p>
+            </div>
+          ) : waQrStatus === "pending" ? (
+            <div className="flex items-center gap-3 text-crimson/50 font-mono text-xs">
+              <Loader2 size={14} className="animate-spin" /> INICIANDO SESSÃO — AGUARDE O QR...
+            </div>
+          ) : waQrStatus === "qr" && waQr ? (
+            <div className="flex flex-col gap-3">
+              <p className="text-[10px] font-mono text-amber-500/80">
+                Escaneie com o WhatsApp da conta secundária: Aparelhos conectados → Conectar aparelho.
+              </p>
+              {waQrDataUrl ? (
+                <img src={waQrDataUrl} alt="QR Code WhatsApp" className="w-60 h-60 self-start hud-border" />
+              ) : (
+                <div className="flex items-center gap-2 text-crimson/50 font-mono text-xs">
+                  <Loader2 size={14} className="animate-spin" /> GERANDO IMAGEM DO QR...
+                </div>
+              )}
+              <button
+                onClick={() => { playSound("click"); loadWhatsappQr().catch(() => {}); }}
+                disabled={waQrLoading}
+                className="hud-button self-start flex items-center gap-2 disabled:opacity-50"
+              >
+                {waQrLoading ? <Loader2 size={14} className="animate-spin" /> : null}
+                ATUALIZAR QR
+              </button>
+            </div>
+          ) : (
+            <div className="flex items-start gap-3">
+              <ScanLine size={14} className="text-crimson/50 shrink-0 mt-0.5" />
+              <p className="text-[10px] font-mono text-crimson/50 leading-relaxed">
+                Sessão não iniciada. Clique em GERAR QR para exibir o código de pareamento.
+                Após conectar, o monitoramento de conversas e flyers é automático.
+              </p>
+            </div>
+          )}
+        </div>
+      </section>
+
       {/* ===== INSTAGRAM STORIES (C3 — instagrapi) ===== */}
       <section>
         <div className="flex items-center justify-between">
@@ -879,10 +1055,10 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
       <div className="border border-amber-500/30 bg-amber-500/5 p-4 flex items-start gap-3">
         <ShieldAlert size={16} className="text-amber-500 shrink-0 mt-0.5" />
         <p className="text-[10px] font-mono text-amber-500/70 leading-relaxed">
-          SENTINELA CAPTURA PROMOÇÕES VIA TEXTO COLADO, STORIES DO INSTAGRAM (instagrapi + GEMINI VISION)
-          E CAPTIONS DE PERFIS PÚBLICOS. AS PROMOÇÕES DETECTADAS SÃO SALVAS NA ABA LOCAL E DISPARAM
-          ALERTAS NOS CANAIS CONFIGURADOS. O MONITORAMENTO DO INSTAGRAM EXIGE CONTA SECUNDÁRIA E PODE
-          RESULTAR EM BANIMENTO — USE COM DISCERNIMENTO.
+          SENTINELA CAPTURA PROMOÇÕES VIA CONVERSAS DO WHATSAPP (TEXTO + FLYERS INTERPRETADOS POR GEMINI VISION),
+          TEXTO COLADO, STORIES DO INSTAGRAM (instagrapi + GEMINI VISION) E CAPTIONS DE PERFIS PÚBLICOS.
+          AS PROMOÇÕES DETECTADAS SÃO SALVAS NA ABA LOCAL E DISPARAM ALERTAS NOS CANAIS CONFIGURADOS.
+          WHATSAPP E INSTAGRAM EXIGEM CONTAS SECUNDÁRIAS E PODEM RESULTAR EM BANIMENTO — USE COM DISCERNIMENTO.
         </p>
       </div>
     </div>
