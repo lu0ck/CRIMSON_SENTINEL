@@ -9,6 +9,7 @@ import type {
   PriceObservation,
   Promotion,
 } from "../types";
+import { promotionMatchesItem } from "./itemMatch";
 
 export interface ItemInsight {
   itemId: string;
@@ -54,26 +55,7 @@ export interface LocalInsights {
   generatedAt: string;
 }
 
-// Normaliza para comparação de nomes (minúsculas, sem acentos).
-function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9 ]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// A promoção "cobre" o item se os nomes normalizados coincidem por substrings
-// (heurística simples — o ideal é o worker de IA refinar).
-function promotionMatchesItem(promo: Promotion, itemName: string): boolean {
-  const p = normalize(promo.productName);
-  const i = normalize(itemName);
-  if (!p || !i) return false;
-  if (p === i) return true;
-  return p.length >= 4 && i.length >= 4 && (p.includes(i) || i.includes(p));
-}
+// normalize/promotionMatchesItem movidos para text.ts/itemMatch.ts (#27).
 
 export function buildLocalInsights(
   items: ShoppingListItem[],

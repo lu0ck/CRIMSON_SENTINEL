@@ -8,6 +8,16 @@ import { getStoreHandler, storeHandlers } from "./store-handlers";
 import { CACHE_DIR, COOKIE_DIR } from "../database/db";
 import { scraperBreaker } from "./circuitBreaker.ts";
 import { AI_MODELS } from "./aiModels";
+import {
+  isValidPrice,
+  sanitizePrice,
+  isScientificNotation,
+  parseBrazilianPrice,
+} from "./price";
+import { ensureHttps } from "./url";
+
+// #27 — helpers de preço re-exportados p/ consumidores legados (localPriceScrape, etc.)
+export { isValidPrice, sanitizePrice, isScientificNotation } from "./price";
 
 // @ts-ignore
 chromium.use(stealth());
@@ -37,7 +47,7 @@ const USER_AGENTS = [
   "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.2 Safari/605.1.15",
 ];
 
-const MAX_PRICE = 10_000_000;
+// MAX_PRICE movido para price.ts (#27).
 
 // Modelo de extração NVIDIA NIM (o antigo meta/llama-3.1-8b-instruct foi retirado da lista)
 const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
@@ -95,21 +105,8 @@ function isVisionModel(modelId: string): boolean {
 	return false;
 }
 
-export function isValidPrice(price: number): boolean {
-  if (!Number.isFinite(price) || price <= 0) return false;
-  if (price > MAX_PRICE) return false;
-  if (price > 1e10 || (price < 1 && price > 0 && price < 1e-10)) return false;
-  return true;
-}
-
-export function sanitizePrice(price: number): number {
-  if (!isValidPrice(price)) return 0;
-  return Math.round(price * 100) / 100;
-}
-
-export function isScientificNotation(text: string): boolean {
-  return /[eE][+-]?\d+/i.test(text);
-}
+// isValidPrice/sanitizePrice/isScientificNotation/parseBrazilianPrice
+// movidos para src/lib/price.ts (#27 — FONTE ÚNICA). Re-exportados acima.
 
 function isPriceRealistic(price: number, productName?: string): boolean {
   // Preços devem estar entre R$ 10 e R$ 5.000.000
@@ -268,11 +265,7 @@ function isProductNameValid(name: string): boolean {
   return true;
 }
 
-// Detectar URLs de busca (não são páginas de produto)
-function isSearchUrl(url: string): boolean {
-  return /\/busca\/|\/search\?|\/s\?|q=|search=/i.test(url);
-}
-
+// Detectar URLs de busca — importado de url.ts (#27)
 function getRandomUserAgent(): string {
   return USER_AGENTS[Math.floor(Math.random() * USER_AGENTS.length)];
 }
@@ -426,41 +419,7 @@ function pickBestImage(data: RawProductData): string | undefined {
   return data.ogImage || data.jsonLdImage || data.metaImage;
 }
 
-function parseBrazilianPrice(text: string): number {
-  if (!text) return 0;
-
-  if (isScientificNotation(text)) {
-    console.warn("[PriceParser] Scientific notation detected, rejecting:", text);
-    return 0;
-  }
-
-  const cleaned = text.replace(/[^\d.,]/g, "");
-  if (!cleaned) return 0;
-
-  const parts = cleaned.split(/[.,]/).filter(p => p);
-
-  if (parts.length === 0) return 0;
-  if (parts.length === 1) return sanitizePrice(parseFloat(parts[0]) || 0);
-
-  if (parts.length === 2) {
-    const hasCommaDecimal = text.includes(",") && text.lastIndexOf(",") > text.lastIndexOf(".");
-    if (hasCommaDecimal || (!text.includes(".") && text.includes(","))) {
-      return sanitizePrice(parseFloat(parts[0]) + parseFloat(parts[1]) / 100);
-    }
-    return sanitizePrice(parseFloat(parts[0] + "." + parts[1]) || 0);
-  }
-
-  const intPart = parts.slice(0, -1).join("");
-  const decPart = parts[parts.length - 1];
-  const result = parseFloat(intPart) + parseFloat(decPart) / 100;
-  
-  if (!isValidPrice(result)) {
-    console.warn("[PriceParser] Invalid price parsed:", result, "from:", text);
-    return 0;
-  }
-  
-  return sanitizePrice(result);
-}
+// parseBrazilianPrice movido para src/lib/price.ts (#27).
 
 export interface ScrapeOptions {
   lmStudioUrl?: string;
@@ -537,14 +496,8 @@ function mergeResults(partials: ScrapeResult[]): ScrapeResult | null {
 }
 
 export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Promise<ScrapeResult> {
-  // Normalizar URL: adicionar https:// se ausente
-  const url = (() => {
-    let u = rawUrl.trim();
-    if (!/^https?:\/\//i.test(u)) {
-      u = "https://" + u;
-    }
-    return u;
-  })();
+  // #27 — ensureHttps (FONTE ÚNICA em url.ts)
+  const url = ensureHttps(rawUrl);
   // Usar URL completa como chave do cache
   const urlHash = simpleHash(url);
   const cacheFile = path.join(CACHE_DIR, `${urlHash}.json`);

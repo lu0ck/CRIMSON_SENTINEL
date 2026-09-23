@@ -15,7 +15,7 @@ import { ProductRepository } from "./src/repositories/productRepository.ts";
 import { ProfileRepository } from "./src/repositories/profileRepository.ts";
 import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
-import { normalizeProductUrl, generateProductId } from "./src/lib/url.ts";
+import { normalizeProductUrl, generateProductId, ensureHttps } from "./src/lib/url.ts";
 import { getScanQueue, getRouteQueue, getSocialQueue } from "./src/queue/queues.ts";
 import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, listSocialScheduledJob } from "./src/queue/schedulers.ts";
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
@@ -249,10 +249,8 @@ if (!data.products) data.products = [];
 
 app.post("/api/scrape", async (req, res) => {
   let { url, productId, profileId } = req.body;
-  // Normalizar URL: adicionar https:// se ausente
-  if (url && !/^https?:\/\//i.test(String(url).trim())) {
-    url = "https://" + String(url).trim();
-  }
+  // #27 — ensureHttps (FONTE ÚNICA em url.ts)
+  if (url) url = ensureHttps(url);
   try {
     const { isRedisAvailable } = await import("./src/queue/connection.ts");
 

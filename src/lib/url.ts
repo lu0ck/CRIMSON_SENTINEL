@@ -82,3 +82,18 @@ export function generateProductId(url: string): string {
   }
   return Math.abs(hash).toString(36);
 }
+
+// #27 — helpers de URL ad-hoc unificados (antes em server.ts + scraper.ts).
+
+/** Garante protocolo http(s); se ausente, prefixa https://. */
+export function ensureHttps(url: string): string {
+  const s = String(url ?? "").trim();
+  if (!s) return s;
+  if (/^https?:\/\//i.test(s)) return s;
+  return "https://" + s;
+}
+
+/** Detecta URL de busca (não é página de produto). */
+export function isSearchUrl(url: string): boolean {
+  return /\/busca\/|\/search\?|\/s\?|q=|search=/i.test(url);
+}

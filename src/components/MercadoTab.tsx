@@ -26,6 +26,7 @@ import type {
 } from "../types";
 import { MapPicker } from "./MapPicker";
 import { ITEM_UNITS, type ItemUnit } from "../lib/units";
+import { cleanCep, isValidCep } from "../lib/cep";
 
 interface MercadoTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
@@ -182,8 +183,8 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
     setAddress: (v: string) => void,
     setCity?: (v: string) => void
   ) => {
-    const cleaned = cep.replace(/\D/g, "");
-    if (cleaned.length !== 8) return;
+    const cleaned = cleanCep(cep);
+    if (!isValidCep(cleaned)) return;
     setLocCepLoading(true);
     try {
       const data = await apiJson(`/api/cep/${cleaned}`);
@@ -897,7 +898,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                     <input className={inputCls} value={estCep} onChange={(e) => setEstCep(e.target.value)} placeholder="00000-000" maxLength={9} />
                     <button
                       onClick={() => lookupLocationByCep(estCep, setEstLat, setEstLng, setEstAddress, setEstCity)}
-                      disabled={locCepLoading || estCep.replace(/\D/g, "").length !== 8}
+                      disabled={locCepLoading || !isValidCep(estCep)}
                       className="hud-button text-[10px] px-2 py-1 shrink-0 disabled:opacity-50"
                     >
                       <MapPin size={12} />

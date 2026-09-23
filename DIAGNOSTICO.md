@@ -571,4 +571,42 @@ Três frentes: (1) o **scan de preços locais recorrente** como repeatable job d
 - UI (SocialTab): toggle ATIVAR/DESATIVAR, status CONECTADO/DESCONECTADO, GERAR QR (renderiza imagem escaneável via lib `qrcode`).
 - Deps `whatsapp-web.js` + `qrcode-terminal` + `qrcode` já no package.json. Riscos de banimento documentados no header do módulo e no aviso do rodapé da aba.
 
+---
+
+## 6.14 Status da Tarefa #27 (concluída) — Normalization util
+
+Consolidação de regras de normalização que estavam **duplicadas** em 2+ lugares, no padrão FONTE ÚNICA já usado por `url.ts` / `units.ts` / `trustedDomains.ts`.
+
+### Utils novos (`src/lib/`)
+
+| Arquivo | Funções | Substituiu |
+|---|---|---|
+| `text.ts` | `normalizeText`, `splitCsv`, `slugify` | 5 cópias de `normalize()` (`socialParse`, `localInsights`, `routeOptimizer`, `establishmentRepository` + alias público) |
+| `itemMatch.ts` | `promotionMatchesItem` | 2 cópias **byte-idênticas** em `localInsights` e `routeOptimizer` |
+| `datetime.ts` | `sqlUtcToDate`, `formatLocalDateTime` | fix de fuso UTC SQLite → Date local (antes inline/inconsistente) |
+| `price.ts` | `isValidPrice`, `sanitizePrice`, `isScientificNotation`, `parseBrazilianPrice` | movidos de `scraper.ts` + 2ª cópia de `parseBrazilianPrice` em `store-handlers.ts` |
+| `url.ts` (estendido) | `ensureHttps`, `isSearchUrl` | bloco ad-hoc em `server.ts` + `scraper.ts` + regex inline em `App.tsx` |
+| `cep.ts` (estendido) | `cleanCep`, `isValidCep` | `replace(/\D/g)` em 5 pontos (UI + MapPicker + lookup) |
+
+### Consumidores atualizados
+
+- **Text/match**: `socialParse.normalize` → alias de `normalizeText`; `establishmentRepository.normalizeName` → `normalizeText`; `localInsights`/`routeOptimizer` importam `promotionMatchesItem` de `itemMatch.ts`.
+- **Datas**: `TriggersTab` (fire log **e** `lastFiredAt` — este último estava **sem** fix de fuso) + `NotificationsTab` usam `formatLocalDateTime`.
+- **Preço**: `scraper.ts` e `store-handlers.ts` importam de `price.ts`; `scraper` re-exporta `isValidPrice`/`sanitizePrice`/`isScientificNotation` p/ consumidores legados (`localPriceScrape` migrou para `price.ts`).
+- **URL**: `server.ts` (`POST /api/scrape`), `scraper.advancedScrape`, `App.tsx` (aviso de URL de busca) usam `ensureHttps`/`isSearchUrl`.
+- **CEP**: `LocalTab`, `MercadoTab`, `MapPicker` usam `cleanCep`/`isValidCep`.
+- **CSV**: `socialWorker` usa `splitCsv` para channels e keywords de trigger.
+
+### Fora de escopo (deliberado)
+
+- Cópias de `isValidPrice`/`parseBrazilianPrice` **dentro de strings `page.evaluate`** em `store-handlers.ts`/`scraper.ts` — contexto do browser não importa módulos; deixadas como estão (comentário de intencionalidade).
+- `compare.normalize` mantido com regra própria (preserva `_` e trata `-`/`/` de forma distinta de `normalizeText`) — unificação mudaria fuzzy de produtos e-commerce.
+- `fmtBRL`/`apiJson`/`newId` (cosmético de UI, não normalização de dados).
+- CHECK de `unit` no `schema.sql` (minúsculo vs maiúsculo de `units.ts`) — investigar DB real à parte.
+
+### Validação
+
+- ✅ `npx tsc --noEmit` → **exit 0**
+- Smoke: imports sem duplicação de módulo (`price`/`text`/`itemMatch`/`datetime` puros, sem estado)
+
 

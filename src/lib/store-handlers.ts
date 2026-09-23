@@ -1,5 +1,6 @@
 import { Page } from "playwright-core";
-import { isValidPrice, sanitizePrice, isScientificNotation } from "./scraper";
+// #27 — preço unificado em price.ts (antes isValidPrice via scraper + parse local)
+import { isValidPrice, isScientificNotation, parseBrazilianPrice } from "./price";
 
 export interface ScrapeResult {
   name: string;
@@ -8,41 +9,6 @@ export interface ScrapeResult {
   available: boolean;
   imageUrl?: string;
   method?: string;
-}
-
-const PRICE_REGEX = /R?\$?\s*[\d.,]+\s*(?:reais?)?/i;
-const NUMBER_REGEX = /[\d.,]+/;
-const MAX_PRICE = 10_000_000;
-
-function parseBrazilianPrice(text: string): number {
-  if (!text || isScientificNotation(text)) return 0;
-
-  const cleaned = text.replace(/[^\d.,]/g, "");
-  const parts = cleaned.split(/[.,]/).filter(p => p);
-
-  if (parts.length === 0) return 0;
-  if (parts.length === 1) return sanitizePrice(parseFloat(parts[0]) || 0);
-
-  if (parts.length === 2) {
-    const hasCommaDecimal = text.includes(",") && text.lastIndexOf(",") > text.lastIndexOf(".");
-    if (hasCommaDecimal) {
-      return sanitizePrice(parseFloat(parts[0]) + parseFloat(parts[1]) / 100);
-    }
-    return sanitizePrice(parseFloat(parts[0] + "." + parts[1]) || 0);
-  }
-
-  const lastTwo = parts.slice(-2);
-  const intPart = parts.slice(0, -2).join("");
-
-  if (text.includes(",") && text.includes(".")) {
-    const commaPos = text.lastIndexOf(",");
-    const dotPos = text.lastIndexOf(".");
-    if (commaPos > dotPos) {
-      return sanitizePrice(parseFloat(intPart + lastTwo[0]) + parseFloat(lastTwo[1]) / 100);
-    }
-  }
-
-  return sanitizePrice(parseFloat(intPart + "." + lastTwo.join("")) || 0);
 }
 
 function extractPriceFromText(text: string): number {

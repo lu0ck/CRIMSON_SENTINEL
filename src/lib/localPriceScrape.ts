@@ -4,7 +4,8 @@
 // Dedup por (item, estabelecimento, preço): não re-registra preço idêntico.
 
 import type { ShoppingListItem, Establishment, PriceObservation } from "../types";
-import { advancedScrape, isValidPrice, sanitizePrice } from "./scraper";
+import { advancedScrape } from "./scraper";
+import { isValidPrice, sanitizePrice } from "./price";
 import { PriceObservationRepository } from "../repositories/priceObservationRepository";
 import { safeLog } from "./safeLog";
 

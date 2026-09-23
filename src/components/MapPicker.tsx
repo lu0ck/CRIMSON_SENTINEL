@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { MapPin } from "lucide-react";
 import "leaflet/dist/leaflet.css";
+import { cleanCep, isValidCep } from "../lib/cep";
 
 const inputCls = "hud-input text-xs py-1 px-2 w-full";
 const labelCls = "text-[8px] font-mono text-crimson/70 tracking-widest uppercase";
@@ -91,8 +92,8 @@ export function MapPicker({ lat, lng, onChange, onAddressFound, height = "350px"
   };
 
   const handleCepSearch = async () => {
-    const cleaned = cepInput.replace(/\D/g, "");
-    if (cleaned.length !== 8) return;
+    const cleaned = cleanCep(cepInput);
+    if (!isValidCep(cleaned)) return;
     setCepLoading(true);
     try {
       const cepRes = await fetch(`https://viacep.com.br/ws/${cleaned}/json/`);

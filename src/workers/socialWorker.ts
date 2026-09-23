@@ -525,7 +525,8 @@ async function handleTriggerEvaluate(
         break;
       }
       case "contains": {
-        const keywords = trigger.value.toLowerCase().split(",").map((s) => s.trim());
+        const { splitCsv } = await import("../lib/text.ts");
+        const keywords = splitCsv(trigger.value).map((s) => s.toLowerCase());
         const recentPromos = (await import("../repositories/promotionRepository.ts")).PromotionRepository.getRecent?.(20) ?? [];
         for (const promo of recentPromos) {
           const name = promo.productName.toLowerCase();
@@ -569,7 +570,8 @@ async function handleTriggerEvaluate(
       }
 
       // Enviar notificação
-      const channels = trigger.channels.split(",").map((c) => c.trim());
+      const { splitCsv } = await import("../lib/text.ts");
+      const channels = splitCsv(trigger.channels);
       const profile = ProfileRepository.getAll()[0];
       const message = `🔔 TRIGGER "${trigger.name}" ATIVADO!\n\n📦 ${matchedValue}`;
 

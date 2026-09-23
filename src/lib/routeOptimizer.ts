@@ -6,24 +6,9 @@
 //    deslocamento" — aqui fazemos o contrário: remove loja se economia <= desloc).
 
 import type { PriceObservation, Promotion, ShoppingListItem } from "../types";
+import { promotionMatchesItem } from "./itemMatch";
 
-function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9 ]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-function promotionMatchesItem(promo: Promotion, itemName: string): boolean {
-  const p = normalize(promo.productName);
-  const i = normalize(itemName);
-  if (!p || !i) return false;
-  if (p === i) return true;
-  return p.length >= 4 && i.length >= 4 && (p.includes(i) || i.includes(p));
-}
+// normalize/promotionMatchesItem → itemMatch.ts (#27 — fonte única p/ insights+rota).
 
 export interface StoreBasket {
   establishmentId: string;

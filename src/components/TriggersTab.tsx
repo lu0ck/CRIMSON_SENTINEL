@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "../lib/cn";
+import { formatLocalDateTime } from "../lib/datetime";
 import { ShieldAlert, Loader2, Plus, Trash2, Radio, Zap, TrendingDown, Bell, Hash, Package, Clock } from "lucide-react";
 
 type ToastType = "success" | "error" | "info";
@@ -31,12 +32,6 @@ interface TriggerFireLogEntry {
   entityId: string | null;
   matchedValue: string | null;
   firedAt: string;
-}
-
-function formatFireLogTime(firedAt: string): string {
-  // sqlite grava UTC "YYYY-MM-DD HH:MM:SS" — padroniza para Date local
-  const iso = firedAt.includes("T") ? firedAt : firedAt.replace(" ", "T") + "Z";
-  return new Date(iso).toLocaleString("pt-BR");
 }
 
 async function apiJson(url: string, options?: RequestInit) {
@@ -359,7 +354,7 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
                     <div className="flex items-center gap-3 text-[8px] font-mono text-crimson/30">
                       <span>Canais: {t.channels}</span>
                       {t.lastFiredAt && (
-                        <span>Último disparo: {new Date(t.lastFiredAt).toLocaleString("pt-BR")}</span>
+                        <span>Último disparo: {formatLocalDateTime(t.lastFiredAt)}</span>
                       )}
                     </div>
                   </div>
@@ -426,7 +421,7 @@ export function TriggersTab({ addToast, playSound, pollJob }: TriggersTabProps) 
                     </span>
                   )}
                   <span className="text-[8px] font-mono text-crimson/30">
-                    {formatFireLogTime(entry.firedAt)}
+                    {formatLocalDateTime(entry.firedAt)}
                   </span>
                 </div>
               </motion.div>

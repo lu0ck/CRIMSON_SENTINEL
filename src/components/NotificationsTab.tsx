@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
 import { Bell, ShieldAlert, Store, ShoppingCart, Percent, Loader2, XCircle, ChevronDown, ExternalLink } from "lucide-react";
 import type { NotificationLogEntry } from "../repositories/notificationRepository";
+import { formatLocalDateTime } from "../lib/datetime";
 
 interface NotificationsTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
@@ -128,7 +129,7 @@ export function NotificationsTab({ addToast, playSound }: NotificationsTabProps)
                     {meta.label}
                   </span>
                   <span className="text-[10px] font-mono text-crimson/30">
-                    {new Date(n.sentAt.replace(" ", "T") + "Z").toLocaleString("pt-BR")}
+                    {formatLocalDateTime(n.sentAt)}
                   </span>
                   {hasExpandableContent && (
                     <motion.span

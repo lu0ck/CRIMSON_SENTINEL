@@ -31,6 +31,7 @@ import type {
   RoutePlan,
 } from "../types";
 import { MapPicker } from "./MapPicker";
+import { cleanCep, isValidCep } from "../lib/cep";
 
 interface LocalTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
@@ -171,8 +172,8 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
     setAddress: (v: string) => void,
     setCity?: (v: string) => void
   ) => {
-    const cleaned = cep.replace(/\D/g, "");
-    if (cleaned.length !== 8) return;
+    const cleaned = cleanCep(cep);
+    if (!isValidCep(cleaned)) return;
     setLocCepLoading(true);
     try {
       const data = await apiJson(`/api/cep/${cleaned}`);
@@ -866,7 +867,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId }: LocalTabPr
                 />
                 <button
                   onClick={() => lookupLocationByCep(locCep, setLocLat, setLocLng, setLocAddress)}
-                  disabled={locCepLoading || locCep.replace(/\D/g, "").length !== 8}
+                  disabled={locCepLoading || !isValidCep(locCep)}
                   className="hud-button text-[10px] px-2 py-1 shrink-0 disabled:opacity-50"
                 >
                   {locCepLoading ? <Loader2 size={12} className="animate-spin" /> : <MapPin size={12} />}

@@ -2,6 +2,7 @@ import type { Establishment } from "../types";
 import { PromotionRepository } from "../repositories/promotionRepository";
 import { EstablishmentRepository } from "../repositories/establishmentRepository";
 import { AI_MODELS } from "./aiModels";
+import { normalizeText } from "./text";
 
 // ---------------------------------------------------------------------------
 // FASE 8 — parsing de texto social (WhatsApp/Instagram) em promoções.
@@ -17,15 +18,9 @@ export interface ParsedPromo {
   discountPct?: number;
 }
 
-// Normaliza para comparação (minúsculas, sem acentos).
+// #27 — alias público (API estável); implementação em text.ts.
 export function normalize(s: string): string {
-  return s
-    .toLowerCase()
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[^a-z0-9 ]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
+  return normalizeText(s);
 }
 
 // Limpa nome do produto: remove prefixo/sufixo de conectivos ("por apenas"),

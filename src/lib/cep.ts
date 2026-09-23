@@ -6,8 +6,17 @@ export interface CepResult {
   uf: string;
 }
 
+// #27 — limpeza canônica de CEP (antes copiada em UI/MapPicker).
+export function cleanCep(cep: string): string {
+  return (cep ?? "").replace(/\D/g, "");
+}
+
+export function isValidCep(cep: string): boolean {
+  return cleanCep(cep).length === 8;
+}
+
 export async function lookupCep(cep: string, opts: { timeoutMs?: number } = {}): Promise<CepResult | null> {
-  const cleaned = cep.replace(/\D/g, "");
+  const cleaned = cleanCep(cep);
   if (cleaned.length !== 8) return null;
   const url = `https://viacep.com.br/ws/${cleaned}/json/`;
   const controller = new AbortController();

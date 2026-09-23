@@ -47,7 +47,7 @@ import {
   Store
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
-import { generateProductId } from "./lib/url";
+import { generateProductId, isSearchUrl } from "./lib/url";
 import { LocalTab } from "./components/LocalTab";
 import { MercadoTab } from "./components/MercadoTab";
 import { BackupPanel } from "./components/BackupPanel";
@@ -836,8 +836,8 @@ const deleteComparisonResult = (productId: string, index: number) => {
     const urls = newUrls.map(u => u.trim()).filter(u => u.length > 0);
     if (urls.length === 0) return;
 
-    // Avisar sobre URLs de busca
-    const searchUrls = urls.filter(u => /\/busca\/|\/search\?|\/s\?|q=|search=/i.test(u));
+    // Avisar sobre URLs de busca (#27 — isSearchUrl em url.ts)
+    const searchUrls = urls.filter(u => isSearchUrl(u));
     if (searchUrls.length > 0) {
       addToast("AVISO: URLs de busca detectadas", "info", "Use URLs de produtos individuais para melhores resultados. Ex: https://www.kabum.com.br/produto/12345");
     }
