@@ -3,7 +3,7 @@ import express from "express";
 import path from "path";
 import fs from "fs";
 import { fileURLToPath } from "url";
-import { spawn, exec } from "child_process";
+import { exec } from "child_process";
 import {
   sendDiscordNotification,
   sendTelegramNotification,
@@ -1351,7 +1351,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       SettingsRepository.set("ig_username", username);
       SettingsRepository.set("ig_password", password);
       safeLog("[instagram] Credenciais salvas no banco");
-      // Responde primeiro, reinicia serviço em background
+      // Responde primeiro, re-registra no PM2 em background (#28 — dono único PM2)
       res.json({ ok: true, username });
       setTimeout(() => restartInstagramService(), 100);
     } catch (err: any) {
@@ -1395,7 +1395,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       if (enabled) {
         startInstagramService().catch((e: any) => safeLog(`[instagram] falha ao iniciar serviço: ${e.message}`));
       } else {
-        stopInstagramService();
+        stopInstagramService().catch((e: any) => safeLog(`[instagram] falha ao parar serviço: ${e.message}`));
       }
       res.json({ enabled: !!enabled });
     } catch (err: any) {
@@ -1411,10 +1411,10 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     if (!hasCredentials) {
       return res.status(400).json({ error: "Configure usuário e senha primeiro" });
     }
-    // Se serviço não está rodando, tenta iniciar
-    if (!instagramProcess) {
-      safeLog("[instagram] Serviço offline, reiniciando antes do login...");
-      restartInstagramService();
+    // Se serviço não está rodando, tenta iniciar via PM2 (#28)
+    if (!(await isInstagramPm2Online())) {
+      safeLog("[instagram] Serviço offline, reiniciando via PM2 antes do login...");
+      await startInstagramService();
       // Aguarda o serviço subir
       await new Promise((r) => setTimeout(r, 3000));
     }
@@ -1926,23 +1926,86 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       safeLog(`[whatsapp] listener init: ${e.message}`);
     }
 
-    // C3 — auto-start Instagram microservice
-    startInstagramService();
+    // C3 — sync Instagram com PM2 (#28 — dono único: PM2; spawn removido)
+    await syncInstagramWithPm2();
 
     // Catch-up: if scan was missed while PC was off, run immediately
     checkAndRunCatchupScan();
   });
 }
 
-let instagramProcess: ReturnType<typeof spawn> | null = null;
+// ---------------------------------------------------------------------------
+// Instagram microservice — DONO ÚNICO: PM2 (#28)
+// Antes o server.ts fazia spawn(uvicorn) em paralelo ao app PM2
+// sentinela-instagram-service → EADDRINUSE :8721 e toggle não derrubava o PM2.
+// Agora: credenciais em python_instagram/.ig.env (gitignored) + pm2 start/stop.
+// ---------------------------------------------------------------------------
+const IG_PM2_APP = "sentinela-instagram-service";
+const IG_ENV_FILE = path.join(__dirname, "python_instagram", ".ig.env");
+const IG_ECOSYSTEM = path.join(__dirname, "ecosystem.config.cjs");
 
-function execAsync(cmd: string): Promise<void> {
+function execAsync(cmd: string, opts: { cwd?: string } = {}): Promise<string> {
   return new Promise((resolve, reject) => {
-    exec(cmd, (err) => (err ? reject(err) : resolve()));
+    exec(cmd, { cwd: opts.cwd || __dirname, maxBuffer: 10_000_000 }, (err, stdout, stderr) => {
+      if (err) reject(new Error(stderr?.trim() || err.message));
+      else resolve(stdout);
+    });
   });
 }
 
-async function startInstagramService() {
+/** Grava credenciais do banco em .ig.env para o ecosystem lês no start/reload. */
+function writeInstagramEnvFile(): boolean {
+  const igUsername = SettingsRepository.get("ig_username");
+  const igPassword = SettingsRepository.get("ig_password");
+  if (!igUsername || !igPassword) return false;
+  fs.writeFileSync(IG_ENV_FILE, `IG_USERNAME=${igUsername}\nIG_PASSWORD=${igPassword}\n`, {
+    mode: 0o600,
+  });
+  return true;
+}
+
+/** Garante venv do microserviço (mesma lógica do spawn antigo). */
+async function ensureInstagramVenv(): Promise<boolean> {
+  const venvDir = path.join(__dirname, "python_instagram", ".venv");
+  const venvPython = path.join(venvDir, "bin", "python");
+  const venvPip = path.join(venvDir, "bin", "pip");
+  const uvicorn = path.join(venvDir, "bin", "uvicorn");
+  const reqFile = path.join(__dirname, "python_instagram", "requirements.txt");
+
+  if (fs.existsSync(venvPython) && fs.existsSync(uvicorn)) return true;
+
+  safeLog("[instagram] Configurando venv...");
+  try {
+    if (fs.existsSync(venvDir)) {
+      safeLog("[instagram] Removendo venv vazio/incompleto...");
+      await execAsync(`rm -rf "${venvDir}"`);
+    }
+    await execAsync(`python3 -m venv "${venvDir}"`);
+    await execAsync(`"${venvPip}" install --upgrade pip && "${venvPip}" install -q -r "${reqFile}"`);
+    safeLog("[instagram] Venv configurado com sucesso");
+    return true;
+  } catch (err: any) {
+    safeLog(`[instagram] Falha ao criar venv: ${err.message}. Instale python3 e tente novamente.`);
+    return false;
+  }
+}
+
+async function isInstagramPm2Online(): Promise<boolean> {
+  try {
+    const stdout = await execAsync("pm2 jlist");
+    const list = JSON.parse(stdout || "[]");
+    const app = list.find((a: any) => a.name === IG_PM2_APP);
+    return !!app && app.pm2_env?.status === "online";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Sobe o serviço via PM2 lendo ecosystem.config.cjs (que lê .ig.env).
+ * startOrReload re-avalia o config → credenciais novas entram no processo.
+ */
+async function startInstagramService(): Promise<void> {
   if (!isInstagramEnabled()) {
     safeLog("[instagram] desativado no painel social — serviço não iniciado");
     return;
@@ -1953,73 +2016,54 @@ async function startInstagramService() {
     safeLog("[instagram] Sem credenciais configuradas, serviço não será iniciado");
     return;
   }
+  if (!(await ensureInstagramVenv())) return;
+  if (!writeInstagramEnvFile()) {
+    safeLog("[instagram] Falha ao gravar .ig.env");
+    return;
+  }
+  try {
+    await execAsync(`pm2 startOrReload "${IG_ECOSYSTEM}" --only ${IG_PM2_APP}`);
+    safeLog(`[instagram] PM2 startOrReload ${IG_PM2_APP} ok (127.0.0.1:${process.env.INSTAGRAM_SERVICE_PORT || "8721"})`);
+  } catch (err: any) {
+    safeLog(`[instagram] PM2 start falhou: ${err.message} — rode pm2 start ecosystem.config.cjs`);
+  }
+}
 
-  const appRoot = __dirname;
-  const venvDir = path.join(appRoot, "python_instagram", ".venv");
-  const venvPython = path.join(venvDir, "bin", "python");
-  const venvPip = path.join(venvDir, "bin", "pip");
-  const uvicorn = path.join(venvDir, "bin", "uvicorn");
-  const reqFile = path.join(appRoot, "python_instagram", "requirements.txt");
+/** Para o processo PM2 (não mata filho do API — o API não é dono mais). */
+async function stopInstagramService(): Promise<void> {
+  try {
+    await execAsync(`pm2 stop ${IG_PM2_APP}`);
+    safeLog(`[instagram] PM2 stop ${IG_PM2_APP} ok`);
+  } catch (err: any) {
+    // App pode não estar na lista PM2 (dev sem pm2) — não é erro fatal
+    safeLog(`[instagram] PM2 stop: ${err.message}`);
+  }
+}
 
-  if (!fs.existsSync(venvPython) || !fs.existsSync(uvicorn)) {
-    safeLog("[instagram] Configurando venv...");
-    try {
-      if (fs.existsSync(venvDir)) {
-        safeLog("[instagram] Removendo venv vazio/incompleto...");
-        await execAsync(`rm -rf "${venvDir}"`);
-      }
-      await execAsync(`python3 -m venv "${venvDir}"`);
-      await execAsync(`"${venvPip}" install --upgrade pip && "${venvPip}" install -q -r "${reqFile}"`);
-      safeLog("[instagram] Venv configurado com sucesso");
-    } catch (err: any) {
-      safeLog(`[instagram] Falha ao criar venv: ${err.message}. Instale python3 e tente novamente.`);
-      return;
+async function restartInstagramService(): Promise<void> {
+  // Re-grava .ig.env e startOrReload para injetar credenciais novas
+  await startInstagramService();
+}
+
+/**
+ * Boot: espelha o toggle do painel no PM2.
+ * enabled+creds → startOrReload; caso contrário → stop (evita processo idle
+ * após reboot com Instagram desligado).
+ */
+async function syncInstagramWithPm2(): Promise<void> {
+  try {
+    const shouldRun =
+      isInstagramEnabled() &&
+      !!SettingsRepository.get("ig_username") &&
+      !!SettingsRepository.get("ig_password");
+    if (shouldRun) {
+      await startInstagramService();
+    } else if (await isInstagramPm2Online()) {
+      await stopInstagramService();
     }
+  } catch (e: any) {
+    safeLog(`[instagram] sync PM2: ${e.message}`);
   }
-
-  instagramProcess = spawn(uvicorn, [
-    "python_instagram.server:app",
-    "--host", "127.0.0.1",
-    "--port", process.env.INSTAGRAM_SERVICE_PORT || "8721",
-  ], {
-    cwd: appRoot,
-    stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      IG_USERNAME: igUsername,
-      IG_PASSWORD: igPassword,
-    },
-  });
-
-  instagramProcess.stdout?.on("data", (data) => {
-    safeLog(`[instagram] ${data.toString().trim()}`);
-  });
-  instagramProcess.stderr?.on("data", (data) => {
-    safeLog(`[instagram] ${data.toString().trim()}`);
-  });
-  instagramProcess.on("error", (err) => {
-    safeLog(`[instagram] Erro ao iniciar: ${err.message}`);
-    instagramProcess = null;
-  });
-  instagramProcess.on("exit", (code) => {
-    safeLog(`[instagram] Processo encerrado com código ${code}`);
-    instagramProcess = null;
-  });
-
-  safeLog("[instagram] Microserviço iniciado em 127.0.0.1:" + (process.env.INSTAGRAM_SERVICE_PORT || "8721"));
-}
-
-function stopInstagramService() {
-  if (instagramProcess) {
-    instagramProcess.kill("SIGTERM");
-    instagramProcess = null;
-  }
-}
-
-function restartInstagramService() {
-  stopInstagramService();
-  // Aguarda um instante para garantir que a porta foi liberada
-  setTimeout(() => startInstagramService(), 1000);
 }
 
 // Catch-up scan: check if a scan was missed while PC was off.
@@ -2078,7 +2122,6 @@ function updateLastScanTimestamp() {
 
 startServer();
 
-// Cleanup: matar processos filhos no shutdown
-process.on("exit", () => stopInstagramService());
-process.on("SIGINT", () => { stopInstagramService(); process.exit(0); });
-process.on("SIGTERM", () => { stopInstagramService(); process.exit(0); });
+// #28 — NÃO matar o Instagram no shutdown do API: o dono é o PM2
+// (antes process.on("exit"|"SIGINT"|"SIGTERM") → stopInstagramService matava
+//  o filho spawn; agora isso derrubaria/interferiria no app PM2 indevidamente).

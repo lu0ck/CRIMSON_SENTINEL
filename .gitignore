@@ -20,6 +20,8 @@ appendonlydir/
 dump.rdb
 # Python venv
 python_instagram/.venv/
+# Instagram PM2 credentials (#28)
+python_instagram/.ig.env
 # WhatsApp Web session
 .wwebjs_auth/
 python_instagram/__pycache__/

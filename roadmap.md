@@ -43,7 +43,7 @@
 ## ⚠️ Pendências abertas
 
 - **FASE 7** — validar o caminho **Gemini real** dos insights locais (a `GEMINI_API_KEY` já foi configurada no perfil; falta validar o fluxo de narrativa + habilitar `GEMINI_FALLBACK` no scrape).
-- **Instagram × PM2** — o microserviço Python é gerenciado pelo PM2 **e** o `server.ts` também tenta spawná-lo na porta 8721 (EADDRINUSE em produção); o toggle da UI não derruba o processo do PM2. A decidir: reter apenas um dos dois donos.
+- ~~**Instagram × PM2**~~ — **RESOLVIDO (#28)**: dono único **PM2** (`sentinela-instagram-service`); `server.ts` não faz mais spawn em :8721. Toggle/login gravam `python_instagram/.ig.env` e usam `pm2 startOrReload/stop`. Boot espelha o toggle (`syncInstagramWithPm2`).
 - **Cluster 4×** — validar o `crimson-scan-worker` em cluster (até 20 jobs simultâneos) num scan real com muitos produtos.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 

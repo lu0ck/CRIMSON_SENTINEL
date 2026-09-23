@@ -135,7 +135,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 
 **Pendências abertas:**
 - **FASE 7** — validar o caminho **Gemini real** dos insights locais (precisa `GEMINI_API_KEY` no perfil; hoje apenas o fallback determinístico foi exercitado).
-- **Instagram × PM2** — o microserviço Python é gerenciado pelo PM2 **e** o `server.ts` também tenta spawná-lo na porta 8721 (EADDRINUSE em produção); o toggle da UI não derruba o processo do PM2. A decidir: reter apenas um dos dois donos.
+- ~~**Instagram × PM2**~~ — **RESOLVIDO (#28)**: dono único PM2; spawn do `server.ts` removido; toggle usa `pm2 startOrReload`/`pm2 stop`; credenciais em `python_instagram/.ig.env` (gitignored).
 - **Cluster 4×** — validar o `crimson-scan-worker` em cluster (até 20 jobs simultâneos) num scan real com muitos produtos.
 
 ---

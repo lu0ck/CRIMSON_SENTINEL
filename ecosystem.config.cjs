@@ -5,15 +5,34 @@
 //      4 instâncias em cluster × concurrency 5 = até 20 jobs simultâneos
 //  - route-worker: roteirização (TSP/OSRM)
 //  - social-worker: monitoramento Instagram
+//  - instagram-service: microserviço Python instagrapi (#28 — DONO ÚNICO PM2;
+//      server.ts não faz mais spawn em :8721; credenciais via python_instagram/.ig.env)
 
 const path = require("path");
 const os = require("os");
+const fs = require("fs");
 
 // Banco único entre Electron e stack pm2: o Electron usa app.getPath('userData')
 // (= ~/.config/crimson-sentinel), onde vivem os dados reais do usuário. Sem esta
 // variável, db.ts cai no __dirname do projeto e cria um segundo banco vazio
 // (split-brain: scans automáticos não enxergam os produtos).
 const USER_DATA_PATH = path.join(os.homedir(), ".config", "crimson-sentinel");
+
+// #28 — credenciais Instagram gravadas pelo API (SettingsRepository → .ig.env)
+// em vez de env do spawn. Gitignored; chmod 600.
+function loadInstagramEnv() {
+  try {
+    const file = path.join(__dirname, "python_instagram", ".ig.env");
+    const out = {};
+    for (const line of fs.readFileSync(file, "utf8").split("\n")) {
+      const m = line.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/);
+      if (m) out[m[1]] = m[2];
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
 
 module.exports = {
   apps: [
@@ -80,15 +99,18 @@ module.exports = {
       time: true,
     },
     {
-      // C3 — microserviço Python instagrapi. Só relevante se INSTAGRAM_ENABLED=true.
-      // Sobe automaticamente; se usuário não usar Instagram, processo roda idle
-      // (consome poucos recursos). Desativar via `pm2 stop crimson-instagram-service`.
+      // C3 — microserviço Python instagrapi. DONO ÚNICO: PM2 (#28).
+      // server.ts apenas pm2 startOrReload/stop (não faz spawn em :8721).
+      // Toggle da UI (user_settings.instagram_enabled) → start/stop deste app.
+      // Credenciais: python_instagram/.ig.env (gravado ao salvar no painel).
+      // Se venv ausente, rode: bash scripts/setup-instagram.sh
       name: "sentinela-instagram-service",
       script: "python_instagram/.venv/bin/uvicorn",
       args: "python_instagram.server:app --host 127.0.0.1 --port 8721",
       interpreter: "none",
       env: {
         INSTAGRAM_SERVICE_PORT: "8721",
+        ...loadInstagramEnv(),
       },
       max_restarts: 5,
       min_uptime: "10s",

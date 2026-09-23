@@ -573,6 +573,31 @@ Três frentes: (1) o **scan de preços locais recorrente** como repeatable job d
 
 ---
 
+## 6.15 Instagram — dono único PM2 (#28)
+
+**Problema (roadmap pendência):** dois donos da porta 8721 — app PM2 `sentinela-instagram-service` **e** `spawn(uvicorn)` dentro do `server.ts` → EADDRINUSE em produção; toggle da UI só matava o filho do API, não o processo PM2.
+
+**Decisão (VPS):** **PM2-only**.
+
+**Mudanças:**
+- `server.ts`: removidos `instagramProcess`, `spawn` e exit-hooks (`SIGINT`/`SIGTERM`/`exit`) que derrubavam o serviço no shutdown da API.
+  - `writeInstagramEnvFile()` → grava `python_instagram/.ig.env` (mode 0600, gitignored) a partir de `ig_username`/`ig_password`
+  - `startInstagramService()` → `pm2 startOrReload ecosystem.config.cjs --only sentinela-instagram-service`
+  - `stopInstagramService()` → `pm2 stop sentinela-instagram-service`
+  - `syncInstagramWithPm2()` no boot: enabled+creds → start; senão → stop (espelha toggle)
+  - login: checagem `!instagramProcess` → `isInstagramPm2Online()` (`pm2 jlist`)
+- `ecosystem.config.cjs`: `loadInstagramEnv()` lê `.ig.env` no `env` do app.
+- `.gitignore`: `python_instagram/.ig.env`
+- Docs: pendência **Instagram × PM2** marcada RESOLVIDA em `roadmap.md`/`README.md`; `INSTRUCOES_LOCAL.md` corrigido `crimson-*` → `sentinela-*`.
+
+**Fluxo painel:** salvar credenciais → `.ig.env` + `startOrReload`; toggle off → `pm2 stop`; toggle on → `startOrReload`; login offline → start + wait 3s.
+
+**Não fazer:** API não deve matar o Instagram em SIGTERM — o dono é o PM2.
+
+**Validação:** `npx tsc --noEmit` → 0 erros. Smoke: `pm2 status` (8 processos), toggle IG on/off muda status do app.
+
+---
+
 ## 6.14 Status da Tarefa #27 (concluída) — Normalization util
 
 Consolidação de regras de normalização que estavam **duplicadas** em 2+ lugares, no padrão FONTE ÚNICA já usado por `url.ts` / `units.ts` / `trustedDomains.ts`.

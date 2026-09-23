@@ -59,24 +59,35 @@ INSTAGRAM_ENABLED=true
 # Obtenha em: https://aistudio.google.com/apikey
 GEMINI_API_KEY=sua-chave-aqui
 
-# Microserviço Instagram (para C3)
+# Microserviço Instagram (para C3) — dono único: PM2 (#28)
 INSTAGRAM_SERVICE_PORT=8721
 INSTAGRAM_SERVICE_URL=http://127.0.0.1:8721
 
 # Conta secundária do Instagram (para C3)
+# Prefira salvar no painel SOCIAL: o API grava python_instagram/.ig.env
+# (gitignored) e faz pm2 startOrReload sentinela-instagram-service.
 IG_USERNAME=seu_usuario_secundario
 IG_PASSWORD=sua_senha
 ```
 
 ### 3. Microserviço Instagram (necessário apenas para C3)
 
+**Dono único: PM2** (`sentinela-instagram-service`). O `server.ts` **não** faz mais spawn na porta 8721 (evita EADDRINUSE).
+
 ```bash
-cd python_instagram
-pip install -r requirements.txt
-uvicorn server:app --host 127.0.0.1 --port 8721
+# Setup do venv (uma vez)
+bash scripts/setup-instagram.sh
+
+# Subir stack (inclui instagram-service)
+pm2 start ecosystem.config.cjs
+
+# Controle via painel SOCIAL (toggle/credenciais) ou manualmente:
+pm2 startOrReload ecosystem.config.cjs --only sentinela-instagram-service
+pm2 stop sentinela-instagram-service
+pm2 status sentinela-instagram-service
 ```
 
-> O serviço roda na porta 8721 e fornece endpoints para login, health check e busca de stories.
+> Credenciais ficam em `python_instagram/.ig.env` (gravado ao salvar no painel, chmod 600, gitignored). O serviço roda em 127.0.0.1:8721.
 
 ### 4. Iniciar o worker social (já incluído no pm2)
 
@@ -195,17 +206,19 @@ Não há scan manual de Status — o monitoramento é contínuo via listener.
 
 > **ATENÇÃO:** Este módulo requer uma **conta secundária** do Instagram. Risco de ban se usado excessivamente.
 
-#### 5.1 — Iniciar o microserviço Python
+#### 5.1 — Iniciar o microserviço (PM2 — dono único #28)
 
 ```bash
-cd python_instagram
-pip install -r requirements.txt
-uvicorn server:app --host 127.0.0.1 --port 8721
+bash scripts/setup-instagram.sh   # venv uma vez
+pm2 startOrReload ecosystem.config.cjs --only sentinela-instagram-service
+pm2 status sentinela-instagram-service
 ```
+
+> O toggle **ATIVAR/DESATIVAR** no painel e o salvamento de credenciais já disparam `pm2 startOrReload` / `pm2 stop` automaticamente. Credenciais ficam em `python_instagram/.ig.env` (não no `.env`).
 
 #### 5.2 — Autenticar
 
-1. Configure `IG_USERNAME` e `IG_PASSWORD` no `.env`
+1. Configure usuário/senha no painel SOCIAL (Instagram → credenciais) — grava `.ig.env`
 2. Clique em **"LOGIN"** no Instagram da aba Social
 3. O sistema autentica via instagrapi e salva a sessão
 
@@ -321,7 +334,7 @@ Quando uma promoção é detectada, o sistema pode notificar via:
 |----------|-------|---------|
 | "DESLIGADO" no WhatsApp | Toggle `whatsapp_enabled` desligado | Clique em ATIVAR no painel social |
 | "NAO AUTENTICADO" no WhatsApp | Sessão expirada | Clique em "GERAR QR" e escaneie novamente |
-| "SERVICO OFF" no Instagram | Microserviço Python não está rodando | Inicie com `uvicorn server:app --port 8721` |
+| "SERVICO OFF" no Instagram | Microserviço PM2 parado/out | `pm2 status sentinela-instagram-service` e `pm2 startOrReload ecosystem.config.cjs --only sentinela-instagram-service` |
 | "SEM SESSAO" no Instagram | Credenciais não configuradas | Configure `IG_USERNAME` e `IG_PASSWORD` no .env |
 | Nenhuma promoção detectada | Fontes desabilitadas ou sem conteúdo | Verifique se as fontes estão habilitadas e se há promoções recentes nos canais |
 | Redis error (ECONNREFUSED) | Redis não está rodando | Execute `docker compose up -d` ou inicie o Redis manualmente |
