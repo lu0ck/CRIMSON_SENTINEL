@@ -5,7 +5,7 @@ import type { ScanJobPayload } from "../queue/types";
 import { AppDataRepository } from "../repositories/appDataRepository";
 import { ProductRepository } from "../repositories/productRepository";
 import { ProfileRepository } from "../repositories/profileRepository";
-import { advancedScrape } from "../lib/scraper";
+import { advancedScrape, isPriceRealistic } from "../lib/scraper";
 import { safeLog } from "../lib/safeLog";
 import { alertProductTargetReached } from "../lib/notify";
 import {
@@ -76,52 +76,57 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
   if (productId && info?.price) {
     const product = ProductRepository.getById(productId);
     if (product) {
-      const now = new Date().toISOString();
-      const priceChanged = info.price !== product.currentPrice;
-      product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
-      product.currentPrice = info.price;
-      product.lastUpdated = now;
-      product.lastScrapeMethod = "queue";
-      if (priceChanged) {
-        product.priceHistory.push({ date: now, price: info.price });
-      }
-      ProductRepository.save(product);
-
-      if (product.targetPrice && product.currentPrice <= product.targetPrice) {
-        try {
-          const alerted = await alertProductTargetReached(
-            profile,
-            product.name || product.url,
-            product.id,
-            product.currentPrice,
-            product.targetPrice,
-            product.url
-          );
-          if (alerted) safeLog(`[scan-worker] ALERTA enviado: ${product.name} atingiu alvo`);
-        } catch (err) {
-          safeLog(`[scan-worker] erro ao enviar alerta de alvo: ${err}`);
+      // #44 — não persiste/não alerta preço irreal (frete/parcela/unidade vindos de busca)
+      if (!isPriceRealistic(info.price, product.name || product.url)) {
+        safeLog(`[scan-worker] preço irreal descartado p/ ${product.name}: R$ ${info.price} (mantido R$ ${product.currentPrice})`);
+      } else {
+        const now = new Date().toISOString();
+        const priceChanged = info.price !== product.currentPrice;
+        product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
+        product.currentPrice = info.price;
+        product.lastUpdated = now;
+        product.lastScrapeMethod = "queue";
+        if (priceChanged) {
+          product.priceHistory.push({ date: now, price: info.price });
         }
-      }
+        ProductRepository.save(product);
 
-      // C1 — detectar flash promotion em produto de e-commerce
-      try {
-        const flash = isFlashPrice(info.price, product.priceHistory.map((h) => ({ observedAt: h.date, price: h.price })));
-        if (flash.isFlash) {
-          const promo = createFlashPromotion({
-            productName: product.name || product.url,
-            establishmentId: "ecommerce",
-            currentPrice: info.price,
-            regularPrice: product.previousPrice ?? undefined,
-            source: "site",
-            detectedAt: now,
-          });
-          if (promo) {
-            await alertFlashPromotion(promo, "E-commerce", flash.reason, product.url);
-            safeLog(`[scan-worker] FLASH detectado em ${product.name}: ${flash.reason}`);
+        if (product.targetPrice && product.currentPrice <= product.targetPrice) {
+          try {
+            const alerted = await alertProductTargetReached(
+              profile,
+              product.name || product.url,
+              product.id,
+              product.currentPrice,
+              product.targetPrice,
+              product.url
+            );
+            if (alerted) safeLog(`[scan-worker] ALERTA enviado: ${product.name} atingiu alvo`);
+          } catch (err) {
+            safeLog(`[scan-worker] erro ao enviar alerta de alvo: ${err}`);
           }
         }
-      } catch (err) {
-        safeLog(`[scan-worker] erro na detecção flash: ${err}`);
+
+        // C1 — detectar flash promotion em produto de e-commerce
+        try {
+          const flash = isFlashPrice(info.price, product.priceHistory.map((h) => ({ observedAt: h.date, price: h.price })));
+          if (flash.isFlash) {
+            const promo = createFlashPromotion({
+              productName: product.name || product.url,
+              establishmentId: "ecommerce",
+              currentPrice: info.price,
+              regularPrice: product.previousPrice ?? undefined,
+              source: "site",
+              detectedAt: now,
+            });
+            if (promo) {
+              await alertFlashPromotion(promo, "E-commerce", flash.reason, product.url);
+              safeLog(`[scan-worker] FLASH detectado em ${product.name}: ${flash.reason}`);
+            }
+          }
+        } catch (err) {
+          safeLog(`[scan-worker] erro na detecção flash: ${err}`);
+        }
       }
     }
   }
@@ -145,6 +150,10 @@ async function handleScanAll() {
         tavilyApiKey: profile?.tavilyApiKey,
       });
       if (info && info.price) {
+        // #44 — gate igual ao handleScrape: preço irreal não atualiza nem alerta
+        if (!isPriceRealistic(info.price, product.name || product.url)) {
+          safeLog(`[scan-worker] preço irreal descartado p/ ${product.name}: R$ ${info.price} (mantido R$ ${product.currentPrice})`);
+        } else {
         const now = new Date().toISOString();
         const priceChanged = info.price !== product.currentPrice;
         product.previousPrice = priceChanged ? product.currentPrice : product.previousPrice;
@@ -169,6 +178,7 @@ async function handleScanAll() {
           } catch (err) {
             safeLog(`[scan-worker] erro ao enviar alerta de alvo: ${err}`);
           }
+        }
         }
       }
       await new Promise((r) => setTimeout(r, 5_000));

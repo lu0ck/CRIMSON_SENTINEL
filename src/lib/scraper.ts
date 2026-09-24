@@ -152,7 +152,7 @@ function isVisionModel(modelId: string): boolean {
 // isValidPrice/sanitizePrice/isScientificNotation/parseBrazilianPrice
 // movidos para src/lib/price.ts (#27 — FONTE ÚNICA). Re-exportados acima.
 
-function isPriceRealistic(price: number, productName?: string): boolean {
+export function isPriceRealistic(price: number, productName?: string): boolean {
   // Preços devem estar entre R$ 10 e R$ 5.000.000
   if (price < 10 || price > 5000000) {
     return false;
@@ -777,15 +777,20 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   // Se todas as estratégias falharam mas temos um resultado composto válido (nome ok)
   const mergedFinal = mergeResults(partials);
   if (mergedFinal && mergedFinal.name && mergedFinal.name.length > 5 && isProductNameValid(mergedFinal.name)) {
-    console.log(`[Scraper] ⚠️ Using best available merged result: R$ ${mergedFinal.price} — "${mergedFinal.name.substring(0, 50)}" (${mergedFinal.method})`);
-    fs.writeFileSync(cacheFile, JSON.stringify(mergedFinal));
-    options.onProgress?.({
-      strategy: "DONE",
-      triedCount: totalStrategies,
-      totalStrategies,
-      strategiesTried: [...strategiesTried],
-    });
-    return mergedFinal;
+    // #44 — não devolve preço irreal (ex.: R$ 7,18 de frete/parcela) — causava alerta falso no Telegram
+    if (!isPriceRealistic(mergedFinal.price, mergedFinal.name)) {
+      console.log(`[Scraper] ✗ Fallback rejeitado: preço R$ ${mergedFinal.price} irreal para "${mergedFinal.name.substring(0, 50)}"`);
+    } else {
+      console.log(`[Scraper] ⚠️ Using best available merged result: R$ ${mergedFinal.price} — "${mergedFinal.name.substring(0, 50)}" (${mergedFinal.method})`);
+      fs.writeFileSync(cacheFile, JSON.stringify(mergedFinal));
+      options.onProgress?.({
+        strategy: "DONE",
+        triedCount: totalStrategies,
+        totalStrategies,
+        strategiesTried: [...strategiesTried],
+      });
+      return mergedFinal;
+    }
   }
 
   console.error("[Scraper] ✗✗✗ All strategies failed ✗✗✗");
@@ -2016,7 +2021,7 @@ async function scrapeWithSearchVerify(
             {
               model,
               messages: [
-                { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
+                { role: "system", content: "Extraia o nome do produto e o preço à vista do produto em reais (BRL). Ignore frete, parcelas, preço por unidade/grama e cupons. Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
                 { role: "user", content: `Produto alvo: ${nameHint}\n\nTexto: ${snippet.slice(0, 3000)}\n\nJSON:` },
               ],
               max_tokens: 700,
@@ -2029,7 +2034,7 @@ async function scrapeWithSearchVerify(
           if (jm) {
             const out = JSON.parse(jm[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
             const price = sanitizePrice(Number(out.price));
-            if (isValidPrice(price) && out.name && String(out.name).length > 5) {
+            if (isValidPrice(price) && isPriceRealistic(price, nameHint || String(out.name)) && out.name && String(out.name).length > 5) {
               console.log(`[SEARCH_VERIFY] ✓ NVIDIA (model=${model}): "${String(out.name).substring(0, 40)}" R$ ${price}`);
               return {
                 name: cleanProductName(String(out.name)),
