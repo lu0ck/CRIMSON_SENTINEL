@@ -93,6 +93,7 @@ export interface PriceObservation {
     | "site"
     | "whatsapp"
     | "instagram"
+    | "telegram"
     | "scraping"
     | "manual"
     | "flyer"

@@ -15,6 +15,15 @@ import {
   enrichParsedPromos,
   isDuplicatePromo,
 } from "../lib/socialParse";
+import {
+  bridgePromoToObservations,
+  emptyBridgeCounters,
+  mergeBridgeCounters,
+  bridgeSummary,
+  type BridgeCounters,
+  type SocialObservationSource,
+} from "../lib/socialToObservation";
+import { isFlashPrice, createFlashPromotion, itemHistoricalPrices } from "../lib/flashDetect";
 import { AI_MODELS } from "../lib/aiModels";
 import { isInstagramEnabled } from "../lib/instagramEnabled";
 
@@ -93,11 +102,42 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
 
   const saved: any[] = [];
   const skippedDuplicates: any[] = [];
+  const bridged = emptyBridgeCounters();
+  const src = channel as SocialObservationSource;
 
   for (const promo of enriched) {
     // Só cadastra promoções com estabelecimento identificado.
     if (!promo.establishmentId) {
       continue;
+    }
+    // #34 — bridge independente do dedup de promo (obs tem dedup próprio).
+    if (promo.promoPrice > 0) {
+      const results = bridgePromoToObservations({
+        promo,
+        source: src,
+        notes: url || `social:${channel}`,
+      });
+      mergeBridgeCounters(bridged, results);
+      // Flash só paths A/C (WhatsApp/capture) — Stories (B) mantém isFlash hardcoded.
+      for (const r of results) {
+        if (r.status !== "recorded" || !r.itemId) continue;
+        try {
+          const flash = isFlashPrice(promo.promoPrice, itemHistoricalPrices(r.itemId));
+          if (flash.isFlash) {
+            createFlashPromotion({
+              productName: promo.productName,
+              establishmentId: promo.establishmentId,
+              currentPrice: promo.promoPrice,
+              regularPrice: promo.regularPrice,
+              source: channel,
+              detectedAt: new Date().toISOString(),
+            });
+            safeLog(`[social-worker] FLASH social em ${promo.productName}: ${flash.reason}`);
+          }
+        } catch (e) {
+          safeLog(`[social-worker] erro flash social: ${e}`);
+        }
+      }
     }
     if (isDuplicatePromo(promo)) {
       skippedDuplicates.push(promo.productName);
@@ -125,14 +165,22 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
 
   if (sourceId) SocialSourceRepository.setLastChecked(sourceId);
 
-  safeLog(`[social-worker] ${channel} — ${saved.length} promoções salvas, ${skippedDuplicates.length} duplicadas (método ${method})`);
-  recordInAppAlert("social", `capture-${channel}-${Date.now()}`, "CAPTURA SOCIAL", `${channel.toUpperCase()}: ${saved.length} promo(s) detectada(s), ${skippedDuplicates.length} duplicada(s)`);
+  safeLog(
+    `[social-worker] ${channel} — ${saved.length} promoções salvas, ${skippedDuplicates.length} duplicadas, bridge ${bridgeSummary(bridged)} (método ${method})`
+  );
+  recordInAppAlert(
+    "social",
+    `capture-${channel}-${Date.now()}`,
+    "CAPTURA SOCIAL",
+    `${channel.toUpperCase()}: ${saved.length} promo(s), ${skippedDuplicates.length} dup · ${bridgeSummary(bridged)}`
+  );
   return {
     captured: true,
     channel,
     method,
     saved,
     skippedDuplicates,
+    bridged,
   };
 }
 
@@ -280,6 +328,7 @@ async function handleInstagramStoriesScan(
 
   let captured = 0;
   let saved = 0;
+  const bridged = emptyBridgeCounters();
   const profile = ProfileRepository.getAll()[0];
   const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
@@ -353,6 +402,16 @@ async function handleInstagramStoriesScan(
         const enriched = enrichParsedPromos(promos, text, est.name);
         for (const p of enriched) {
           if (!p.establishmentId) p.establishmentId = est.id;
+          // #34 — bridge social → obs (Story: validUntil espelha expiresAt 24h; sem 2ª promo flash)
+          if (p.promoPrice > 0) {
+            const results = bridgePromoToObservations({
+              promo: p,
+              source: "instagram",
+              notes: `instagram-story:${est.name}`,
+              observedAt: st.taken_at || undefined,
+            });
+            mergeBridgeCounters(bridged, results);
+          }
           if (isDuplicatePromo(p)) continue;
           const id = genPromoId("instagram");
           PromotionRepository.save({
@@ -386,8 +445,13 @@ async function handleInstagramStoriesScan(
       safeLog(`[social-worker] erro instagramStories ${est.name}: ${err.message}`);
     }
   }
-  recordInAppAlert("social", `instagram-stories-${Date.now()}`, "INSTAGRAM STORIES", `${saved} promo(s) salva(s) de ${withHandle.length} perfil(is)`);
-  return { captured, saved, scanned: withHandle.length, method: "instagrapi" };
+  recordInAppAlert(
+    "social",
+    `instagram-stories-${Date.now()}`,
+    "INSTAGRAM STORIES",
+    `${saved} promo(s) · ${bridgeSummary(bridged)} de ${withHandle.length} perfil(is)`
+  );
+  return { captured, saved, scanned: withHandle.length, method: "instagrapi", bridged };
 }
 
 // ---------------------------------------------------------------------------
@@ -410,9 +474,39 @@ async function handleGroupMessageProcess(
 
   const saved: any[] = [];
   const skippedDuplicates: any[] = [];
+  const bridged = emptyBridgeCounters();
+  const src = (source === "telegram" ? "telegram" : "whatsapp") as SocialObservationSource;
 
   for (const promo of enriched) {
     if (!promo.establishmentId) continue;
+    // #34 — bridge independente do dedup de promo
+    if (promo.promoPrice > 0) {
+      const results = bridgePromoToObservations({
+        promo,
+        source: src,
+        notes: `group:${groupName}`,
+      });
+      mergeBridgeCounters(bridged, results);
+      for (const r of results) {
+        if (r.status !== "recorded" || !r.itemId) continue;
+        try {
+          const flash = isFlashPrice(promo.promoPrice, itemHistoricalPrices(r.itemId));
+          if (flash.isFlash) {
+            createFlashPromotion({
+              productName: promo.productName,
+              establishmentId: promo.establishmentId,
+              currentPrice: promo.promoPrice,
+              regularPrice: promo.regularPrice,
+              source: src,
+              detectedAt: new Date().toISOString(),
+            });
+            safeLog(`[social-worker] FLASH grupo em ${promo.productName}: ${flash.reason}`);
+          }
+        } catch (e) {
+          safeLog(`[social-worker] erro flash grupo: ${e}`);
+        }
+      }
+    }
     if (isDuplicatePromo(promo)) {
       skippedDuplicates.push(promo.productName);
       continue;
@@ -440,9 +534,16 @@ async function handleGroupMessageProcess(
   const { GroupMessageRepository } = await import("../repositories/groupMessageRepository.ts");
   GroupMessageRepository.markProcessed(job.data.messageId);
 
-  safeLog(`[social-worker] grupo ${groupName} (${source}): ${saved.length} promoções, ${skippedDuplicates.length} duplicadas`);
-  recordInAppAlert("social", `group-${groupName}-${Date.now()}`, "GRUPO", `${groupName}: ${saved.length} promo(s) detectada(s), ${skippedDuplicates.length} duplicada(s)`);
-  return { captured: true, source, groupName, saved, skippedDuplicates };
+  safeLog(
+    `[social-worker] grupo ${groupName} (${source}): ${saved.length} promoções, ${skippedDuplicates.length} duplicadas, bridge ${bridgeSummary(bridged)}`
+  );
+  recordInAppAlert(
+    "social",
+    `group-${groupName}-${Date.now()}`,
+    "GRUPO",
+    `${groupName}: ${saved.length} promo(s), ${skippedDuplicates.length} dup · ${bridgeSummary(bridged)}`
+  );
+  return { captured: true, source, groupName, saved, skippedDuplicates, bridged };
 }
 
 // ---------------------------------------------------------------------------

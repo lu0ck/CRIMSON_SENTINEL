@@ -775,3 +775,41 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.19 bridge social → price_observations (#34 — FASE 16 bloco B)
+
+**Problema (roadmap FASE 16, Stories/WhatsApp):** linhas da tabela dizem **"vira/→ observação local"**, mas os 3 caminhos do `socialWorker` só gravavam **`promotions`** — zero `PriceObservationRepository`. Insights, rota, histórico de preços e flash leem **`price_observations`** (com `shoppingListItemId`); promoções sociais ficavam “cegas” nesses consumidores.
+
+**Escopo de #34 (dual-write):**
+
+| Change | Detalhe |
+|---|---|
+| Dual-write | Grava Promotion **e** Observation (não substitui) |
+| Bridge independente | Roda mesmo se `isDuplicatePromo` → true (dedup só na obs: Δ&lt;0,01 no par item+est) |
+| Match de item | `promotionMatchesItem` (#27); 1 obs por item casado; **sem match → `no-item`** (linha sem item é invisível p/ insights/rota) |
+| `source` | Canal (`whatsapp`/`instagram`/`telegram`); union + `"telegram"` |
+| Flash | Paths A/C (capture/grupos) via `isFlashPrice` + `createFlashPromotion`; Stories (B) mantém `isFlash` hardcoded na promo, **sem** 2ª promo flash |
+| `validUntil` | +24h (espelha scrape; consumidor atual não filtra) |
+| Backfill | **não** — promoções antigas não migradas |
+
+**Arquivos:**
+
+| Arquivo | Change |
+|---|---|
+| `src/lib/socialToObservation.ts` | **novo** — `matchItemsForPromo`, `bridgePromoToObservations`, `BridgeCounters` |
+| `src/lib/localPriceScrape.ts` | exportar `isDuplicateObservation` |
+| `src/workers/socialWorker.ts` | bridge nos 3 `PromotionRepository.save` (A capture / B stories / C grupos); contadores `bridged`; flash só A/C |
+| `src/types.ts` | union `PriceObservation.source` + `"telegram"` |
+| `roadmap.md` / `README.md` | pendência #34; linhas Stories/WhatsApp → FEITO (#34) |
+| `DIAGNOSTICO.md` | esta seção (§6.19) |
+
+**Decisões documentadas:**
+- Dual-write (promo **e** obs); `min(obs, promo)` em insights/rota é idempotente
+- Sem item → skip (não cria obs órfã)
+- Bridge **antes** do skip de `isDuplicatePromo` (backfill se promo já existia)
+- Stories: bridge com `observedAt=st.taken_at`, sem `createFlashPromotion` extra
+- Sem backfill de promoções legadas
+
+**Validação #34:** `npx tsc --noEmit` → 0; WhatsApp com item da lista → promo + obs `(item, est, price, source:"whatsapp")`; re-colar → 0 obs novas; promo sem item → `noItem≥1`; Stories → obs 24h.
+
+---
+

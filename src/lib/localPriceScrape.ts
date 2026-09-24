@@ -58,7 +58,8 @@ export function buildSearchUrl(priceUrl: string, term: string): string {
   return `${priceUrl}${joiner}q=${encoded}`;
 }
 
-function isDuplicateObservation(
+/** #27/#34 — dedup: preço idêntico (tolerância) na observação mais recente do par. */
+export function isDuplicateObservation(
   previous: PriceObservation | undefined,
   price: number,
   tolerance = 0.01

@@ -143,6 +143,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**Doc VPS + E2E**~~ — **RESOLVIDO (#31)**: runbook em [`GUIA_VPS.md`](GUIA_VPS.md) (bootstrap, health checks, checklist E2E A/B/C, carga, backup) + DIAGNOSTICO §6.16. Gate final FASE 16: executar Tier A–C **na VPS real**.
 - ~~**market-handlers + fallback sem price_url**~~ — **RESOLVIDO (#32)**: registry por rede + cascade search/social; campo REDE na UI; toast `SOCIAL {n}`. DIAGNOSTICO §6.17.
 - ~~**bulk/cron market-search**~~ — **RESOLVIDO (#33)**: cron/bulk inclui só-chain com keys (cap 8); sem keys = só price_url. DIAGNOSTICO §6.18.
+- ~~**bridge social → price_observations**~~ — **RESOLVIDO (#34)**: Stories/WhatsApp/Telegram gravam promo **e** observação local (match de item, flash A/C). DIAGNOSTICO §6.19.
 
 ---
 

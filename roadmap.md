@@ -48,6 +48,7 @@
 - ~~**Doc VPS + checklist E2E**~~ — **RESOLVIDO (#31)**: [`GUIA_VPS.md`](GUIA_VPS.md) (bootstrap Debian/Ubuntu, 8 processos PM2, `BIND_HOST`/túnel, health checks, checklist E2E tiers A/B/C, stress na VPS, backup) + seção `DIAGNOSTICO` §6.16. **Gate FASE 16** ainda pendente: rodar o checklist **em VPS real** (Tier A+B mínimos; C com chaves/QR).
 - ~~**market-handlers + fallback sem price_url**~~ — **RESOLVIDO (#32)**: registry `src/lib/market-handlers.ts` + cascade 3-tier (search → social-dependent) em `localPriceScrape`; campo REDE/CHAIN na UI; toast `SOCIAL {n}`; search **só** com `establishmentId` explícito (bulk continua `price_url`). DIAGNOSTICO §6.17.
 - ~~**bulk/cron market-search**~~ — **RESOLVIDO (#33)**: bulk/cron inclui est. só-chain (sem `price_url`) **quando há keys** Serper/Tavily + NVIDIA/Gemini, **cap 8** por run; sem keys = só `price_url`. DIAGNOSTICO §6.18.
+- ~~**bridge social → price_observations**~~ — **RESOLVIDO (#34)**: dual-write promo+obs; match via `promotionMatchesItem`; flash A/C; union + `telegram`. DIAGNOSTICO §6.19.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---
@@ -108,8 +109,8 @@
 | Fonte | Ferramenta atual | Ações |
 |---|---|---|
 | **Sites dos comércios** (Tatico, Bretas, etc.) | ~~`store-handlers` + novo registry **`market-handlers`** por rede + **Serper/Tavily** na busca "«item» «rede» preço"~~ — **FEITO (#32)**: `src/lib/market-handlers.ts` (seed 6 redes) + cascade sem `price_url`; DIAGNOSTICO §6.17 | Extração via **Gemini/NVIDIA**; sem catálogo web → **`socialDependent`** (coleta social) |
-| **Stories dos mercados** (Instagram) | venv `instagrapi` (:8721) + **Gemini Vision** | Reconhecimento de **preço na imagem** do story → vira observação local |
-| **Grupos de promoções no WhatsApp** | `whatsapp-web.js` (`message_create` filtrando grupos) | Parse via regex → **Gemini** → "produto — R$ — supermercado" → observação local |
+| **Stories dos mercados** (Instagram) | venv `instagrapi` (:8721) + **Gemini Vision** | ~~Reconhecimento de preço na imagem → vira observação local~~ — **FEITO (#34)**: dual-write promo+obs (`source:"instagram"`, 24h); DIAGNOSTICO §6.19 |
+| **Grupos de promoções no WhatsApp** | `whatsapp-web.js` (`message_create` filtrando grupos) | ~~Parse → Gemini → observação local~~ — **FEITO (#34)**: bridge `whatsapp`/`telegram` + flash A/C; §6.19 |
 | **Status de contatos de mercado** | já implementado | continua |
 
 **Roteirização**: infra pronta (OSRM/TSP + veículo + Popular Times + melhor cesta). Adaptar para: menor preço por item + **agrupar por loja** quando a economia superar o custo de deslocamento; ponto de partida = endereço cadastrado.
