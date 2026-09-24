@@ -45,6 +45,8 @@ module.exports = {
         USER_DATA_PATH,
         // Porta dedicada — a 3000 é usada por outro serviço (afiliados-bot)
         PORT: "3001",
+        // #39 — abre http://localhost:3001 no desktop quando o API sobe
+        OPEN_BROWSER: "true",
       },
       max_restarts: 10,
       min_uptime: "5s",

@@ -9,7 +9,7 @@ import {
   sendTelegramNotification,
   sendEmailNotification
 } from "./src/lib/notifications.ts";
-import { getDb } from "./src/database/db";
+import { getDb, DATA_DIR } from "./src/database/db";
 import { AppDataRepository } from "./src/repositories/appDataRepository.ts";
 import { ProductRepository } from "./src/repositories/productRepository.ts";
 import { ProfileRepository } from "./src/repositories/profileRepository.ts";
@@ -51,6 +51,45 @@ const __dirname = path.dirname(__filename);
 // Use USER_DATA_PATH for Electron production, or current dir for dev
 // SQLite database replaces data.json (FASE 1)
 getDb();
+
+// #39 — abre o navegador quando o servidor fica pronto (listen ok).
+function openBrowserWhenReady(port: number): void {
+  try {
+    if (process.env.OPEN_BROWSER === "false" || process.env.OPEN_BROWSER === "0") return;
+    if (process.platform === "linux" && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) {
+      safeLog("[open] headless (sem DISPLAY) — browser não aberto");
+      return;
+    }
+    const marker = path.join(DATA_DIR, ".last-open-browser");
+    const now = Date.now();
+    const antiSpamMs = 5 * 60 * 1000;
+    if (fs.existsSync(marker)) {
+      const last = Number(fs.statSync(marker).mtimeMs) || 0;
+      if (now - last < antiSpamMs) return;
+    }
+    const url = `http://localhost:${port}`;
+    const cmd =
+      process.platform === "darwin"
+        ? `open "${url}"`
+        : process.platform === "win32"
+          ? `start "" "${url}"`
+          : `xdg-open "${url}"`;
+    exec(cmd, (err) => {
+      if (!err) {
+        try {
+          fs.writeFileSync(marker, String(now));
+        } catch {
+          /* marker é best-effort */
+        }
+        safeLog(`[open] navegador aberto: ${url}`);
+      } else {
+        safeLog(`[open] falha ao abrir browser: ${err.message}`);
+      }
+    });
+  } catch (e: any) {
+    safeLog(`[open] erro: ${e?.message || e}`);
+  }
+}
 
 async function startServer() {
   console.log("=".repeat(80));
@@ -2067,6 +2106,10 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     console.log("Access: http://localhost:" + PORT);
     console.log("=".repeat(80));
     safeLog(`Crimson Sentinel running on http://localhost:${PORT}`);
+
+    // #39 — abre o navegador quando o servidor está de fato pronto (listen ok).
+    // OPEN_BROWSER=false desliga; headless (Linux sem DISPLAY) pula; anti-spam 5min.
+    openBrowserWhenReady(PORT);
 
     // #25 — registra todos os schedulers BullMQ a partir de user_settings
     // (idempotente; o mesmo helper é reusado após backup import e mudanças de intervalo)

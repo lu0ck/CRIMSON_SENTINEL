@@ -939,3 +939,30 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.24 boot crash list_id + open browser no listen (#39)
+
+**Problema A (API não subia):** após `npm run build` + `pm2 restart`, `sentinela-api` entrava em crash-loop (`SqliteError: no such column: list_id` em `db.ts:44` → `server.ts:53`) e **nada escutava em :3001** — UI “não carregava”. Causa: `schema.sql` criava `CREATE INDEX ... shopping_list_items(list_id)` **antes** do `ensureColumn` migrar a coluna; em DB antigo, `CREATE TABLE IF NOT EXISTS` não altera a tabela existente → índice explode → processo morre antes do `app.listen`.
+
+**Problema B (conveniência):** usuário quer o browser abrir sozinho quando o servidor fica online.
+
+**Escopo de #39:**
+
+| Change | Detalhe |
+|---|---|
+| Pré-migração em `getDb()` | Antes do `db.exec(schema)`: se tabela `shopping_list_items` existe → `ensureColumn product_id` + `list_id` + backfill `list-geral` |
+| `ensureColumn` | Função movida para **antes** do schema (reuso); chamadas de list_id permanecem após (no-op seguro) |
+| `openBrowserWhenReady(port)` | No callback `app.listen` (porta pronta): `xdg-open`/`open`/`start` → `http://localhost:PORT` |
+| Guards open | `OPEN_BROWSER=false`/`0` desliga; Linux sem `DISPLAY`/`WAYLAND_DISPLAY` pula (headless/VPS); anti-spam **5 min** via marker `DATA_DIR/.last-open-browser` |
+| ecosystem | `OPEN_BROWSER: "true"` no `sentinela-api` |
+
+**Arquivos:** `src/database/db.ts`, `server.ts`, `ecosystem.config.cjs`, docs.
+
+**Decisões:**
+- Fix é **ordenação** no `getDb()` (não ALTER manual no shell) — API **e** workers (`scan-worker` etc.) usam o mesmo path
+- Open browser só no **listen**, não no boot do módulo (evita abrir em crash)
+- Anti-spam por mtime: PM2 restart em loop não abre 10 abas
+
+**Validação #39:** `npx tsc --noEmit` → 0; `pm2 restart sentinela-api` → status online estável; `curl http://127.0.0.1:3001/` → 200; `GET /api/status` → 200; log `[open] navegador aberto` no desktop.
+
+---
+

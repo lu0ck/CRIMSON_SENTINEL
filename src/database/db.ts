@@ -39,10 +39,6 @@ export function getDb(): Database.Database {
   db.pragma("foreign_keys = ON");
   db.pragma("encoding = 'UTF-8'");
 
-  const schemaPath = path.resolve(__dirname, "schema.sql");
-  const schema = fs.readFileSync(schemaPath, "utf-8");
-  db.exec(schema);
-
   // Migrações leves (FASE 11): tabelas existentes não ganham colunas novas via
   // CREATE TABLE IF NOT EXISTS, então aplicamos ALTER defensivo quando faltam.
   function ensureColumn(table: string, column: string, ddl: string): void {
@@ -52,6 +48,26 @@ export function getDb(): Database.Database {
       console.log(`[db] migração: ${table}.${column} adicionada`);
     }
   }
+
+  // #39 — pré-migração ANTES do schema: CREATE INDEX ... (list_id) em schema.sql
+  // falha em bancos antigos se a coluna ainda não existir (CREATE TABLE IF NOT EXISTS
+  // não altera tabela existente → getDb crashava com "no such column: list_id").
+  const shoppingListItemsExists = db
+    .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'shopping_list_items'")
+    .get();
+  if (shoppingListItemsExists) {
+    ensureColumn("shopping_list_items", "product_id", "product_id TEXT");
+    ensureColumn("shopping_list_items", "list_id", "list_id TEXT");
+    db.prepare(
+      `UPDATE shopping_list_items SET list_id = 'list-geral'
+       WHERE list_id IS NULL OR list_id = ''`
+    ).run();
+  }
+
+  const schemaPath = path.resolve(__dirname, "schema.sql");
+  const schema = fs.readFileSync(schemaPath, "utf-8");
+  db.exec(schema);
+
   // Migrações FASE 1 / A1 — colunas faltantes conforme plano original.
   // establishments: source (manual|discovered), contatos sociais
   ensureColumn("establishments", "price_url", "price_url TEXT");
@@ -81,6 +97,7 @@ export function getDb(): Database.Database {
   ensureColumn("route_stops", "quiet_score", "quiet_score REAL");
 
   // shopping_list_items: FK opcional para products (FASE 5) + list_id (#36)
+  // list_id/product_id já pré-migrados acima (#39) antes do CREATE INDEX no schema.
   ensureColumn("shopping_list_items", "product_id", "product_id TEXT");
   ensureColumn("shopping_list_items", "list_id", "list_id TEXT");
   // Seed + backfill: itens legados sem lista vão para "Geral"

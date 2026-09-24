@@ -53,6 +53,7 @@
 - ~~**múltiplas listas nomeadas + export CSV/TXT com melhor preço**~~ — **RESOLVIDO (#36)**: `shopping_lists`/`list_id`, seletor Mercado (localStorage), export da lista aberta com preços (CSV escape RFC4180 + TXT). DIAGNOSTICO §6.21.
 - ~~**export lista LISTS (Product Archives)**~~ — **RESOLVIDO (#37)**: botões CSV/TXT/COPIAR no header da lista aberta; nome + link + menor preço (client-side). DIAGNOSTICO §6.22.
 - ~~**expandir seed de market-handlers**~~ — **RESOLVIDO (#38)**: registry 6 → 31 redes (nacionais + regionais BR); placeholder REDE na UI; cascade/bulk inalterados (cap 8). DIAGNOSTICO §6.23.
+- ~~**boot crash `list_id` + open browser**~~ — **RESOLVIDO (#39)**: pré-migração `list_id` antes do `CREATE INDEX` no schema; `openBrowserWhenReady` no `app.listen` (anti-spam 5min, sem DISPLAY pula). DIAGNOSTICO §6.24.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---
