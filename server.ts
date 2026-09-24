@@ -1049,6 +1049,86 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // #35 — envia lista+rota para o chat do operador (@c.us) via MESMA sessão
+  // WhatsApp da API (nunca no route-worker; sem grupos).
+  app.post("/api/routes/:id/send-whatsapp", async (req, res) => {
+    try {
+      if (!SettingsRepository.getBool("whatsapp_enabled")) {
+        return res.status(403).json({ error: "WhatsApp desativado. Ative-o no painel social." });
+      }
+      const rawChat = (SettingsRepository.get("whatsapp_operator_chat_id") || "").trim();
+      if (!rawChat) {
+        return res.status(400).json({ error: "Configure o chatId do operador no painel social (…@c.us)." });
+      }
+      const digits = rawChat.replace(/[^\d]/g, "");
+      const chatId = rawChat.endsWith("@c.us") ? rawChat : digits ? `${digits}@c.us` : "";
+      if (!chatId.endsWith("@c.us")) {
+        return res.status(400).json({ error: "chatId do operador inválido — use formato 5511…@c.us" });
+      }
+      if (chatId.endsWith("@g.us") || chatId.includes("broadcast")) {
+        return res.status(400).json({ error: "Somente chat do operador (@c.us) — grupos bloqueados." });
+      }
+
+      const route = RouteRepository.getById(req.params.id);
+      if (!route) {
+        return res.status(404).json({ error: "rota não encontrada" });
+      }
+
+      const { isWhatsappReady, sendWhatsappMessage } = await import(
+        "./src/social/whatsappSession.ts"
+      );
+      if (!(await isWhatsappReady())) {
+        return res.status(409).json({ error: "Sessão WhatsApp não conectada — gere QR no painel social." });
+      }
+
+      const { buildRouteWhatsappMessage, splitWhatsappMessage } = await import(
+        "./src/lib/routeMessage.ts"
+      );
+      const ests = EstablishmentRepository.getByIds(route.stops.map((s) => s.establishmentId));
+      const estById = new Map(ests.map((e) => [e.id, e]));
+      const msg = buildRouteWhatsappMessage(route, estById);
+      const parts = splitWhatsappMessage(msg);
+      for (const part of parts) {
+        await sendWhatsappMessage(chatId, part);
+      }
+      safeLog(`[api] rota ${route.id} enviada ao operador ${chatId} (${parts.length} msg)`);
+      res.json({ ok: true, chatId, chars: msg.length, parts: parts.length });
+    } catch (error: any) {
+      const status = /desativad|não iniciada|não conectada|inválid|grupo/i.test(error.message || "")
+        ? 400
+        : 500;
+      res.status(status).json({ error: error.message });
+    }
+  });
+
+  // #35 — chatId do operador (user_settings)
+  app.get("/api/social/whatsapp/operator", (_req, res) => {
+    try {
+      res.json({ chatId: SettingsRepository.get("whatsapp_operator_chat_id") || "" });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  app.post("/api/social/whatsapp/operator", (req, res) => {
+    try {
+      const input = String(req.body?.chatId || "").trim();
+      if (!input) {
+        SettingsRepository.set("whatsapp_operator_chat_id", "");
+        return res.json({ chatId: "" });
+      }
+      const digits = input.replace(/[^\d]/g, "");
+      const normalized = input.endsWith("@c.us") ? input : digits ? `${digits}@c.us` : "";
+      if (!normalized.endsWith("@c.us")) {
+        return res.status(400).json({ error: "Use 5511999999999 ou 5511999999999@c.us" });
+      }
+      SettingsRepository.set("whatsapp_operator_chat_id", normalized);
+      res.json({ chatId: normalized });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // FASE 6: histórico de notificações enviadas (para o painel de alertas).
   app.get("/api/notifications", (req, res) => {
     try {

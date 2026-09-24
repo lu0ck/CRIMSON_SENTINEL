@@ -13,6 +13,7 @@ declare module "whatsapp-web.js" {
     on(event: string, callback: (...args: any[]) => void): void;
     getChats(): Promise<any[]>;
     getState?(): Promise<string>;
+    sendMessage(chatId: string, content: string, options?: any): Promise<any>;
   }
 
   export class LocalAuth {

@@ -236,7 +236,8 @@ INSERT OR IGNORE INTO user_settings (key, value) VALUES
   ('flash_history_days', '30'),              -- C1: janela temporal da média histórica
   ('flash_telegram_priority', 'true'),       -- C1: flash só Telegram (ignora Discord/email)
   ('whatsapp_scan_per_contact_min', '20'),   -- C2: throttle entre checks de Status (15-30 min)
-  ('instagram_scan_per_handle_min', '45');    -- C3: throttle entre checks de Stories (30-60 min)
+  ('instagram_scan_per_handle_min', '45'),   -- C3: throttle entre checks de Stories (30-60 min)
+  ('whatsapp_operator_chat_id', NULL);       -- #35: chatId serializado do operador (…@c.us)
 
 -- ---------------------------------------------------------------------------
 -- FRENTE 4 — Monitoramento de Grupos + Sistema de Triggers

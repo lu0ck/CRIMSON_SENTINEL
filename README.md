@@ -144,6 +144,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**market-handlers + fallback sem price_url**~~ — **RESOLVIDO (#32)**: registry por rede + cascade search/social; campo REDE na UI; toast `SOCIAL {n}`. DIAGNOSTICO §6.17.
 - ~~**bulk/cron market-search**~~ — **RESOLVIDO (#33)**: cron/bulk inclui só-chain com keys (cap 8); sem keys = só price_url. DIAGNOSTICO §6.18.
 - ~~**bridge social → price_observations**~~ — **RESOLVIDO (#34)**: Stories/WhatsApp/Telegram gravam promo **e** observação local (match de item, flash A/C). DIAGNOSTICO §6.19.
+- ~~**sendWhatsappMessage lista+rota → operador**~~ — **RESOLVIDO (#35)**: `sendWhatsappMessage` só `@c.us` + composer + `POST /api/routes/:id/send-whatsapp` + botão LocalTab + setting `whatsapp_operator_chat_id`. DIAGNOSTICO §6.20.
 
 ---
 

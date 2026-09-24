@@ -22,6 +22,7 @@ import {
   Download,
   Upload,
   Merge,
+  Send,
 } from "lucide-react";
 import type {
   Establishment,
@@ -124,6 +125,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
   const [routeName, setRouteName] = useState("");
   const [generating, setGenerating] = useState(false);
   const [latestRouteId, setLatestRouteId] = useState<string | null>(null);
+  const [sendingWaRouteId, setSendingWaRouteId] = useState<string | null>(null);
 
   // B4 — veículo e horário de saída
   const [vehType, setVehType] = useState<"car" | "motorcycle" | "public" | "bike" | "foot">("car");
@@ -824,6 +826,29 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
     }
   };
 
+  // #35 — envia lista+rota para o chat do operador (@c.us) via API.
+  const sendRouteWhatsapp = async (id: string) => {
+    if (sendingWaRouteId) return;
+    setSendingWaRouteId(id);
+    try {
+      const result = await apiJson(`/api/routes/${id}/send-whatsapp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      toast(
+        `LISTA + ROTEIRO ENVIADOS AO WHATSAPP (${result?.parts ?? 1} msg)`,
+        "success"
+      );
+      playSound("success");
+    } catch (err: any) {
+      toast("FALHA AO ENVIAR WHATSAPP", "error", String(err?.message || err));
+      playSound("error");
+    } finally {
+      setSendingWaRouteId(null);
+    }
+  };
+
   // ---- Render -------------------------------------------------------------
 
   const estNameById = (id: string) =>
@@ -1235,13 +1260,27 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
                     </div>
                   )}
                 </div>
-                <button
-                  onClick={() => deleteRoute(route.id)}
-                  className="text-crimson/30 hover:text-crimson"
-                  title="EXCLUIR ROTA"
-                >
-                  <Trash2 size={16} />
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => sendRouteWhatsapp(route.id)}
+                    disabled={sendingWaRouteId === route.id}
+                    className="text-green-500/70 hover:text-green-400 disabled:opacity-40"
+                    title="ENVIAR LISTA + ROTEIRO NO WHATSAPP DO OPERADOR (#35)"
+                  >
+                    {sendingWaRouteId === route.id ? (
+                      <Loader2 size={16} className="animate-spin" />
+                    ) : (
+                      <Send size={16} />
+                    )}
+                  </button>
+                  <button
+                    onClick={() => deleteRoute(route.id)}
+                    className="text-crimson/30 hover:text-crimson"
+                    title="EXCLUIR ROTA"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
               </div>
 
               <div className="flex flex-col gap-2 mt-2">

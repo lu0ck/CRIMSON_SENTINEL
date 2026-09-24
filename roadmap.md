@@ -49,6 +49,7 @@
 - ~~**market-handlers + fallback sem price_url**~~ — **RESOLVIDO (#32)**: registry `src/lib/market-handlers.ts` + cascade 3-tier (search → social-dependent) em `localPriceScrape`; campo REDE/CHAIN na UI; toast `SOCIAL {n}`; search **só** com `establishmentId` explícito (bulk continua `price_url`). DIAGNOSTICO §6.17.
 - ~~**bulk/cron market-search**~~ — **RESOLVIDO (#33)**: bulk/cron inclui est. só-chain (sem `price_url`) **quando há keys** Serper/Tavily + NVIDIA/Gemini, **cap 8** por run; sem keys = só `price_url`. DIAGNOSTICO §6.18.
 - ~~**bridge social → price_observations**~~ — **RESOLVIDO (#34)**: dual-write promo+obs; match via `promotionMatchesItem`; flash A/C; union + `telegram`. DIAGNOSTICO §6.19.
+- ~~**sendWhatsappMessage lista+rota → operador**~~ — **RESOLVIDO (#35)**: só `@c.us` + composer + endpoint + botão + setting `whatsapp_operator_chat_id`; sem auto-send. DIAGNOSTICO §6.20.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---
@@ -115,7 +116,7 @@
 
 **Roteirização**: infra pronta (OSRM/TSP + veículo + Popular Times + melhor cesta). Adaptar para: menor preço por item + **agrupar por loja** quando a economia superar o custo de deslocamento; ponto de partida = endereço cadastrado.
 
-**WhatsApp**: sessão já implementada (`whatsappSession.ts`); adicionar `client.sendMessage(chatId, lista+roteiro)` para o chat do operador (configurável). **Envio separado do "ler promoções"** (mesma sessão, dedicada).
+**WhatsApp**: ~~sessão já implementada (`whatsappSession.ts`); adicionar `client.sendMessage(chatId, lista+roteiro)` para o chat do operador (configurável). **Envio separado do "ler promoções"** (mesma sessão, dedicada).~~ — **FEITO (#35)**: `sendWhatsappMessage` só `@c.us` + `buildRouteWhatsappMessage` + `POST /api/routes/:id/send-whatsapp` + botão no LocalTab + setting `whatsapp_operator_chat_id`; DIAGNOSTICO §6.20. **Sem auto-send** no worker (só botão).
 
 **Segundo plano / VPS**:
 - Tudo nos workers BullMQ existentes (scan/social) com **repeatable jobs** (social 6h + local-price-scan) e catch-up no boot.

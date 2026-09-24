@@ -813,3 +813,47 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.20 sendWhatsappMessage lista+rota → operador (#35 — FASE 16 bloco B)
+
+**Problema (roadmap FASE 16, passo 4 / linha WhatsApp):** FASE 16 previa "envia uma **cópia da lista + roteiro no WhatsApp** (além de Discord/Telegram/email)". A sessão `whatsappSession.ts` era **read-only** (leitura de grupos/conversas/flyers); não havia `sendMessage`, nem chatId do operador, nem compositor, endpoint ou botão. `client.sendMessage` não existia em nenhum lugar do `src/`.
+
+**Escopo de #35 (envio dedicado, só operador):**
+
+| Change | Detalhe |
+|---|---|
+| `sendWhatsappMessage(chatId, content)` | Mesmo singleton `sessionInstance` (API process); guards: sessão + `getState()==="CONNECTED"`; **bloqueia** `@g.us` / `broadcast`; exige `…@c.us` |
+| `sendMessage` no `d.ts` | `whatsapp-web.d.ts` — declara `sendMessage` no `Client` |
+| `buildRouteWhatsappMessage` | compositor puro (`src/lib/routeMessage.ts`): lista única por `stop.items` + paradas ordenadas (est, chegada, custo, movimento, endereço) + custos (compra/desloc/total) + veículo |
+| `splitWhatsappMessage` | chunks ≤4000 chars (quebra em `\n` quando possível) |
+| Endpoint `POST /api/routes/:id/send-whatsapp` | Guards: 403 toggle off · 400 sem/inválido chatId · 409 sessão · 404 rota; dinamica import da sessão; **nunca** roda no `routeWorker` (evita 2ª sessão LocalAuth) |
+| `GET/POST /api/social/whatsapp/operator` | `user_settings.whatsapp_operator_chat_id`; normaliza dígitos → `…@c.us` |
+| UI | LocalTab: botão **Send** no card da rota; SocialTab: input chatId na seção WhatsApp |
+| Trigger | **só botão** — sem auto-send no worker |
+
+**Arquivos:**
+
+| Arquivo | Change |
+|---|---|
+| `src/social/whatsapp-web.d.ts` | `sendMessage(chatId, content): Promise<any>` |
+| `src/social/whatsappSession.ts` | `sendWhatsappMessage` (+ guards) |
+| `src/lib/routeMessage.ts` | **novo** — `buildRouteWhatsappMessage`, `splitWhatsappMessage` |
+| `server.ts` | `POST /api/routes/:id/send-whatsapp`; `GET/POST /api/social/whatsapp/operator` |
+| `src/components/LocalTab.tsx` | state `sendingWaRouteId` + `sendRouteWhatsapp` + botão Send |
+| `src/components/SocialTab.tsx` | state/handlers/input chatId operador |
+| `src/database/schema.sql` | default `whatsapp_operator_chat_id` |
+| `DIAGNOSTICO.md` | esta seção (§6.20) |
+| `roadmap.md` / `README.md` | pendência #35; linha WhatsApp → FEITO (#35) |
+
+**Decisões documentadas (aprovadas pelo usuário):**
+1. **Só `@c.us`** — função e endpoint rejeitam `@g.us`/broadcast
+2. Mesmo `sessionInstance` singleton **somente no processo da API**; **nunca** send no `routeWorker` (PM2 separado → 2ª sessão)
+3. Setting `whatsapp_operator_chat_id` em `user_settings` (aceita dígitos → normaliza)
+4. Trigger = **botão** no card da rota; **sem auto-send** no worker
+5. Composer puro `buildRouteWhatsappMessage` (sem rede/sessão no módulo)
+6. Guards HTTP: 403 disabled · 400 sem/inválido chatId · 409 sessão · 404 rota
+7. Split se >~4000 chars (partes sequenciais na mesma sessão)
+
+**Validação #35:** `npx tsc --noEmit` → 0; sessão ready + chatId `@c.us` → mensagem no operador; chatId `@g.us` → 400; toggle off → 403; sem QR → 409; mensagens `fromMe` **não** reaparecem no painel de leitura (`msg.fromMe` já filtrado).
+
+---
+

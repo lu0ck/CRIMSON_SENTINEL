@@ -200,6 +200,16 @@ Após conectar a sessão (QR), o sistema monitora **em tempo real**:
 
 Não há scan manual de Status — o monitoramento é contínuo via listener.
 
+#### 4.4 — Enviar lista + rota no WhatsApp do operador (#35)
+
+Mesma sessão do leitor (processo da API), **envio dedicado** para o chat do operador — **somente `@c.us`** (grupos/broadcast bloqueados). **Sem auto-send**: só botão.
+
+1. No painel **SOCIAL → WHATSAPP**, preencha **CHATID DO OPERADOR** (`5511999999999` ou `5511999999999@c.us`) e clique **SALVAR**
+2. Sessão precisa estar **CONECTADA** (toggle ATIVAR + QR)
+3. Na aba **LOCAL**, no card da rota, clique no ícone **Send** (verde)
+
+`POST /api/routes/:id/send-whatsapp` — guards: 403 toggle off · 400 chatId inválido/grupo · 409 sessão · 404 rota. Mensagem: lista única + paradas + custos (split se &gt;4000 chars). Setting: `whatsapp_operator_chat_id` (`user_settings`). DIAGNOSTICO §6.20.
+
 ---
 
 ### Passo 5 — Instagram Stories (C3)

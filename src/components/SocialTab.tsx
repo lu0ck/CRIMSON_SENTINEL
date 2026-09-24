@@ -111,6 +111,10 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [waQrDataUrl, setWaQrDataUrl] = useState<string | null>(null);
   const [waQrStatus, setWaQrStatus] = useState<"idle" | "pending" | "qr" | "ready">("idle");
   const [waQrLoading, setWaQrLoading] = useState(false);
+  // #35 — chatId do operador (lista+rota)
+  const [waOperatorChatId, setWaOperatorChatId] = useState("");
+  const [waOperatorInput, setWaOperatorInput] = useState("");
+  const [waOperatorSaving, setWaOperatorSaving] = useState(false);
 
   // Renderiza o QR como imagem escaneável
   useEffect(() => {
@@ -230,6 +234,38 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     }
   };
 
+  // #35 — chatId do operador (user_settings)
+  const loadWhatsappOperator = async () => {
+    try {
+      const data = await apiJson("/api/social/whatsapp/operator");
+      const id = String(data?.chatId || "");
+      setWaOperatorChatId(id);
+      setWaOperatorInput(id);
+    } catch {
+      // ignora
+    }
+  };
+
+  const saveWhatsappOperator = async () => {
+    setWaOperatorSaving(true);
+    try {
+      const data = await apiJson("/api/social/whatsapp/operator", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: waOperatorInput.trim() }),
+      });
+      setWaOperatorChatId(String(data?.chatId || ""));
+      toast(
+        data?.chatId ? "CHATID DO OPERADOR SALVO" : "CHATID DO OPERADOR LIMPO",
+        "success"
+      );
+    } catch (err: any) {
+      toast("FALHA AO SALVAR CHATID", "error", String(err?.message || err));
+    } finally {
+      setWaOperatorSaving(false);
+    }
+  };
+
   const loadSources = async () => {
     setLoading(true);
     try {
@@ -319,6 +355,7 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     loadGroupMessages();
     loadWhatsappGroups();
     loadWhatsappStatus();
+    loadWhatsappOperator();
     loadIgCredentials();
     loadInstagramHealth();
     const t = setInterval(() => {
@@ -856,6 +893,34 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
         </div>
 
         <div className="hud-border bg-black/40 p-5 mt-4">
+          {/* #35 — chatId do operador (lista+rota) */}
+          <div className="mb-4 pb-4 border-b border-crimson/10">
+            <label className="text-[8px] font-mono text-crimson/70 tracking-widest uppercase">
+              CHATID DO OPERADOR — LISTA + ROTEIRO (#35)
+            </label>
+            <div className="flex items-center gap-2 mt-1.5">
+              <input
+                type="text"
+                value={waOperatorInput}
+                onChange={(e) => setWaOperatorInput(e.target.value)}
+                placeholder="5511999999999@c.us"
+                className="flex-1 bg-black/60 border border-crimson/30 px-3 py-2 font-mono text-xs text-crimson placeholder:text-crimson/30 focus:outline-none focus:border-crimson"
+              />
+              <button
+                onClick={() => { playSound("click"); saveWhatsappOperator().catch(() => {}); }}
+                disabled={waOperatorSaving}
+                className="hud-button flex items-center gap-2 disabled:opacity-50"
+              >
+                {waOperatorSaving ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                SALVAR
+              </button>
+            </div>
+            <p className="text-[9px] font-mono text-crimson/40 mt-1.5">
+              {waOperatorChatId
+                ? `ATUAL: ${waOperatorChatId} — APENAS ENVIO DE LISTA+ROTA (SOMENTE @c.us, SEM GRUPOS).`
+                : "VAZIO — O BOTÃO DE ENVIAR ROTA NO WHATSAPP FICARÁ BLOQUEADO ATÉ CONFIGURAR."}
+            </p>
+          </div>
           {!waEnabled ? (
             <div className="flex items-start gap-3">
               <Power size={14} className="text-crimson/50 shrink-0 mt-0.5" />

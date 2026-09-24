@@ -201,3 +201,33 @@ export async function fetchWhatsAppGroups(): Promise<{ id: string; name: string;
     return [];
   }
 }
+
+// #35 — envio dedicado para o chat do operador (@c.us). Mesma sessão do read
+// path (singleton); NUNCA envia para grupos (@g.us) / broadcast. Envio separado
+// da leitura de promoções (mesma sessão, chamada dedicada).
+export async function sendWhatsappMessage(
+  chatId: string,
+  content: string
+): Promise<{ ok: true; chatId: string }> {
+  const id = (chatId || "").trim();
+  if (!id) throw new Error("chatId vazio");
+  if (id.endsWith("@g.us") || id.includes("broadcast")) {
+    throw new Error("somente chat do operador (@c.us) — grupos/broadcast bloqueados");
+  }
+  if (!id.endsWith("@c.us")) {
+    throw new Error("chatId inválido — esperado formato 5511999999999@c.us");
+  }
+  if (!content || !content.trim()) throw new Error("conteúdo vazio");
+  if (!sessionInstance) throw new Error("sessão WhatsApp não iniciada — gere QR no painel social");
+  const ready = await isWhatsappReady();
+  if (!ready) throw new Error("sessão WhatsApp não conectada — aguarde ready ou relogue o QR");
+
+  try {
+    await sessionInstance.sendMessage(id, content);
+    safeLog(`[whatsapp] mensagem enviada para operador ${id} (${content.length} chars)`);
+    return { ok: true, chatId: id };
+  } catch (err: any) {
+    safeLog(`[whatsapp] falha ao enviar para ${id}: ${err.message}`);
+    throw new Error(`falha ao enviar WhatsApp: ${err.message}`);
+  }
+}
