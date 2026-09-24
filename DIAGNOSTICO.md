@@ -1077,11 +1077,11 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 | NVIDIA fail-fast | `scraper.ts`, `market-handlers.ts`, `scanWorker.ts` | modelos sondados 2026-09-24: `z-ai/glm-5.3`, `openai/gpt-oss-20b`, `nvidia/nemotron-3-super-120b-a12b`; **410/404/timeout 30s → pula modelo** sem retry (`-0731`/`v4-flash` EOL desde ago/2026) |
 | Gemini circuit 1h | `scraper.ts` | `noteGeminiQuotaBlock()` após 429; pula `GEMINI_VISION`/`GEMINI_FALLBACK`/grounding até 1h |
 | Nome do slug da URL | `scraper.ts` | `extractNameFromUrl` — Shopee `-i.shop.item`, ML `/up/MLB…` → hint p/ busca |
-| SEARCH_VERIFY **antes** de NVIDIA/Vision | `scraper.ts` | ordem: Playwright → **SEARCH** → NVIDIA → Vision → FETCH → Gemini; hint = DOM ∪ slug; **regex-first** (1º resultado) + 2ª busca `preço reais` se snippet sem `R$` |
+| SEARCH_VERIFY **antes** de Vision/FETCH | `scraper.ts` | ordem: Playwright → **SEARCH** → NVIDIA → Vision → FETCH → Gemini; hint = DOM ∪ slug; 2ª busca `preço reais` se snippet sem `R$`; **NVIDIA (glm-5.3) primeiro**, regex fallback (1º resultado, descarta parcelas &lt;30% do máx, exige ≥R$20); nome do 1º título só se **overlap ≥2 com o hint** (senão usa o hint — evita artigo "Melhor X…") |
 | Bot-wall no NVIDIA | `scraper.ts` | body &lt; 200 chars → aborta sem chamar LLM |
 | Docs | DIAGNOSTICO/README/roadmap | §6.28 |
 
-**Resultado smoke (jobs 482/483):** ML slug + Shopee → ambos `completed` via `SEARCH_VERIFY` em &lt;40s 1ª tentativa.
+**Resultado smoke final (jobs 488 Shopee + 489 ML, cache limpo):** ambos `completed` 1ª tentativa via `SEARCH_VERIFY` + **NVIDIA `z-ai/glm-5.3`** — Shopee R$ 3.500 / ML R$ 222,73 (nome do 1º resultado); ~35-55s cada. (Jobs 482/486 anteriores já provaram regex fallback: 599 em ~27s.)
 
 **Decisões:**
 - Sem API pública Shopee/ML (testado: `90309999` / `403`) — busca web é o fallback realista

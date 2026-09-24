@@ -152,7 +152,7 @@ Fases **1–15 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**prioridade na lista de compras**~~ — **RESOLVIDO (#40)**: coluna `priority` (alta/media/baixa), ordenação alta→media→baixa, badge + form no Mercado, coluna CSV. §6.25.
 - ~~**timeout tracking + progresso 99%**~~ — **RESOLVIDO (#41)**: pollJob 600s + onProgress real do worker; barra batch N/M (sem simulação/cap 99). §6.26.
 - ~~**timeout 600s ainda estourava / metade dos targets**~~ — **RESOLVIDO (#42)**: orçamento 180s/tentativa no scraper, scrape `attempts:2`, poll de graça, dica retry N/2. §6.27.
-- ~~**Shopee/ML: todas estratégias falham (NVIDIA 410 + Gemini 429)**~~ — **RESOLVIDO (#43)**: NVIDIA fail-fast + timeout 20s/modelo, Gemini circuit 1h, hint do slug da URL, SEARCH_VERIFY antes de LLM caro. §6.28.
+- ~~**Shopee/ML: todas estratégias falham (NVIDIA 410 + Gemini 429)**~~ — **RESOLVIDO (#43)**: NVIDIA fail-fast + timeout 30s/modelo, Gemini circuit 1h, hint do slug da URL, SEARCH_VERIFY antes de LLM caro (NVIDIA → regex → Gemini). §6.28.
 
 ---
 
