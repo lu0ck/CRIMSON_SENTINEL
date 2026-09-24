@@ -89,6 +89,8 @@ function extractNameFromUrl(rawUrl: string): string {
         slug = p.replace(/-i\.\d+\.\d+$/i, "");
         break;
       }
+      // ainda é só o ID (ex: /up/MLBU...) — sem slug, não vira busca
+      if (/^[A-Z]{2,4}\d{6,}$/i.test(slug)) return "";
     }
     const name = slug.replace(/[-_+]+/g, " ").replace(/\s+/g, " ").trim();
     return name.length >= 8 ? name : "";
@@ -1916,52 +1918,87 @@ async function scrapeWithSearchVerify(
 
   console.log(`[SEARCH_VERIFY] Buscando "${nameHint}" para validar...`);
 
+  const hasBRL = (s: string) => /R\$\s*\d/.test(s);
+
   let snippet = "";
   let searchTitle = "";
-  if (options.tavilyApiKey) {
-    try {
-      const res = await fetch("https://api.tavily.com/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          api_key: options.tavilyApiKey,
-          query: `"${nameHint}"`,
-          search_depth: "basic",
-          max_results: 3,
-          include_answer: true,
-          language: "pt",
-        }),
-      });
-      const j = await res.json();
-      const answer = j.answer && typeof j.answer === "string" ? j.answer : "";
-      const results = Array.isArray(j.results) ? j.results.slice(0, 3) : [];
-      snippet = (answer + " " + results.map((x: any) => `${x.title || ""} ${x.content || ""}`).join(" ")).trim();
-      searchTitle = String(results[0]?.title || "").trim();
-      console.log(`[SEARCH_VERIFY] Tavily snippet (${snippet.length} chars)`);
-    } catch (e: any) {
-      console.log("[SEARCH_VERIFY] Tavily falhou:", e.message || e);
+  const runSearch = async (query: string): Promise<void> => {
+    if (options.tavilyApiKey) {
+      try {
+        const res = await fetch("https://api.tavily.com/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            api_key: options.tavilyApiKey,
+            query,
+            search_depth: "basic",
+            max_results: 3,
+            include_answer: true,
+            language: "pt",
+          }),
+        });
+        const j = await res.json();
+        const answer = j.answer && typeof j.answer === "string" ? j.answer : "";
+        const results = Array.isArray(j.results) ? j.results.slice(0, 3) : [];
+        snippet = (answer + " " + results.map((x: any) => `${x.title || ""} ${x.content || ""}`).join(" ")).trim();
+        if (!searchTitle) searchTitle = String(results[0]?.title || "").trim();
+        console.log(`[SEARCH_VERIFY] Tavily snippet (${snippet.length} chars) q="${query}"`);
+      } catch (e: any) {
+        console.log("[SEARCH_VERIFY] Tavily falhou:", e.message || e);
+      }
+    } else if (options.serperApiKey) {
+      try {
+        const res = await fetch("https://google.serper.dev/search", {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-KEY": options.serperApiKey },
+          body: JSON.stringify({ q: query, gl: "br", hl: "pt-br" }),
+        });
+        const j = await res.json();
+        const results = Array.isArray(j.organic) ? j.organic.slice(0, 3) : [];
+        snippet = results.map((x: any) => `${x.title || ""} ${x.snippet || ""}`).join(" ");
+        if (!searchTitle) searchTitle = String(results[0]?.title || "").trim();
+        console.log(`[SEARCH_VERIFY] Serper snippet (${snippet.length} chars) q="${query}"`);
+      } catch (e: any) {
+        console.log("[SEARCH_VERIFY] Serper falhou:", e.message || e);
+      }
     }
-  } else if (options.serperApiKey) {
-    try {
-      const res = await fetch("https://google.serper.dev/search", {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-KEY": options.serperApiKey },
-        body: JSON.stringify({ q: `"${nameHint}"`, gl: "br", hl: "pt-br" }),
-      });
-      const j = await res.json();
-      const results = Array.isArray(j.organic) ? j.organic.slice(0, 3) : [];
-      snippet = results.map((x: any) => `${x.title || ""} ${x.snippet || ""}`).join(" ");
-      searchTitle = String(results[0]?.title || "").trim();
-      console.log(`[SEARCH_VERIFY] Serper snippet (${snippet.length} chars)`);
-    } catch (e: any) {
-      console.log("[SEARCH_VERIFY] Serper falhou:", e.message || e);
-    }
+  };
+
+  await runSearch(`"${nameHint}"`);
+  // #43 — snippet sem preço (comum em produto sem cotação exata): 2ª busca com "preço"
+  if ((!snippet || !hasBRL(snippet)) && nameHint) {
+    await runSearch(`${nameHint} preço reais`);
   }
 
   if (!snippet || snippet.length < 40) return null;
 
-  // 1) NVIDIA (grátis) extrai do snippet — com retry e fallback de modelo
-  if (options.nvidiaApiKey) {
+  // 1) Regex primeiro (rápido/grátis) — se o snippet já tem R$ + título, não chama LLM
+  const extractViaRegex = (): ScrapeResult | null => {
+    const priceMatches = [...snippet.matchAll(/R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g)]
+      .map((m) => parseBrazilianPrice(m[1]))
+      .filter((p) => isValidPrice(p) && p >= 5);
+    if (priceMatches.length === 0) return null;
+    const minPrice = Math.min(...priceMatches);
+    let name = searchTitle
+      .replace(/\s*[|–—-]\s*(Mercado Livre|Mercado Libre|Amazon|Shopee|Kabum|Magazine Luiza).*$/i, "")
+      .trim();
+    if (!name || !isProductNameValid(name)) name = nameHint;
+    if (!name || name.length < 5) return null;
+    console.log(`[SEARCH_VERIFY] ✓ regex: "${name.substring(0, 40)}" R$ ${minPrice}`);
+    return {
+      name: cleanProductName(name),
+      price: minPrice,
+      currency: "BRL",
+      available: true,
+      priceConfirmed: false,
+      nameSource: "SEARCH",
+    } as ScrapeResult;
+  };
+  const viaRegex = extractViaRegex();
+  if (viaRegex) return viaRegex;
+
+  // 2) NVIDIA (grátis) extrai do snippet — com retry e fallback de modelo
+  if (options.nvidiaApiKey && hasBRL(snippet)) {
     const client = new OpenAI({
       baseURL: "https://integrate.api.nvidia.com/v1",
       apiKey: options.nvidiaApiKey,
@@ -1979,7 +2016,7 @@ async function scrapeWithSearchVerify(
                 { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
                 { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
               ],
-              max_tokens: 300,
+              max_tokens: 700,
               temperature: 0,
             },
             { signal: AbortSignal.timeout(NVIDIA_MODEL_TIMEOUT_MS) }
@@ -2018,36 +2055,12 @@ async function scrapeWithSearchVerify(
     }
   }
 
-  // 2) Gemini grounding na página original como validação
+  // 3) Gemini grounding na página original como validação
   if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
     const viaGemini = await scrapeWithGemini(url, "", options.geminiApiKey);
     if (viaGemini && isValidPrice(viaGemini.price) && (viaGemini.name || "").length > 5) {
       console.log(`[SEARCH_VERIFY] ✓ Gemini grounding: "${viaGemini.name.substring(0, 40)}" R$ ${viaGemini.price}`);
       return viaGemini;
-    }
-  }
-
-  // 3) #43 — fallback regex: LLM pode falhar (quota/timeout), mas o snippet
-  // do Tavily/Serper já contém preço (R$) e título do resultado.
-  const priceMatches = [...snippet.matchAll(/R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g)]
-    .map((m) => parseBrazilianPrice(m[1]))
-    .filter((p) => isValidPrice(p) && p >= 5);
-  if (priceMatches.length > 0) {
-    const minPrice = Math.min(...priceMatches);
-    let name = searchTitle;
-    // limpa sufixos comuns de título de busca ("| Mercado Livre", " - Amazon.com.br")
-    name = name.replace(/\s*[|–—-]\s*(Mercado Livre|Mercado Libre|Amazon|Shopee|Kabum|Magazine Luiza).*$/i, "").trim();
-    if (!name || !isProductNameValid(name)) name = nameHint;
-    if (name && name.length >= 5) {
-      console.log(`[SEARCH_VERIFY] ✓ regex fallback: "${name.substring(0, 40)}" R$ ${minPrice}`);
-      return {
-        name: cleanProductName(name),
-        price: minPrice,
-        currency: "BRL",
-        available: true,
-        priceConfirmed: false,
-        nameSource: "SEARCH",
-      } as ScrapeResult;
     }
   }
 
