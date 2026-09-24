@@ -1979,40 +1979,28 @@ async function scrapeWithSearchVerify(
 
   if (!snippet || snippet.length < 40) return null;
 
-  // 1) Regex primeiro (rápido/grátis) — prioriza o 1º resultado (mais relevante)
-  const extractViaRegex = (): ScrapeResult | null => {
-    const priceRe = /R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g;
-    const collect = (text: string) => {
-      const all = [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
-      if (all.length === 0) return [];
-      // #43 — remove parcelas/ruído: preço < 30% do máximo do mesmo trecho
-      const max = Math.max(...all);
-      const filtered = all.filter((p) => p >= max * 0.3);
-      return filtered.length > 0 ? filtered : all;
-    };
-    let priceMatches = collect(firstResultText);
-    if (priceMatches.length === 0) priceMatches = collect(snippet);
-    if (priceMatches.length === 0) return null;
-    const minPrice = Math.min(...priceMatches);
+  // #43 — título só vira nome se tiver overlap com o hint (evita artigo "Melhor X...")
+  const titleMatchesHint = (title: string, hint: string): boolean => {
+    if (!title || !hint) return false;
+    const stop = new Set(["de", "da", "do", "para", "com", "e", "o", "a", "os", "as", "em", "no", "na"]);
+    const words = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !stop.has(w)));
+    const tw = words(title);
+    const hw = words(hint);
+    if (tw.size === 0 || hw.size === 0) return false;
+    let common = 0;
+    for (const w of tw) if (hw.has(w)) common++;
+    return common >= 2 || common / Math.min(tw.size, hw.size) >= 0.34;
+  };
+
+  const pickName = (): string => {
     let name = searchTitle
       .replace(/\s*[|–—-]\s*(Mercado Livre|Mercado Libre|Amazon|Shopee|Kabum|Magazine Luiza).*$/i, "")
       .trim();
-    if (!name || !isProductNameValid(name)) name = nameHint;
-    if (!name || name.length < 5) return null;
-    console.log(`[SEARCH_VERIFY] ✓ regex: "${name.substring(0, 40)}" R$ ${minPrice}`);
-    return {
-      name: cleanProductName(name),
-      price: minPrice,
-      currency: "BRL",
-      available: true,
-      priceConfirmed: false,
-      nameSource: "SEARCH",
-    } as ScrapeResult;
+    if (name && isProductNameValid(name) && titleMatchesHint(name, nameHint)) return name;
+    return nameHint || name;
   };
-  const viaRegex = extractViaRegex();
-  if (viaRegex) return viaRegex;
 
-  // 2) NVIDIA (grátis) extrai do snippet — com retry e fallback de modelo
+  // 1) NVIDIA (grátis) — LLM escolhe preço/nome com mais contexto
   if (options.nvidiaApiKey && hasBRL(snippet)) {
     const client = new OpenAI({
       baseURL: "https://integrate.api.nvidia.com/v1",
@@ -2029,7 +2017,7 @@ async function scrapeWithSearchVerify(
               model,
               messages: [
                 { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
-                { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
+                { role: "user", content: `Produto alvo: ${nameHint}\n\nTexto: ${snippet.slice(0, 3000)}\n\nJSON:` },
               ],
               max_tokens: 700,
               temperature: 0,
@@ -2069,6 +2057,36 @@ async function scrapeWithSearchVerify(
       if (modelDead) continue;
     }
   }
+
+  // 2) Regex — fallback grátis quando LLM falhou/indisponível
+  const extractViaRegex = (): ScrapeResult | null => {
+    const priceRe = /R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g;
+    const collect = (text: string) => {
+      const all = [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
+      if (all.length === 0) return [];
+      // remove parcelas/ruído: preço < 30% do máximo do mesmo trecho
+      const max = Math.max(...all);
+      const filtered = all.filter((p) => p >= max * 0.3);
+      return filtered.length > 0 ? filtered : all;
+    };
+    let priceMatches = collect(firstResultText);
+    if (priceMatches.length === 0) priceMatches = collect(snippet);
+    if (priceMatches.length === 0) return null;
+    const minPrice = Math.min(...priceMatches);
+    const name = pickName();
+    if (!name || name.length < 5) return null;
+    console.log(`[SEARCH_VERIFY] ✓ regex: "${name.substring(0, 40)}" R$ ${minPrice}`);
+    return {
+      name: cleanProductName(name),
+      price: minPrice,
+      currency: "BRL",
+      available: true,
+      priceConfirmed: false,
+      nameSource: "SEARCH",
+    } as ScrapeResult;
+  };
+  const viaRegex = extractViaRegex();
+  if (viaRegex) return viaRegex;
 
   // 3) Gemini grounding na página original como validação
   if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
