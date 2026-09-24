@@ -1077,9 +1077,11 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 | NVIDIA fail-fast | `scraper.ts`, `market-handlers.ts`, `scanWorker.ts` | modelos sondados 2026-09-24: `z-ai/glm-5.3`, `openai/gpt-oss-20b`, `nvidia/nemotron-3-super-120b-a12b`; **410/404/timeout 30s → pula modelo** sem retry (`-0731`/`v4-flash` EOL desde ago/2026) |
 | Gemini circuit 1h | `scraper.ts` | `noteGeminiQuotaBlock()` após 429; pula `GEMINI_VISION`/`GEMINI_FALLBACK`/grounding até 1h |
 | Nome do slug da URL | `scraper.ts` | `extractNameFromUrl` — Shopee `-i.shop.item`, ML `/up/MLB…` → hint p/ busca |
-| SEARCH_VERIFY **antes** de NVIDIA/Vision | `scraper.ts` | ordem: Playwright → **SEARCH** → NVIDIA → Vision → FETCH → Gemini; hint = DOM ∪ slug |
+| SEARCH_VERIFY **antes** de NVIDIA/Vision | `scraper.ts` | ordem: Playwright → **SEARCH** → NVIDIA → Vision → FETCH → Gemini; hint = DOM ∪ slug; **regex-first** (1º resultado) + 2ª busca `preço reais` se snippet sem `R$` |
 | Bot-wall no NVIDIA | `scraper.ts` | body &lt; 200 chars → aborta sem chamar LLM |
 | Docs | DIAGNOSTICO/README/roadmap | §6.28 |
+
+**Resultado smoke (jobs 482/483):** ML slug + Shopee → ambos `completed` via `SEARCH_VERIFY` em &lt;40s 1ª tentativa.
 
 **Decisões:**
 - Sem API pública Shopee/ML (testado: `90309999` / `403`) — busca web é o fallback realista

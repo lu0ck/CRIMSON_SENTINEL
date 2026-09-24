@@ -1922,6 +1922,7 @@ async function scrapeWithSearchVerify(
 
   let snippet = "";
   let searchTitle = "";
+  let firstResultText = "";
   const runSearch = async (query: string): Promise<void> => {
     if (options.tavilyApiKey) {
       try {
@@ -1942,6 +1943,9 @@ async function scrapeWithSearchVerify(
         const results = Array.isArray(j.results) ? j.results.slice(0, 3) : [];
         snippet = (answer + " " + results.map((x: any) => `${x.title || ""} ${x.content || ""}`).join(" ")).trim();
         if (!searchTitle) searchTitle = String(results[0]?.title || "").trim();
+        if (!firstResultText && results[0]) {
+          firstResultText = `${results[0].title || ""} ${results[0].content || ""}`;
+        }
         console.log(`[SEARCH_VERIFY] Tavily snippet (${snippet.length} chars) q="${query}"`);
       } catch (e: any) {
         console.log("[SEARCH_VERIFY] Tavily falhou:", e.message || e);
@@ -1957,6 +1961,9 @@ async function scrapeWithSearchVerify(
         const results = Array.isArray(j.organic) ? j.organic.slice(0, 3) : [];
         snippet = results.map((x: any) => `${x.title || ""} ${x.snippet || ""}`).join(" ");
         if (!searchTitle) searchTitle = String(results[0]?.title || "").trim();
+        if (!firstResultText && results[0]) {
+          firstResultText = `${results[0].title || ""} ${results[0].snippet || ""}`;
+        }
         console.log(`[SEARCH_VERIFY] Serper snippet (${snippet.length} chars) q="${query}"`);
       } catch (e: any) {
         console.log("[SEARCH_VERIFY] Serper falhou:", e.message || e);
@@ -1972,11 +1979,14 @@ async function scrapeWithSearchVerify(
 
   if (!snippet || snippet.length < 40) return null;
 
-  // 1) Regex primeiro (rápido/grátis) — se o snippet já tem R$ + título, não chama LLM
+  // 1) Regex primeiro (rápido/grátis) — prioriza o 1º resultado (mais relevante)
   const extractViaRegex = (): ScrapeResult | null => {
-    const priceMatches = [...snippet.matchAll(/R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g)]
-      .map((m) => parseBrazilianPrice(m[1]))
-      .filter((p) => isValidPrice(p) && p >= 5);
+    const priceRe = /R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g;
+    const collect = (text: string) =>
+      [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
+    // #43 — preços do 1º resultado primeiro; snippet inteiro só se 1º não tiver
+    let priceMatches = collect(firstResultText);
+    if (priceMatches.length === 0) priceMatches = collect(snippet);
     if (priceMatches.length === 0) return null;
     const minPrice = Math.min(...priceMatches);
     let name = searchTitle
