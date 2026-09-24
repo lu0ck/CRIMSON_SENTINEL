@@ -889,3 +889,29 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.22 Export da lista aberta na aba LISTS (#37)
+
+**Problema:** a aba LISTS (Product Archives) não tinha export. O usuário esperava exportar **de dentro da lista clicada** (ex.: "workstation", "meu futuro pc") com **nome completo, link e valor mais baixo** — não da lista de compras do Mercado (#36).
+
+**Escopo de #37 (client-side, sem endpoint novo):**
+
+| Change | Detalhe |
+|---|---|
+| Botões no header | ao lado de COMPARAR TODOS / ADD LINK em `App.tsx` (lista aberta): **CSV**, **TXT**, **COPIAR** |
+| Valor mais baixo | `min(currentPrice, comparisonResults[].price, priceHistory[].price)` |
+| CSV | cabeçalho `nome,link,valor_mais_baixo,moeda` + escape RFC4180; download `<slug>.csv` |
+| TXT | `LISTA`/`ITENS`/`TOTAL` + linhas `n. nome — R$ X.xx — url`; download `<slug>.txt` |
+| COPIAR | mesmo texto do TXT → `navigator.clipboard.writeText` + toast + ícone Check 1,5s |
+| Lista vazia | botões desabilitados + toast `LISTA VAZIA` |
+
+**Arquivos:** apenas `src/App.tsx` (+ docs). Sem mudança de API/schema.
+
+**Decisões:**
+- Export **client-side** — produtos já vêm em `GET /api/data`; clipboard exige browser
+- Domínio = **Product** (`product_lists`), **não** `ShoppingListItem` do Mercado
+- Filename = slug do nome da lista (`replace(/[^\w\-]+/g,"_")`)
+
+**Validação #37:** `npx tsc --noEmit` → 0; abrir lista → CSV/TXT só com itens dela (nome+link+menor preço); COPIAR → mesmo conteúdo no clipboard.
+
+---
+

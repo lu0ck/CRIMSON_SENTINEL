@@ -146,6 +146,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**bridge social → price_observations**~~ — **RESOLVIDO (#34)**: Stories/WhatsApp/Telegram gravam promo **e** observação local (match de item, flash A/C). DIAGNOSTICO §6.19.
 - ~~**sendWhatsappMessage lista+rota → operador**~~ — **RESOLVIDO (#35)**: `sendWhatsappMessage` só `@c.us` + composer + `POST /api/routes/:id/send-whatsapp` + botão LocalTab + setting `whatsapp_operator_chat_id`. DIAGNOSTICO §6.20.
 - ~~**múltiplas listas + export CSV/TXT com melhor preço**~~ — **RESOLVIDO (#36)**: `shopping_lists` + `list_id`, seletor no Mercado, export só a lista aberta com `bestPrice`/loja (CSV/TXT). DIAGNOSTICO §6.21.
+- ~~**export lista LISTS (Product Archives)**~~ — **RESOLVIDO (#37)**: CSV/TXT/COPIAR no header da lista aberta (nome, link, menor preço; client-side). DIAGNOSTICO §6.22.
 
 ---
 

@@ -44,7 +44,8 @@ import {
   Radio,
   Copy,
   Check,
-  Store
+  Store,
+  Download
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId, isSearchUrl } from "./lib/url";
@@ -183,6 +184,7 @@ export default function App() {
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [comparingProduct, setComparingProduct] = useState<string | null>(null);
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null);
+  const [listExportCopied, setListExportCopied] = useState(false);
   const [aiInsight, setAiInsight] = useState<string | null>(null);
   const [isGeneratingInsight, setIsGeneratingInsight] = useState(false);
   const [lastSearchTime, setLastSearchTime] = useState<number>(0);
@@ -767,6 +769,106 @@ const deleteComparisonResult = (productId: string, index: number) => {
       setAiInsight("### ⚠️ ALERTA DE SISTEMA: FALHA NA ANÁLISE\n\nNão foi possível conectar aos núcleos de IA (Gemini, NVIDIA ou Local). Verifique suas chaves de API nas configurações.");
     } finally {
       setIsGeneratingInsight(false);
+    }
+  };
+
+  const listExportProducts = selectedListId
+    ? profileProducts.filter(p => p.listId === selectedListId)
+    : [];
+
+  const lowestPrice = (p: Product): number => {
+    const candidates = [p.currentPrice];
+    for (const r of p.comparisonResults ?? []) {
+      if (Number.isFinite(r.price)) candidates.push(r.price);
+    }
+    for (const h of p.priceHistory) {
+      if (Number.isFinite(h.price)) candidates.push(h.price);
+    }
+    return Math.min(...candidates);
+  };
+
+  const csvEscapeExport = (v: unknown): string => {
+    const s = v === null || v === undefined ? "" : String(v);
+    return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+  };
+
+  const listExportSlug = (): string => {
+    const name = profileLists.find(l => l.id === selectedListId)?.name || "lista";
+    return name.replace(/[^\w\-]+/g, "_").replace(/_+/g, "_").replace(/^_|_$/g, "") || "lista";
+  };
+
+  const buildListExportCsv = (products: Product[]): string => {
+    const header = "nome,link,valor_mais_baixo,moeda";
+    const rows = products.map(p =>
+      [p.name, p.url, (Math.round(lowestPrice(p) * 100) / 100).toFixed(2), p.currency]
+        .map(csvEscapeExport)
+        .join(",")
+    );
+    return [header, ...rows].join("\n");
+  };
+
+  const buildListExportTxt = (products: Product[]): string => {
+    const listName = profileLists.find(l => l.id === selectedListId)?.name || "lista";
+    const lines = products.map((p, i) => {
+      const price = lowestPrice(p);
+      const fmt = Number.isFinite(price)
+        ? `${p.currency} ${price.toFixed(2)}`
+        : "s/ preço";
+      return `${i + 1}. ${p.name} — ${fmt} — ${p.url}`;
+    });
+    const total = products.reduce((sum, p) => {
+      const price = lowestPrice(p);
+      return sum + (Number.isFinite(price) ? price : 0);
+    }, 0);
+    return [
+      `LISTA: ${listName}`,
+      `ITENS: ${products.length}`,
+      `TOTAL (menores preços): ${products[0]?.currency || "R$"} ${total.toFixed(2)}`,
+      "",
+      ...lines,
+    ].join("\n");
+  };
+
+  const downloadTextBlob = (content: string, filename: string, mime: string) => {
+    const blob = new Blob([content], { type: `${mime};charset=utf-8` });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const exportSelectedList = (format: "csv" | "txt") => {
+    if (!selectedListId) return;
+    if (listExportProducts.length === 0) {
+      addToast("LISTA VAZIA — NADA PARA EXPORTAR", "error");
+      return;
+    }
+    playSound("success");
+    const slug = listExportSlug();
+    if (format === "csv") {
+      downloadTextBlob(buildListExportCsv(listExportProducts), `${slug}.csv`, "text/csv");
+    } else {
+      downloadTextBlob(buildListExportTxt(listExportProducts), `${slug}.txt`, "text/plain");
+    }
+    addToast(`EXPORT ${format.toUpperCase()} — ${listExportProducts.length} ITENS`, "success");
+  };
+
+  const copySelectedList = async () => {
+    if (!selectedListId) return;
+    if (listExportProducts.length === 0) {
+      addToast("LISTA VAZIA — NADA PARA COPIAR", "error");
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(buildListExportTxt(listExportProducts));
+      setListExportCopied(true);
+      setTimeout(() => setListExportCopied(false), 1500);
+      playSound("success");
+      addToast(`COPIADO — ${listExportProducts.length} ITENS NA ÁREA DE TRANSFERÊNCIA`, "success");
+    } catch {
+      addToast("FALHA AO COPIAR PARA A ÁREA DE TRANSFERÊNCIA", "error");
     }
   };
 
@@ -1904,6 +2006,31 @@ const queued = await response.json();
                         )}
                         <button onClick={() => { playSound('click'); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
                           <Plus size={16} /> ADD LINK
+                        </button>
+                        <button
+                          onClick={() => { playSound('click'); exportSelectedList("csv"); }}
+                          disabled={listExportProducts.length === 0}
+                          className="hud-button flex items-center gap-2"
+                          title="EXPORTAR CSV"
+                        >
+                          <Download size={14} /> CSV
+                        </button>
+                        <button
+                          onClick={() => { playSound('click'); exportSelectedList("txt"); }}
+                          disabled={listExportProducts.length === 0}
+                          className="hud-button flex items-center gap-2"
+                          title="EXPORTAR TXT"
+                        >
+                          <Download size={14} /> TXT
+                        </button>
+                        <button
+                          onClick={() => { void copySelectedList(); }}
+                          disabled={listExportProducts.length === 0}
+                          className="hud-button flex items-center gap-2"
+                          title="COPIAR LISTA"
+                        >
+                          {listExportCopied ? <Check size={14} /> : <Copy size={14} />}
+                          {listExportCopied ? "COPIADO" : "COPIAR"}
                         </button>
                       </div>
                     </div>
