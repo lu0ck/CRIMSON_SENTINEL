@@ -1982,9 +1982,14 @@ async function scrapeWithSearchVerify(
   // 1) Regex primeiro (rápido/grátis) — prioriza o 1º resultado (mais relevante)
   const extractViaRegex = (): ScrapeResult | null => {
     const priceRe = /R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g;
-    const collect = (text: string) =>
-      [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
-    // #43 — preços do 1º resultado primeiro; snippet inteiro só se 1º não tiver
+    const collect = (text: string) => {
+      const all = [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
+      if (all.length === 0) return [];
+      // #43 — remove parcelas/ruído: preço < 30% do máximo do mesmo trecho
+      const max = Math.max(...all);
+      const filtered = all.filter((p) => p >= max * 0.3);
+      return filtered.length > 0 ? filtered : all;
+    };
     let priceMatches = collect(firstResultText);
     if (priceMatches.length === 0) priceMatches = collect(snippet);
     if (priceMatches.length === 0) return null;
