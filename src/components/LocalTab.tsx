@@ -1053,6 +1053,7 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
                     title={item.checked ? "Já comprado — fora da rota" : "Clique para excluir da rota"}
                   >
                     {item.checked ? "✓ " : ""}
+                    {item.priority === "alta" ? "▲ " : item.priority === "media" ? "■ " : item.priority === "baixa" ? "▼ " : ""}
                     {item.name.toUpperCase()}
                     {item.quantity ? ` x${item.quantity}` : ""}
                     {item.unit ? item.unit.toUpperCase() : ""}

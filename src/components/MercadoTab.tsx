@@ -113,6 +113,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const [itemUnit, setItemUnit] = useState<ItemUnit>("UN");
   const [itemCategory, setItemCategory] = useState("");
   const [itemTarget, setItemTarget] = useState("");
+  const [itemPriority, setItemPriority] = useState<"" | "alta" | "media" | "baixa">("");
   // #24 — autocomplete de nomes (sugestões de itens/promoções já cadastrados)
   const [nameSuggestOpen, setNameSuggestOpen] = useState(false);
   const [activeSuggest, setActiveSuggest] = useState(-1);
@@ -433,6 +434,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         targetPrice: itemTarget ? parseFloat(itemTarget) : undefined,
         checked: false,
         listId: activeListId,
+        priority: itemPriority || null,
       };
       await apiJson("/api/shopping-list-items", {
         method: "POST",
@@ -441,7 +443,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       });
       playSound("click");
       toast(`ITEM ADICIONADO: ${item.name.toUpperCase()}`, "success");
-      setItemName(""); setItemQty("1"); setItemUnit("UN"); setItemCategory(""); setItemTarget("");
+      setItemName(""); setItemQty("1"); setItemUnit("UN"); setItemCategory(""); setItemTarget(""); setItemPriority("");
       setNameSuggestOpen(false);
       setActiveSuggest(-1);
       setShowItemForm(false);
@@ -906,6 +908,19 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                   <label className={labelCls}>PREÇO ALVO (OPCIONAL)</label>
                   <input type="number" step="0.01" className={inputCls} value={itemTarget} onChange={(e) => setItemTarget(e.target.value)} />
                 </div>
+                <div className="flex flex-col gap-1">
+                  <label className={labelCls}>PRIORIDADE</label>
+                  <select
+                    className={inputCls}
+                    value={itemPriority}
+                    onChange={(e) => setItemPriority(e.target.value as typeof itemPriority)}
+                  >
+                    <option value="">—</option>
+                    <option value="alta">ALTA</option>
+                    <option value="media">MÉDIA</option>
+                    <option value="baixa">BAIXA</option>
+                  </select>
+                </div>
                 <div className="flex flex-col gap-1 md:col-span-3">
                   <label className={labelCls}>CATEGORIA</label>
                   <input className={inputCls} value={itemCategory} onChange={(e) => setItemCategory(e.target.value)} placeholder="MERCADO / HORTIFRUTI / FARMÁCIA..." />
@@ -938,6 +953,15 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                     "font-mono text-sm font-bold",
                     item.checked && "text-crimson/40 line-through"
                   )}>
+                    {item.priority === "alta" && (
+                      <span className="mr-2 text-[9px] font-bold px-1.5 py-0.5 border border-red-500/60 text-red-400 bg-red-500/10">ALTA</span>
+                    )}
+                    {item.priority === "media" && (
+                      <span className="mr-2 text-[9px] font-bold px-1.5 py-0.5 border border-amber-500/60 text-amber-400 bg-amber-500/10">MÉDIA</span>
+                    )}
+                    {item.priority === "baixa" && (
+                      <span className="mr-2 text-[9px] font-bold px-1.5 py-0.5 border border-sky-500/60 text-sky-400 bg-sky-500/10">BAIXA</span>
+                    )}
                     {item.name.toUpperCase()}
                   </span>
                   <span className="text-[10px] font-mono text-crimson/50">

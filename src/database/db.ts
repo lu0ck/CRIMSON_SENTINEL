@@ -100,6 +100,8 @@ export function getDb(): Database.Database {
   // list_id/product_id já pré-migrados acima (#39) antes do CREATE INDEX no schema.
   ensureColumn("shopping_list_items", "product_id", "product_id TEXT");
   ensureColumn("shopping_list_items", "list_id", "list_id TEXT");
+  // #40 — prioridade (alta|media|baixa|NULL). Sem índice (evita bug index-before-column #39).
+  ensureColumn("shopping_list_items", "priority", "priority TEXT");
   // Seed + backfill: itens legados sem lista vão para "Geral"
   db.prepare(
     `UPDATE shopping_list_items SET list_id = 'list-geral'

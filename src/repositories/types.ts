@@ -153,6 +153,7 @@ export interface ShoppingListItemRow {
   target_price: number | null;
   product_id: string | null;
   list_id: string | null;
+  priority: string | null;
   created_at: string;
 }
 
@@ -238,6 +239,7 @@ export function establishmentRowToEstablishment(row: EstablishmentRow): Establis
 }
 
 export function shoppingListItemRowToShoppingListItem(row: ShoppingListItemRow): ShoppingListItem {
+  const p = (row.priority || "").toLowerCase();
   return {
     id: row.id,
     name: row.name,
@@ -248,6 +250,7 @@ export function shoppingListItemRowToShoppingListItem(row: ShoppingListItemRow):
     targetPrice: row.target_price ?? undefined,
     productId: row.product_id ?? undefined,
     listId: row.list_id ?? undefined,
+    priority: p === "alta" || p === "media" || p === "baixa" ? p : null,
   };
 }
 

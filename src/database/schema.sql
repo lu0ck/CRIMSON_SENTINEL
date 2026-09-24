@@ -120,6 +120,7 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   checked INTEGER DEFAULT 0,
   target_price REAL,
   list_id TEXT, -- #36: lista aberta (FK shopping_lists); NULL = legado → Geral
+  priority TEXT CHECK (priority IN ('alta','media','baixa') OR priority IS NULL), -- #40
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

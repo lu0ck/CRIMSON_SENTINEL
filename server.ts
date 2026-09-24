@@ -21,7 +21,7 @@ import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, lis
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
-import { ShoppingListRepository, ShoppingListsRepository, DEFAULT_LIST_ID } from "./src/repositories/shoppingListRepository.ts";
+import { ShoppingListRepository, ShoppingListsRepository, DEFAULT_LIST_ID, normalizePriority } from "./src/repositories/shoppingListRepository.ts";
 import { PriceObservationRepository } from "./src/repositories/priceObservationRepository.ts";
 import { PromotionRepository } from "./src/repositories/promotionRepository.ts";
 import { RouteRepository } from "./src/repositories/routeRepository.ts";
@@ -1002,6 +1002,8 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         const u = normalizeUnit(body.unit);
         body.unit = u;
       }
+      // #40: prioridade no enum canônico (alta|media|baixa) ou null
+      body.priority = normalizePriority(body.priority);
       if (!body.listId) body.listId = DEFAULT_LIST_ID;
       ShoppingListRepository.save(body);
       res.json({ status: "ok", item: ShoppingListRepository.getById(req.body.id) });
@@ -1960,7 +1962,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
           ? ",bestPrice,bestStore,promotionApplied,withinTarget"
           : "";
         const headers =
-          `name,quantity,unit,category,checked,targetPrice,productId,listId${priceCols}`;
+          `name,quantity,unit,category,checked,targetPrice,productId,listId,priority${priceCols}`;
         const rows = items.map((it) => {
           const base = [
             it.name,
@@ -1971,6 +1973,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
             it.targetPrice ?? "",
             it.productId ?? "",
             it.listId ?? "",
+            it.priority ?? "",
           ].map(csvEscape);
           if (withPrices) {
             const b = bestByItem.get(it.id);
@@ -2006,8 +2009,9 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
                 : "";
           const target = it.targetPrice ? ` | alvo R$ ${it.targetPrice.toFixed(2)}` : "";
           const checked = it.checked ? " [x]" : " [ ]";
+          const pri = it.priority ? ` | pri ${it.priority}` : "";
           lines.push(
-            `${idx + 1}. ${checked} ${it.name} — ${qty}${price}${target}`
+            `${idx + 1}. ${checked} ${it.name} — ${qty}${pri}${price}${target}`
           );
         });
         if (withPrices) {

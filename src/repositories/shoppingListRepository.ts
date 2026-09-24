@@ -8,6 +8,28 @@ import {
 
 export const DEFAULT_LIST_ID = "list-geral";
 
+// #40 — ordem: alta → media → baixa → sem prioridade, depois nome
+const PRIORITY_ORDER_SQL = `ORDER BY CASE priority
+    WHEN 'alta' THEN 0
+    WHEN 'media' THEN 1
+    WHEN 'baixa' THEN 2
+    ELSE 3
+  END, name`;
+
+export type ShoppingListPriority = "alta" | "media" | "baixa";
+
+export function normalizePriority(
+  v: unknown
+): ShoppingListPriority | null {
+  const p = String(v ?? "").toLowerCase().trim();
+  if (p === "alta" || p === "media" || p === "baixa") return p;
+  // aliases comuns em import CSV
+  if (p === "high" || p === "alta") return "alta";
+  if (p === "medium" || p === "media" || p === "média") return "media";
+  if (p === "low" || p === "baixa") return "baixa";
+  return null;
+}
+
 export const ShoppingListRepository = {
   getAll(listId?: string): ShoppingListItem[] {
     const db = getDb();
@@ -15,10 +37,10 @@ export const ShoppingListRepository = {
       listId
         ? db
             .prepare(
-              "SELECT * FROM shopping_list_items WHERE list_id = ? ORDER BY name"
+              `SELECT * FROM shopping_list_items WHERE list_id = ? ${PRIORITY_ORDER_SQL}`
             )
             .all(listId)
-        : db.prepare("SELECT * FROM shopping_list_items ORDER BY name").all()
+        : db.prepare(`SELECT * FROM shopping_list_items ${PRIORITY_ORDER_SQL}`).all()
     ) as ShoppingListItemRow[];
     return rows.map(shoppingListItemRowToShoppingListItem);
   },
@@ -42,13 +64,13 @@ export const ShoppingListRepository = {
   save(item: ShoppingListItem): void {
     getDb()
       .prepare(
-        `INSERT INTO shopping_list_items (id, name, quantity, unit, category, checked, target_price, product_id, list_id)
-         VALUES (@id, @name, @quantity, @unit, @category, @checked, @target_price, @product_id, @list_id)
+        `INSERT INTO shopping_list_items (id, name, quantity, unit, category, checked, target_price, product_id, list_id, priority)
+         VALUES (@id, @name, @quantity, @unit, @category, @checked, @target_price, @product_id, @list_id, @priority)
          ON CONFLICT(id) DO UPDATE SET
            name=excluded.name, quantity=excluded.quantity, unit=excluded.unit,
            category=excluded.category, checked=excluded.checked,
            target_price=excluded.target_price, product_id=excluded.product_id,
-           list_id=excluded.list_id`
+           list_id=excluded.list_id, priority=excluded.priority`
       )
       .run({
         id: item.id,
@@ -60,6 +82,7 @@ export const ShoppingListRepository = {
         target_price: item.targetPrice ?? null,
         product_id: item.productId ?? null,
         list_id: item.listId || DEFAULT_LIST_ID,
+        priority: normalizePriority(item.priority),
       });
   },
 

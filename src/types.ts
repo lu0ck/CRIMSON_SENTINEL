@@ -86,6 +86,8 @@ export interface ShoppingListItem {
   targetPrice?: number;
   productId?: string;
   listId?: string;
+  /** #40 — prioridade na lista: alta | media | baixa (null = sem) */
+  priority?: "alta" | "media" | "baixa" | null;
 }
 
 export interface PriceObservation {

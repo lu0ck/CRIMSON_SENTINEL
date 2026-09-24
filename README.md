@@ -125,7 +125,7 @@ Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `
 
 ## 📚 Documentos
 
-- `DIAGNOSTICO.md` — histórico completo de fases (1–13), auditorias e decisões técnicas
+- `DIAGNOSTICO.md` — histórico completo de fases (1–15), auditorias e decisões técnicas
 - `INSTRUCOES_LOCAL.md` — guia do módulo local/ROTA (preços, roteirização, insights)
 - `GUIA_SOCIAL.md` — configuração dos módulos WhatsApp/Instagram (C2/C3)
 - `GUIA_VPS.md` — **deploy headless em VPS**, health checks e checklist E2E (#31)
@@ -134,7 +134,7 @@ Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `
 
 ## 🛣️ Estado & Roadmap
 
-Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento social (WhatsApp/Instagram), insights locais, scan recorrente de preços locais, auditorias de segurança (bind/Host), dedup/mescla de estabelecimentos. Roadmap detalhado, histórico e decisões em `DIAGNOSTICO.md`.
+Fases **1–15 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento social (WhatsApp/Instagram), insights locais, scan recorrente de preços locais, auditorias de segurança (bind/Host), dedup/mescla de estabelecimentos. Roadmap detalhado, histórico e decisões em `DIAGNOSTICO.md`.
 
 **Pendências abertas:**
 - ~~**FASE 7** — validar o caminho **Gemini real** dos insights locais~~ — **RESOLVIDO (#29)**: `LocalTab` agora envia `profileId`; badge diferencia GEMINI / fallback.
@@ -149,6 +149,7 @@ Fases **1–13 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**export lista LISTS (Product Archives)**~~ — **RESOLVIDO (#37)**: CSV/TXT/COPIAR no header da lista aberta (nome, link, menor preço; client-side). DIAGNOSTICO §6.22.
 - ~~**expandir seed de market-handlers**~~ — **RESOLVIDO (#38)**: `market-handlers.ts` 6 → 31 redes; placeholder REDE na UI; §6.23.
 - ~~**boot crash `list_id` + open browser**~~ — **RESOLVIDO (#39)**: pré-migração antes do `CREATE INDEX`; abre `http://localhost:3001` no listen. §6.24.
+- ~~**prioridade na lista de compras**~~ — **RESOLVIDO (#40)**: coluna `priority` (alta/media/baixa), ordenação alta→media→baixa, badge + form no Mercado, coluna CSV. §6.25.
 
 ---
 

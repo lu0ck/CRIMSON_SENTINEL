@@ -336,7 +336,7 @@ Sistema de Notificações — integrou o `notify.ts` (antes código morto) com a
 
 **Nota FASE 6→7:** próximo passo natural é o monitoramento social (`socialWorker`: WhatsApp/Instagram) previsto nas Fases 9/10, ou análise local com IA (melhor estabelecimento por item/economia entre rotas).
 
-## 6.7 Status da FASE 7 (em andamento) — Insights locais com IA
+## 6.7 Status da FASE 7 (concluída) — Insights locais com IA
 
 Análise local determinística (sem rede) + narrativa do núcleo SENTINEL (Gemini) via job assíncrono, com painel INSIGHTS no módulo local.
 
@@ -963,6 +963,37 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 - Anti-spam por mtime: PM2 restart em loop não abre 10 abas
 
 **Validação #39:** `npx tsc --noEmit` → 0; `pm2 restart sentinela-api` → status online estável; `curl http://127.0.0.1:3001/` → 200; `GET /api/status` → 200; log `[open] navegador aberto` no desktop.
+
+---
+
+## 6.25 prioridade na lista de compras (#40)
+
+**Problema:** a lista de compras (MERCADO) não tinha forma de destacar o que é urgente — tudo aparecia em ordem alfabética, sem hierarquia visual ou de exportação.
+
+**Escopo de #40 (plano A+D aprovado):**
+
+| Change | Detalhe |
+|---|---|
+| `schema.sql` | `priority TEXT CHECK (priority IN ('alta','media','baixa') OR priority IS NULL)` em `shopping_list_items`; **sem índice** (evita bug index-before-column do #39) |
+| `db.ts` | `ensureColumn("shopping_list_items","priority","priority TEXT")` pós-schema (migra bancos antigos) |
+| `types.ts` | `ShoppingListItem.priority?: "alta"\|"media"\|"baixa"\|null` |
+| `repositories/types.ts` | Row + mapper com `priority` (normaliza para enum ou null) |
+| `shoppingListRepository.ts` | Coluna no INSERT/UPDATE; `normalizePriority` (aliases high/medium/low/média); `ORDER BY CASE priority WHEN 'alta' THEN 0 WHEN 'media' THEN 1 WHEN 'baixa' THEN 2 ELSE 3 END, name` |
+| `MercadoTab.tsx` | Select PRIORIDADE no form (—/ALTA/MÉDIA/BAIXA); badge colorido na linha (ALTA vermelho, MÉDIA âmbar, BAIXA azul); `priority` no payload do save |
+| `LocalTab.tsx` | Indicador ▲/■/▼ nos chips de item da rota |
+| `server.ts` | `normalizePriority` no POST `/api/shopping-list-items`; coluna `priority` no header e linhas do export CSV; ` \| pri {p}` no export TXT |
+| Docs | §6.25 + hygiene: §6.7 FASE 7 → concluída; README "1–13" → "1–15"; pendência #40 em README/roadmap |
+
+**Decisões:**
+- Valores canônicos `alta`/`media`/`baixa` (pt-BR); `NULL` = sem prioridade (fim da lista)
+- Ordem: alta → media → baixa → sem prioridade, desempate por `name`
+- Sem `CREATE INDEX` em `priority` — coluna nova pós-schema, risco zero de crash do tipo #39
+- Aliases de import aceitos (`high`/`medium`/`low`/`média`) via `normalizePriority`
+- Prioridade é atributo do **item** (compartilhado entre listas que referenciem o mesmo id), não da lista
+
+**Arquivos:** `schema.sql`, `db.ts`, `types.ts`, `repositories/types.ts`, `shoppingListRepository.ts`, `MercadoTab.tsx`, `LocalTab.tsx`, `server.ts`, docs.
+
+**Validação #40:** `npx tsc --noEmit` → 0; criar item com `priority: alta` via POST → aparece 1º na lista; export CSV contém coluna `priority`; badge visível na UI MERCADO.
 
 ---
 
