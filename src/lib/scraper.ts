@@ -49,11 +49,53 @@ const USER_AGENTS = [
 
 // MAX_PRICE movido para price.ts (#27).
 
-// Modelo de extração NVIDIA NIM (o antigo meta/llama-3.1-8b-instruct foi retirado da lista)
-const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
+// Modelos NVIDIA NIM (#43): -0731 retorna 410 Gone; ordem = fail-fast → glm → nemotron
+const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash";
 const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
+const NVIDIA_MODELS = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL, "nvidia/llama-3.3-nemotron-super-49b-v1"];
 const NVIDIA_MAX_RETRIES = 2;
 const NVIDIA_RETRY_DELAY_MS = 2_000;
+const NVIDIA_MODEL_TIMEOUT_MS = 20_000;
+
+// #43 — circuit de quota Gemini free tier (20/dia): após 429, pula estratégias ~1h
+let geminiQuotaUntil = 0;
+function isGeminiQuotaBlocked(): boolean {
+  return Date.now() < geminiQuotaUntil;
+}
+function noteGeminiQuotaBlock(): void {
+  if (!isGeminiQuotaBlocked()) {
+    geminiQuotaUntil = Date.now() + 60 * 60 * 1000;
+    console.error("[Gemini] Quota 429 — pulando estratégias Gemini por 1h");
+  }
+}
+function isNvidiaModelGone(err: any): boolean {
+  const status = err?.status ?? err?.error?.code ?? err?.code;
+  const msg = String(err?.message || "");
+  return status === 410 || status === 404 || msg.includes("410") || msg.includes("404") ||
+    /model.*(not found|removed|gone|deprecated)/i.test(msg);
+}
+// #43 — nome do produto a partir do slug da URL (Shopee/ML anti-bot não dão nome na página)
+function extractNameFromUrl(rawUrl: string): string {
+  try {
+    const u = new URL(ensureHttps(rawUrl));
+    const parts = u.pathname.split("/").filter(Boolean);
+    if (parts.length === 0) return "";
+    let slug = parts[parts.length - 1];
+    slug = slug.replace(/-i\.\d+\.\d+$/i, "").replace(/\.(html?|php|aspx?)$/i, "");
+    if (/^[A-Z]{2,4}\d{6,}$/i.test(slug)) {
+      for (let i = parts.length - 2; i >= 0; i--) {
+        const p = parts[i];
+        if (/^(up|p|pd|producto|produto|item|pid)$/i.test(p) || /^\d+$/.test(p)) continue;
+        slug = p.replace(/-i\.\d+\.\d+$/i, "");
+        break;
+      }
+    }
+    const name = slug.replace(/[-_+]+/g, " ").replace(/\s+/g, " ").trim();
+    return name.length >= 8 ? name : "";
+  } catch {
+    return "";
+  }
+}
 
 function simpleHash(str: string): string {
   let hash = 0;
@@ -540,9 +582,15 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   console.log(`[Scraper] Options available:`);
   console.log(`  - LMStudio: ${options.lmStudioUrl ? "YES" : "NO"}`);
   console.log(`  - NVIDIA: ${options.nvidiaApiKey ? "YES" : "NO"}`);
-  console.log(`  - Gemini: ${options.geminiApiKey ? "YES" : "NO"}`);
+  console.log(`  - Gemini: ${options.geminiApiKey ? (isGeminiQuotaBlocked() ? "YES (quota 429 — bloqueado 1h)" : "YES") : "NO"}`);
   console.log(`  - Serper: ${options.serperApiKey ? "YES" : "NO"}`);
   console.log(`  - Tavily: ${options.tavilyApiKey ? "YES" : "NO"}`);
+
+  // #43 — hint de nome a partir do slug da URL (vale quando anti-bot zera o DOM)
+  const urlNameHint = extractNameFromUrl(url);
+  if (urlNameHint) {
+    console.log(`[Scraper] URL name hint: "${urlNameHint}"`);
+  }
 
   const strategies: ScrapeStrategy[] = [];
 
@@ -589,32 +637,35 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
       { name: "PLAYWRIGHT_BASIC", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightBasic(url, options, signal) }
     );
 
-    // 3b. NVIDIA NIM (extração LLM sobre o corpo da página)
+    // 3b. #43 — SEARCH_VERIFY ANTES de NVIDIA/Vision: barato, resolve bot-wall
+    // via Serper/Tavily + hint do slug da URL (sem depender do DOM).
+    if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey)) {
+      strategies.push({
+        name: "SEARCH_VERIFY",
+        fn: ({ signal }: { signal?: AbortSignal }) => {
+          const pageHint = mergeResults(partials)?.name || "";
+          const hint = pageHint && isProductNameValid(pageHint) ? pageHint : urlNameHint || pageHint;
+          return scrapeWithSearchVerify(url, hint, options, signal);
+        },
+      });
+    }
+
+    // 3c. NVIDIA NIM (só se não estiver em bot-wall / quota Gemini não interfere)
     if (options.nvidiaApiKey) {
       strategies.push({ name: "NVIDIA_NIM", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithNvidiaNim(url, options.nvidiaApiKey!, signal) });
     }
 
-    // 3c. GEMINI_VISION: screenshot + visão (quando o HTML é ilegível)
-    if (options.geminiApiKey) {
+    // 3d. GEMINI_VISION — pulado se quota 429 recente
+    if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
       strategies.push({ name: "GEMINI_VISION", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithGeminiVision(url, options.geminiApiKey!, signal) });
     }
-
-    // 4. SEARCH_VERIFY: snippet de busca (Serper/Tavily) + NVIDIA/Gemini
-    if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey)) {
-      strategies.push({
-        name: "SEARCH_VERIFY",
-        fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithSearchVerify(url, (mergeResults(partials)?.name || ""), options, signal),
-      });
-    }
-
-    // 5. Gemini como ÚLTIMO recurso (grounding via urlContext) — fora do circuit
   }
 
   // 4b. FETCH_FALLBACK é barato (sem browser) — sempre tentado
   strategies.push({ name: "FETCH_FALLBACK", fn: () => scrapeWithFetch(url) });
 
-  // 5. Gemini grounding (apenas se configurado) — sempre tentado
-  if (options.geminiApiKey) {
+  // 5. Gemini grounding (apenas se configurado e sem quota bloqueada)
+  if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
     strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, "", options.geminiApiKey!) });
   }
 
@@ -1575,8 +1626,9 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string, signal?: AbortSi
     await browser.close();
     browser = null;
 
-    if (!bodyText || bodyText.length < 50) {
-      console.log("[NVIDIA NIM] Body text too short, aborting");
+    // #43 — bot-wall / página vazia: 50 era pouco (Shopee devolve ~525 de placeholder)
+    if (!bodyText || bodyText.length < 200) {
+      console.log("[NVIDIA NIM] Body too short (bot-wall?) — aborting without LLM call");
       return null;
     }
 
@@ -1586,26 +1638,29 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string, signal?: AbortSi
       apiKey: apiKey,
     });
 
-    const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
-    for (const model of models) {
+    for (const model of NVIDIA_MODELS) {
+      let modelDead = false;
       for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
         try {
-          console.log(`[NVIDIA NIM] Calling API (model=${model}, attempt=${attempt}/${NVIDIA_MAX_RETRIES})...`);
-          const response = await client.chat.completions.create({
-            model,
-            messages: [
-              {
-                role: "system",
-                content: "Extraia dados do produto. Retorne APENAS JSON válido. Sem markdown. Formato: {\"name\":\"Produto\",\"price\":1234.56}",
-              },
-              {
-                role: "user",
-                content: `Extraia nome e menor preço (Pix/Boleto/à vista) deste texto:\n\n${bodyText}\n\nJSON:`,
-              },
-            ],
-            max_tokens: 300,
-            temperature: 0,
-          });
+          console.log(`[NVIDIA NIM] Calling API (model=${model}, attempt=${attempt}/${NVIDIA_MAX_RETRIES}, timeout=${NVIDIA_MODEL_TIMEOUT_MS / 1000}s)...`);
+          const response = await client.chat.completions.create(
+            {
+              model,
+              messages: [
+                {
+                  role: "system",
+                  content: "Extraia dados do produto. Retorne APENAS JSON válido. Sem markdown. Formato: {\"name\":\"Produto\",\"price\":1234.56}",
+                },
+                {
+                  role: "user",
+                  content: `Extraia nome e menor preço (Pix/Boleto/à vista) deste texto:\n\n${bodyText}\n\nJSON:`,
+                },
+              ],
+              max_tokens: 300,
+              temperature: 0,
+            },
+            { signal: AbortSignal.timeout(NVIDIA_MODEL_TIMEOUT_MS) }
+          );
 
           const resultText = response.choices[0].message?.content || "";
           console.log(`[NVIDIA NIM] Raw response: ${resultText.substring(0, 200)}`);
@@ -1630,12 +1685,25 @@ async function scrapeWithNvidiaNim(url: string, apiKey: string, signal?: AbortSi
           }
           break; // resposta válida mas sem JSON → não retry
         } catch (err: any) {
+          const status = Number(err?.status) || (/410/.test(String(err?.message || "")) ? 410 : /404/.test(String(err?.message || "")) ? 404 : 0);
           console.log(`[NVIDIA NIM] Error (model=${model}, attempt=${attempt}): ${err.message || err}`);
+          // #43 — modelo removido/morto: não retries, pula p/ próximo
+          if (status === 410 || status === 404) {
+            console.log(`[NVIDIA NIM] Modelo ${model} indisponível (${status}) — fail-fast, próximo modelo`);
+            modelDead = true;
+            break;
+          }
+          if (err?.name === "AbortError" || /timeout|aborted/i.test(String(err?.message || ""))) {
+            console.log(`[NVIDIA NIM] Timeout ${NVIDIA_MODEL_TIMEOUT_MS / 1000}s no modelo ${model} — próximo`);
+            modelDead = true;
+            break;
+          }
           if (attempt < NVIDIA_MAX_RETRIES) {
             await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
           }
         }
       }
+      if (modelDead) continue;
     }
 
     console.log("[NVIDIA NIM] No valid result from any model");
@@ -1665,6 +1733,11 @@ function isGeminiRateLimitError(error: any): boolean {
 async function scrapeWithGemini(url: string, contextText: string, apiKey?: string): Promise<ScrapeResult | null> {
   if (!apiKey) {
     console.warn("[Gemini] No API key configured, skipping");
+    return null;
+  }
+  // #43 — quota free tier estourada: nem tenta (economiza budget)
+  if (isGeminiQuotaBlocked()) {
+    console.warn("[Gemini] Quota 429 recente — pulando chamada");
     return null;
   }
 
@@ -1715,13 +1788,11 @@ Return ONLY valid JSON, no explanation.`
       return result as ScrapeResult;
     } catch (error: any) {
       if (isGeminiRateLimitError(error)) {
+        noteGeminiQuotaBlock();
         if (attempt < MAX_ATTEMPTS) {
-          console.warn("[Gemini] ⚠️ Quota 429 - retrying in 3s...");
-          await new Promise((resolve) => setTimeout(resolve, 3000));
-          continue;
+          console.warn("[Gemini] ⚠️ Quota 429 — parando retries nesta chamada");
         }
-        console.error("[Gemini] ✗ Quota 429 exhausted - skipping Gemini");
-        console.error("[Gemini] Gemini API quota exceeded (429). Try again later or use another strategy.");
+        console.error("[Gemini] ✗ Quota 429 exhausted - Gemini bloqueado por 1h");
         return null;
       }
       console.error("[Gemini] Error:", error.message || error);
@@ -1736,6 +1807,10 @@ Return ONLY valid JSON, no explanation.`
 // usado quando o HTML é ilegível (paywall/JS pesado/bot).
 async function scrapeWithGeminiVision(url: string, apiKey: string, signal?: AbortSignal): Promise<ScrapeResult | null> {
   if (!apiKey) return null;
+  if (isGeminiQuotaBlocked()) {
+    console.log("[GEMINI_VISION] Quota 429 recente — pulando");
+    return null;
+  }
   console.log("[GEMINI_VISION] Starting vision extraction...");
 
   const ai = new GoogleGenAI({ apiKey });
@@ -1809,6 +1884,7 @@ async function scrapeWithGeminiVision(url: string, apiKey: string, signal?: Abor
     console.log(`[GEMINI_VISION] ✓ name="${(result.name || "").substring(0, 50)}", price=${result.price}`);
     return result as ScrapeResult;
   } catch (error: any) {
+    if (isGeminiRateLimitError(error)) noteGeminiQuotaBlock();
     console.error("[GEMINI_VISION] Error:", error.message || error);
     return null;
   } finally {
@@ -1826,9 +1902,13 @@ async function scrapeWithSearchVerify(
   options: ScrapeOptions,
   signal?: AbortSignal
 ): Promise<ScrapeResult | null> {
-  if (nameHint.length < 5) {
-    // sem nome confiável — grounding via Gemini urlContext é a melhor aposta
-    if (options.geminiApiKey) {
+  // #43 — se o DOM não deu nome válido, usa o slug da URL (Shopee/ML)
+  if (!nameHint || nameHint.length < 5 || !isProductNameValid(nameHint)) {
+    nameHint = extractNameFromUrl(url) || nameHint;
+  }
+  if (!nameHint || nameHint.length < 5) {
+    // sem nome confiável — grounding via Gemini urlContext (se quota ok)
+    if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
       return scrapeWithGemini(url, "", options.geminiApiKey);
     }
     return null;
@@ -1883,20 +1963,24 @@ async function scrapeWithSearchVerify(
       baseURL: "https://integrate.api.nvidia.com/v1",
       apiKey: options.nvidiaApiKey,
     });
-    const models = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL];
+    const models = NVIDIA_MODELS;
     for (const model of models) {
+      let modelDead = false;
       for (let attempt = 1; attempt <= NVIDIA_MAX_RETRIES; attempt++) {
         try {
           console.log(`[SEARCH_VERIFY] NVIDIA call (model=${model}, attempt=${attempt})`);
-          const resp = await client.chat.completions.create({
-            model,
-            messages: [
-              { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
-              { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
-            ],
-            max_tokens: 300,
-            temperature: 0,
-          });
+          const resp = await client.chat.completions.create(
+            {
+              model,
+              messages: [
+                { role: "system", content: "Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}" },
+                { role: "user", content: `Texto: ${snippet.slice(0, 3000)}\n\nJSON:` },
+              ],
+              max_tokens: 300,
+              temperature: 0,
+            },
+            { signal: AbortSignal.timeout(NVIDIA_MODEL_TIMEOUT_MS) }
+          );
           const text = resp.choices[0].message?.content || "";
           const jm = text.match(/\{[\s\S]*\}/);
           if (jm) {
@@ -1917,16 +2001,22 @@ async function scrapeWithSearchVerify(
           break; // resposta válida mas sem resultado → não retry
         } catch (e: any) {
           console.log(`[SEARCH_VERIFY] NVIDIA falhou (model=${model}, attempt=${attempt}):`, e.message || e);
+          // #43 — fail-fast em modelo morto/timeout
+          if (isNvidiaModelGone(e) || e?.name === "AbortError" || /timeout|aborted/i.test(String(e?.message || ""))) {
+            modelDead = true;
+            break;
+          }
           if (attempt < NVIDIA_MAX_RETRIES) {
             await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
           }
         }
       }
+      if (modelDead) continue;
     }
   }
 
   // 2) Gemini grounding na página original como validação
-  if (options.geminiApiKey) {
+  if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
     const viaGemini = await scrapeWithGemini(url, "", options.geminiApiKey);
     if (viaGemini && isValidPrice(viaGemini.price) && (viaGemini.name || "").length > 5) {
       console.log(`[SEARCH_VERIFY] ✓ Gemini grounding: "${viaGemini.name.substring(0, 40)}" R$ ${viaGemini.price}`);

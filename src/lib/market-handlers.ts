@@ -213,7 +213,8 @@ export interface MarketSearchHit {
   method: string;
 }
 
-const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash-0731";
+// #43 — -0731 retorna 410 Gone
+const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash";
 const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
 const NVIDIA_MAX_RETRIES = 2;
 const NVIDIA_RETRY_DELAY_MS = 2_000;

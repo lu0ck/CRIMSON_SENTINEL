@@ -1060,3 +1060,36 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.28 fix: Shopee/ML falhavam — NVIDIA 410 + Gemini 429 + SEARCH cedo (#43)
+
+**Problema (após #42):** timeout sumiu, mas usuário ainda via `Failed to scrape product data from all strategies` + `2 TARGETS FAILED TO RESOLVE` em **Shopee/ML**. Kabum OK.
+
+**Causa raiz (logs):**
+1. **`deepseek-ai/deepseek-v4-flash-0731` → HTTP 410 Gone** — modelo morto; retries + `z-ai/glm-5.3-flash` **travava até o timeout de 90s** da estratégia → comia quase todo o budget de 180s.
+2. **Gemini free tier 429** (limite **20 req/dia**) — `GEMINI_VISION` e `GEMINI_FALLBACK` retornavam null a cada job.
+3. **Shopee/ML anti-bot** — body ~525 chars de placeholder; handler `name="" price=0`; genérico só `og:title` do site → NVIDIA/Vision não tinham o que extrair.
+4. **`SEARCH_VERIFY` rodava por último** — budget já estourado (NVIDIA comeu 90s); sem `nameHint` caía no Gemini (429).
+
+**Escopo de #43:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| NVIDIA fail-fast | `scraper.ts`, `market-handlers.ts`, `scanWorker.ts` | modelos: `deepseek-v4-flash` (sem -0731), `glm-5.3-flash`, `nemotron-super-49b`; **410/404/timeout 20s → pula modelo** sem retry |
+| Gemini circuit 1h | `scraper.ts` | `noteGeminiQuotaBlock()` após 429; pula `GEMINI_VISION`/`GEMINI_FALLBACK`/grounding até 1h |
+| Nome do slug da URL | `scraper.ts` | `extractNameFromUrl` — Shopee `-i.shop.item`, ML `/up/MLB…` → hint p/ busca |
+| SEARCH_VERIFY **antes** de NVIDIA/Vision | `scraper.ts` | ordem: Playwright → **SEARCH** → NVIDIA → Vision → FETCH → Gemini; hint = DOM ∪ slug |
+| Bot-wall no NVIDIA | `scraper.ts` | body &lt; 200 chars → aborta sem chamar LLM |
+| Docs | DIAGNOSTICO/README/roadmap | §6.28 |
+
+**Decisões:**
+- Sem API pública Shopee/ML (testado: `90309999` / `403`) — busca web é o fallback realista
+- Quota Gemini **não é bug nosso** (free tier 20/dia); circuito só evita desperdiçar budget
+- `SEARCH_VERIFY` antes de LLM caro: se Serper/Tavily achar preço, nem tenta NVIDIA/Vision
+- Fora de escopo: upgrade de plano Gemini, cookies de sessão Shopee, mudança de start command
+
+**Arquivos:** `src/lib/scraper.ts`, `src/lib/market-handlers.ts`, `src/workers/scanWorker.ts`, docs.
+
+**Validação #43:** `npx tsc --noEmit` → 0; Shopee/ML → completed via SEARCH ou falha rápida &lt;90s com motivo claro; NVIDIA não gasta 90s em modelo 410; Gemini 429 pula em &lt;1s.
+
+---
+
