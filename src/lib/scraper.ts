@@ -1917,6 +1917,7 @@ async function scrapeWithSearchVerify(
   console.log(`[SEARCH_VERIFY] Buscando "${nameHint}" para validar...`);
 
   let snippet = "";
+  let searchTitle = "";
   if (options.tavilyApiKey) {
     try {
       const res = await fetch("https://api.tavily.com/search", {
@@ -1935,6 +1936,7 @@ async function scrapeWithSearchVerify(
       const answer = j.answer && typeof j.answer === "string" ? j.answer : "";
       const results = Array.isArray(j.results) ? j.results.slice(0, 3) : [];
       snippet = (answer + " " + results.map((x: any) => `${x.title || ""} ${x.content || ""}`).join(" ")).trim();
+      searchTitle = String(results[0]?.title || "").trim();
       console.log(`[SEARCH_VERIFY] Tavily snippet (${snippet.length} chars)`);
     } catch (e: any) {
       console.log("[SEARCH_VERIFY] Tavily falhou:", e.message || e);
@@ -1949,6 +1951,7 @@ async function scrapeWithSearchVerify(
       const j = await res.json();
       const results = Array.isArray(j.organic) ? j.organic.slice(0, 3) : [];
       snippet = results.map((x: any) => `${x.title || ""} ${x.snippet || ""}`).join(" ");
+      searchTitle = String(results[0]?.title || "").trim();
       console.log(`[SEARCH_VERIFY] Serper snippet (${snippet.length} chars)`);
     } catch (e: any) {
       console.log("[SEARCH_VERIFY] Serper falhou:", e.message || e);
@@ -2021,6 +2024,30 @@ async function scrapeWithSearchVerify(
     if (viaGemini && isValidPrice(viaGemini.price) && (viaGemini.name || "").length > 5) {
       console.log(`[SEARCH_VERIFY] ✓ Gemini grounding: "${viaGemini.name.substring(0, 40)}" R$ ${viaGemini.price}`);
       return viaGemini;
+    }
+  }
+
+  // 3) #43 — fallback regex: LLM pode falhar (quota/timeout), mas o snippet
+  // do Tavily/Serper já contém preço (R$) e título do resultado.
+  const priceMatches = [...snippet.matchAll(/R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g)]
+    .map((m) => parseBrazilianPrice(m[1]))
+    .filter((p) => isValidPrice(p) && p >= 5);
+  if (priceMatches.length > 0) {
+    const minPrice = Math.min(...priceMatches);
+    let name = searchTitle;
+    // limpa sufixos comuns de título de busca ("| Mercado Livre", " - Amazon.com.br")
+    name = name.replace(/\s*[|–—-]\s*(Mercado Livre|Mercado Libre|Amazon|Shopee|Kabum|Magazine Luiza).*$/i, "").trim();
+    if (!name || !isProductNameValid(name)) name = nameHint;
+    if (name && name.length >= 5) {
+      console.log(`[SEARCH_VERIFY] ✓ regex fallback: "${name.substring(0, 40)}" R$ ${minPrice}`);
+      return {
+        name: cleanProductName(name),
+        price: minPrice,
+        currency: "BRL",
+        available: true,
+        priceConfirmed: false,
+        nameSource: "SEARCH",
+      } as ScrapeResult;
     }
   }
 
