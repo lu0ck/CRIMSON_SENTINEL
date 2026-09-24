@@ -997,3 +997,33 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.26 fix: timeout do TRACKING TARGETS + progresso real (não fake) (#41)
+
+**Problema A — `ERRO: Job polling timed out`:** `addProduct` (modal ADD TRACKING TARGETS) usava `pollJob(..., 240_000)` — o menor timeout da fila scan. O job `scrape` pode legitimamente demorar 5–15+ min: cada estratégia tem timeout de 90s (`scraper.ts`), até ~9 estratégias em sequência, **3 tentativas** com backoff exponencial 30s/60s (`queues.ts`). Estado `delayed` (retry) era ignorado → frontend desistia aos 4 min com o worker ainda rodando.
+
+**Problema B — barra travada em 99%:** o progresso do modal era **100% simulado no cliente** (elapsed / 75s de estimativa) com **cap duro em 99** (`Math.min(..., 99)`). Saturava em ~74s e ficava em 99% até o job acabar ou o timeout estourar. Worker (`handleScrape`) nunca chamava `job.updateProgress`.
+
+**Escopo de #41:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| Timeout 600s | `App.tsx` (`addProduct`) | `pollJob(..., 2000, 600_000, "scan", onProgress)` — alinha com compare/Local/Mercado |
+| `pollJob` onProgress | `App.tsx` | 6º parâmetro opcional; repassa `job.progress` a cada poll; timeout com hint de retry (`tentativa N/3, estado: delayed`) |
+| Progresso real no worker | `scraper.ts` + `scanWorker.ts` | `ScrapeOptions.onProgress` → `job.updateProgress({ strategy, triedCount, totalStrategies, strategiesTried })` a cada estratégia |
+| Remover simulação 99% | `App.tsx` | useEffect fake (estMs por estratégia + cap 99) **removido**; checklist dinâmico (9 estratégias mapeadas) |
+| Barra de batch | `App.tsx` | `scrapeProgress.batchDone/batchTotal` (URLs concluídas no loop) + % da URL atual; label `N/M` + `% TOTAL` |
+| Reset | `App.tsx` | Reset em `finally` e `cancelScrape` |
+
+**Decisões:**
+- Timeout **600s** (não 240s): mesmo budget dos demais fluxos scan; cobre 1 tentativa cheia + backoff
+- Progresso **real** (worker), não timer fake — barra pode chegar a 100%
+- Batch progress é contagem de URLs no loop do cliente (independente de worker)
+- Com concorrência 2 URLs simultâneas, o % da URL atual é last-writer-wins (aceitável)
+- Fora de escopo: mudar `attempts`/backoff BullMQ, timeout de AI insight (240s), cancelamento server-side
+
+**Arquivos:** `src/App.tsx`, `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, docs.
+
+**Validação #41:** `npx tsc --noEmit` → 0; modal mostra `N/M` real + % de estratégias do worker; URL demorada não estoura toast em 4 min; timeout com retry exibe hint.
+
+---
+

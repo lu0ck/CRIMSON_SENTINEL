@@ -427,6 +427,15 @@ export interface ScrapeOptions {
   geminiApiKey?: string;
   serperApiKey?: string;
   tavilyApiKey?: string;
+  /** #41 — progresso real por estratégia (worker → job.updateProgress → UI) */
+  onProgress?: (p: ScrapeProgressInfo) => void;
+}
+
+export interface ScrapeProgressInfo {
+  strategy: string;
+  triedCount: number;
+  totalStrategies: number;
+  strategiesTried: string[];
 }
 
 type ScrapeStrategy = {
@@ -613,8 +622,11 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   console.log(`[Scraper] Strategy order: ${strategies.map(s => s.name).join(" -> ")}`);
 
   const partials: ScrapeResult[] = [];
+  const totalStrategies = strategies.length;
+  const strategiesTried: string[] = [];
 
-  for (const strategy of strategies) {
+  for (let si = 0; si < strategies.length; si++) {
+    const strategy = strategies[si];
     let strategyBrowser: any = null;
     const abortController = new AbortController();
     const timeoutMs = 90000;
@@ -622,6 +634,12 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
     try {
       console.log(`[Scraper] ========== Trying strategy: ${strategy.name} ==========`);
+      options.onProgress?.({
+        strategy: strategy.name,
+        triedCount: si,
+        totalStrategies,
+        strategiesTried: [...strategiesTried],
+      });
 
       const strategyPromise = (async () => {
         const res = await strategy.fn({ signal: abortController.signal });
@@ -658,6 +676,12 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
           fs.writeFileSync(cacheFile, JSON.stringify(merged));
           scraperBreaker.recordSuccess(domain);
+          options.onProgress?.({
+            strategy: "DONE",
+            triedCount: totalStrategies,
+            totalStrategies,
+            strategiesTried: [...strategiesTried, strategy.name],
+          });
           if (circuitOpen) {
             console.log(`[Scraper] ✅ Circuit CLOSED for ${domain} (probe ok)`);
           }
@@ -676,6 +700,7 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
     } finally {
       if (timeoutId) clearTimeout(timeoutId);
       abortController.abort();
+      strategiesTried.push(strategy.name);
     }
   }
 
@@ -684,12 +709,24 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   if (mergedFinal && mergedFinal.name && mergedFinal.name.length > 5 && isProductNameValid(mergedFinal.name)) {
     console.log(`[Scraper] ⚠️ Using best available merged result: R$ ${mergedFinal.price} — "${mergedFinal.name.substring(0, 50)}" (${mergedFinal.method})`);
     fs.writeFileSync(cacheFile, JSON.stringify(mergedFinal));
+    options.onProgress?.({
+      strategy: "DONE",
+      triedCount: totalStrategies,
+      totalStrategies,
+      strategiesTried: [...strategiesTried],
+    });
     return mergedFinal;
   }
 
   console.error("[Scraper] ✗✗✗ All strategies failed ✗✗✗");
   console.error("[Scraper] Strategies attempted:", strategies.map(s => s.name).join(", "));
   console.error("[Scraper] URL:", url);
+  options.onProgress?.({
+    strategy: "FAILED",
+    triedCount: totalStrategies,
+    totalStrategies,
+    strategiesTried: [...strategiesTried],
+  });
   scraperBreaker.recordFailure(domain);
   throw new Error(`Failed to scrape product data from all strategies (tried: ${strategies.map(s => s.name).join(", ")})`);
 }

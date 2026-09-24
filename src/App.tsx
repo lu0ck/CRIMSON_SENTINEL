@@ -177,7 +177,13 @@ export default function App() {
   const [comparingAll, setComparingAll] = useState(false);
   const [compareAllProgress, setCompareAllProgress] = useState<{ current: number; total: number; productName: string } | null>(null);
   const [abortController, setAbortController] = useState<AbortController | null>(null);
-  const [scrapeProgress, setScrapeProgress] = useState({ percent: 0, currentEngine: "", strategiesTried: [] as string[] });
+  const [scrapeProgress, setScrapeProgress] = useState({
+    percent: 0,
+    currentEngine: "",
+    strategiesTried: [] as string[],
+    batchDone: 0,
+    batchTotal: 0,
+  });
   const [scrapeResults, setScrapeResults] = useState<{ url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number }[]>([]);
   const [showScrapeLogDropdown, setShowScrapeLogDropdown] = useState(false);
 
@@ -449,51 +455,28 @@ export default function App() {
   }, []);
 
   const STRATEGIES = [
-    { name: "PLAYWRIGHT_STEALTH", label: "Playwright Stealth", estMs: 30000 },
-    { name: "PLAYWRIGHT_BASIC", label: "Playwright Basic", estMs: 25000 },
-    { name: "FETCH_FALLBACK", label: "Fetch Fallback", estMs: 5000 },
-    { name: "GEMINI_FALLBACK", label: "Gemini AI", estMs: 15000 },
+    { name: "PLAYWRIGHT_STEALTH", label: "Playwright Stealth" },
+    { name: "PLAYWRIGHT_LM_STUDIO_VISION", label: "LM Studio Vision" },
+    { name: "PLAYWRIGHT_LM_STUDIO_TEXT", label: "LM Studio Text" },
+    { name: "PLAYWRIGHT_BASIC", label: "Playwright Basic" },
+    { name: "NVIDIA_NIM", label: "NVIDIA NIM" },
+    { name: "GEMINI_VISION", label: "Gemini Vision" },
+    { name: "SEARCH_VERIFY", label: "Search Verify" },
+    { name: "FETCH_FALLBACK", label: "Fetch Fallback" },
+    { name: "GEMINI_FALLBACK", label: "Gemini AI" },
   ];
+  const strategyLabel = (name: string): string =>
+    STRATEGIES.find(s => s.name === name)?.label || name;
 
-  // Simulate scrape progress based on elapsed time
-  useEffect(() => {
-    if (!isLoading) {
-      setScrapeProgress({ percent: 0, currentEngine: "", strategiesTried: [] });
-      return;
-    }
-
-    const startTime = Date.now();
-    const interval = setInterval(() => {
-      const elapsed = Date.now() - startTime;
-      let accumulated = 0;
-      let currentIdx = 0;
-      const tried: string[] = [];
-
-      for (let i = 0; i < STRATEGIES.length; i++) {
-        if (elapsed >= accumulated + STRATEGIES[i].estMs) {
-          tried.push(STRATEGIES[i].name);
-          accumulated += STRATEGIES[i].estMs;
-          currentIdx = i + 1;
-        } else {
-          break;
-        }
-      }
-
-      const basePercent = tried.length / STRATEGIES.length * 100;
-      const nextStrategy = STRATEGIES[Math.min(currentIdx, STRATEGIES.length - 1)];
-      const withinCurrent = elapsed - accumulated;
-      const currentProgress = Math.min(withinCurrent / nextStrategy.estMs, 1) * (100 / STRATEGIES.length);
-      const percent = Math.min(basePercent + currentProgress, 99);
-
-      setScrapeProgress({
-        percent,
-        currentEngine: tried.length < STRATEGIES.length ? nextStrategy.label : "Finalizando...",
-        strategiesTried: tried,
-      });
-    }, 300);
-
-    return () => clearInterval(interval);
-  }, [isLoading]);
+  // #41 — progresso real: batch (URLs) + % da URL atual vinda do worker.
+  // A simulação por tempo (cap 99%) foi removida — engatava em 99% em ~74s.
+  const overallScrapePercent = (): number => {
+    const { batchDone, batchTotal, percent } = scrapeProgress;
+    if (batchTotal <= 0) return 0;
+    if (batchDone >= batchTotal) return 100;
+    const frac = Math.min(Math.max(percent, 0), 100) / 100;
+    return Math.min(100, ((batchDone + frac) / batchTotal) * 100);
+  };
 
   // Close scrape log dropdown on outside click
   useEffect(() => {
@@ -905,9 +888,12 @@ const deleteComparisonResult = (productId: string, index: number) => {
     signal?: AbortSignal,
     intervalMs = 2000,
     timeoutMs = 590_000,
-    queue = "scan"
+    queue = "scan",
+    onProgress?: (p: any) => void
   ): Promise<any> => {
     const deadline = Date.now() + timeoutMs;
+    let lastState = "unknown";
+    let lastAttempts = 0;
     while (Date.now() < deadline) {
       if (signal?.aborted) {
         const err: any = new Error("Aborted");
@@ -920,6 +906,12 @@ const deleteComparisonResult = (productId: string, index: number) => {
         throw new Error(errData.error || "Job status fetch failed");
       }
       const job = await res.json();
+      lastState = job.state || lastState;
+      lastAttempts = job.attemptsMade ?? lastAttempts;
+      // #41 — progresso real do worker (estratégias do scrape, etc.)
+      if (onProgress && job.progress && typeof job.progress === "object") {
+        onProgress(job.progress);
+      }
       if (job.state === "completed") return job.returnvalue;
       if (job.state === "failed") throw new Error(job.failedReason || "Job failed");
       await new Promise(r => setTimeout(r, intervalMs));
@@ -929,7 +921,11 @@ const deleteComparisonResult = (productId: string, index: number) => {
         throw err;
       }
     }
-    throw new Error("Job polling timed out");
+    const retryHint =
+      lastAttempts > 0 || lastState === "delayed"
+        ? ` (retry, tentativa ${lastAttempts}/3, estado: ${lastState})`
+        : "";
+    throw new Error(`Job polling timed out${retryHint}`);
   };
 
   const addProduct = async () => {
@@ -947,12 +943,20 @@ const deleteComparisonResult = (productId: string, index: number) => {
     setIsLoading(true);
     const controller = new AbortController();
     setAbortController(controller);
-    
+
     setSystemMessage(`INITIATING SCRAPE SEQUENCE FOR ${urls.length} TARGETS...`);
     playSound('scan');
-    
+    setScrapeProgress({
+      percent: 0,
+      currentEngine: "",
+      strategiesTried: [],
+      batchDone: 0,
+      batchTotal: urls.length,
+    });
+
     let successCount = 0;
     let failCount = 0;
+    let batchDone = 0;
     const batchResults: typeof scrapeResults = [];
 
     try {
@@ -1026,7 +1030,24 @@ const queued = await response.json();
     if (!queued.jobId) throw new Error(queued.error || "Scrape queueing failed");
 
     // FASE 4: aguarda o worker processar via polling
-    const info = await pollJob(queued.jobId, controller.signal, 2000, 240_000);
+    // #41 — timeout 240s→600s (scraper multi-stratégia 90s cada + retries 30s/60s
+    // legitimamente passam de 4 min); onProgress = % real de estratégias.
+    const info = await pollJob(queued.jobId, controller.signal, 2000, 600_000, "scan", (p) => {
+      const total = Number(p.totalStrategies) || 1;
+      const tried = Number(p.triedCount) || 0;
+      const engine =
+        p.strategy === "DONE"
+          ? "Finalizando..."
+          : p.strategy === "FAILED"
+          ? "Todas as estratégias falharam"
+          : strategyLabel(String(p.strategy || ""));
+      setScrapeProgress(prev => ({
+        ...prev,
+        percent: Math.min(100, Math.round((tried / total) * 100)),
+        currentEngine: engine,
+        strategiesTried: Array.isArray(p.strategiesTried) ? p.strategiesTried : prev.strategiesTried,
+      }));
+    });
 
     if (info?.method) {
       setSystemMessage(`DATA EXTRACTED VIA: ${info.method.toUpperCase()}`);
@@ -1092,6 +1113,16 @@ const queued = await response.json();
             successCount++;
           }
         });
+
+        // #41 — progresso real do batch: incrementa após cada chunk (sucesso ou falha)
+        batchDone = Math.min(urls.length, i + chunk.length);
+        setScrapeProgress(prev => ({
+          ...prev,
+          batchDone,
+          percent: 0,
+          currentEngine: "",
+          strategiesTried: [],
+        }));
       }
       
       // Final re-fetch to ensure everything is in sync
@@ -1111,6 +1142,7 @@ const queued = await response.json();
     } finally {
       setIsLoading(false);
       setAbortController(null);
+      setScrapeProgress({ percent: 0, currentEngine: "", strategiesTried: [], batchDone: 0, batchTotal: 0 });
     }
   };
 
@@ -1119,6 +1151,7 @@ const queued = await response.json();
       abortController.abort();
       setAbortController(null);
       setIsLoading(false);
+      setScrapeProgress({ percent: 0, currentEngine: "", strategiesTried: [], batchDone: 0, batchTotal: 0 });
       setSystemMessage("SCRAPE SEQUENCE ABORTED");
       playSound('error');
     }
@@ -2524,19 +2557,29 @@ const queued = await response.json();
               
               {isLoading && (
                 <div className="flex flex-col gap-3 py-2">
-                  {/* Progress bar */}
+                  {/* Progress bar — #41: batch real (URLs) + % da URL atual (worker) */}
                   <div className="flex items-center gap-3">
                     <div className="flex-1 h-2 bg-crimson/10 overflow-hidden border border-crimson/20">
                       <motion.div
                         className="h-full bg-crimson shadow-[0_0_8px_rgba(220,20,60,0.6)]"
-                        animate={{ width: `${scrapeProgress.percent}%` }}
+                        animate={{ width: `${overallScrapePercent()}%` }}
                         transition={{ duration: 0.3 }}
                       />
                     </div>
-                    <span className="text-xs font-mono font-bold text-crimson w-12 text-right">
-                      {Math.round(scrapeProgress.percent)}%
+                    <span className="text-xs font-mono font-bold text-crimson w-20 text-right">
+                      {scrapeProgress.batchTotal > 0
+                        ? `${scrapeProgress.batchDone}/${scrapeProgress.batchTotal}`
+                        : `${Math.round(overallScrapePercent())}%`}
                     </span>
                   </div>
+                  {scrapeProgress.batchTotal > 0 && (
+                    <div className="flex items-center justify-between text-[10px] font-mono text-crimson/60">
+                      <span>
+                        URL ATUAL: {Math.round(scrapeProgress.percent)}% de estratégias
+                      </span>
+                      <span>{Math.round(overallScrapePercent())}% TOTAL</span>
+                    </div>
+                  )}
 
                   {/* Current engine */}
                   {scrapeProgress.currentEngine && (
@@ -2548,32 +2591,39 @@ const queued = await response.json();
                     </div>
                   )}
 
-                  {/* Strategy checklist */}
+                  {/* Strategy checklist — dinâmico (vem do worker) */}
                   <div className="flex flex-col gap-1">
-                    {STRATEGIES.map((s) => {
-                      const tried = scrapeProgress.strategiesTried.includes(s.name);
-                      const isCurrent = scrapeProgress.currentEngine === s.label;
-                      return (
-                        <div key={s.name} className="flex items-center gap-2">
-                          <span className={cn(
-                            "w-3 h-3 flex items-center justify-center text-[8px] font-mono border",
-                            tried ? "text-green-500 border-green-500/50" :
-                            isCurrent ? "text-crimson border-crimson animate-pulse" :
-                            "text-crimson/20 border-crimson/10"
-                          )}>
-                            {tried ? "✓" : isCurrent ? "●" : "○"}
-                          </span>
-                          <span className={cn(
-                            "text-[10px] font-mono",
-                            tried ? "text-green-500/70" :
-                            isCurrent ? "text-crimson" :
-                            "text-crimson/20"
-                          )}>
-                            {s.label}
-                          </span>
-                        </div>
-                      );
-                    })}
+                    {(() => {
+                      const names = [...new Set([
+                        ...scrapeProgress.strategiesTried,
+                        ...STRATEGIES.map(s => s.name),
+                      ])];
+                      const currentName = STRATEGIES.find(s => s.label === scrapeProgress.currentEngine)?.name;
+                      return names.map((name) => {
+                        const tried = scrapeProgress.strategiesTried.includes(name);
+                        const isCurrent = name === currentName && !tried;
+                        return (
+                          <div key={name} className="flex items-center gap-2">
+                            <span className={cn(
+                              "w-3 h-3 flex items-center justify-center text-[8px] font-mono border",
+                              tried ? "text-green-500 border-green-500/50" :
+                              isCurrent ? "text-crimson border-crimson animate-pulse" :
+                              "text-crimson/20 border-crimson/10"
+                            )}>
+                              {tried ? "✓" : isCurrent ? "●" : "○"}
+                            </span>
+                            <span className={cn(
+                              "text-[10px] font-mono",
+                              tried ? "text-green-500/70" :
+                              isCurrent ? "text-crimson" :
+                              "text-crimson/20"
+                            )}>
+                              {strategyLabel(name)}
+                            </span>
+                          </div>
+                        );
+                      });
+                    })()}
                   </div>
                 </div>
               )}

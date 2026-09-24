@@ -66,6 +66,10 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
     geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
     serperApiKey: profile?.serperApiKey,
     tavilyApiKey: profile?.tavilyApiKey,
+    // #41 — progresso real por estratégia (UI deixa de simular/engatar em 99%)
+    onProgress: (p) => {
+      void job.updateProgress(p).catch(() => {});
+    },
   });
 
   if (productId && info?.price) {
