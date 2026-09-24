@@ -26,3 +26,6 @@ python_instagram/.ig.env
 .wwebjs_auth/
 python_instagram/__pycache__/
 python_instagram/session.json
+
+# runtime artifacts
+.last-open-browser

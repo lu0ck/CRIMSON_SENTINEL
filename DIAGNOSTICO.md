@@ -1095,3 +1095,29 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.29 fix: alerta falso no Telegram (preço de frete/parcela ≤ alvo) (#44)
+
+**Problema:** Telegram: "Pasta Térmica GD900 atingiu o preço-alvo! R$ 7,18 ≤ R$ 20" — página real R$ 26,79. Mesmo caso "Kit 3 Fans R$ 9,62".
+
+**Causa raiz (3 camadas):**
+1. Prompt do NVIDIA no `SEARCH_VERIFY` pedia *"MENOR preço"* → extraía frete/parcela/preço-por-unidade do snippet (ex.: R$ 7,18).
+2. O merge **detectava** o lixo (`⚠️ Merged price ... unrealistic` — `isPriceRealistic` exige ≥R$ 15 p/ pasta térmica) mas o **fallback final (`scraper.ts`) só validava o nome** e devolve+cachava o preço irreal mesmo assim.
+3. `scanWorker` comparava `currentPrice <= targetPrice` **sem nenhuma validação** → alerta.
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| `isPriceRealistic` exportado | `scraper.ts` | passa a ser FONTE ÚNICA também p/ o worker |
+| Fallback do scraper rejeita preço irreal | `scraper.ts` | se `!isPriceRealistic` → `return null`, **sem cache** (em vez de devolver lixo) |
+| Gate no worker (2 call sites) | `scanWorker.ts` | `handleScrape` + `handleScanAll`: preço irreal → **não persiste**, não empurra histórico, **não alerta**, não dispara flash; log `preço irreal descartado` |
+| Prompt NVIDIA | `scraper.ts` | "preço à vista do produto — ignore frete, parcelas, preço por unidade/grama" + `isPriceRealistic` na aceitação |
+| Reparo de dados | DB | `o8k1d3` → `current_price=26.79`; entrada 7.18 apagada do `price_history` |
+| Higiene | `.gitignore` | `.last-open-browser` (artefato de runtime) removido do repo |
+
+**Validação #44:** `tsc` → 0; re-scrape da URL da pasta (job 500, cache limpo) → **nenhum alerta**, DB manteve R$ 26,79, `price_history` sem 7,18 (ML segue em bot-wall → scrape falha com motivo claro em vez de preço falso — comportamento desejada).
+
+**Arquivos:** `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, `.gitignore`, docs.
+
+---
+
