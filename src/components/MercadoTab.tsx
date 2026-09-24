@@ -1077,9 +1077,9 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                 </div>
                 <div className="flex flex-col gap-1">
                   <label className={labelCls}>REDE / CHAIN</label>
-                  <input className={inputCls} value={estChain} onChange={(e) => setEstChain(e.target.value)} placeholder="TATICO, BRETAS, CARREFOUR..." />
+                  <input className={inputCls} value={estChain} onChange={(e) => setEstChain(e.target.value)} placeholder="TATICO, BRETAS, EXTRA, ZAFFARI, SENDAS..." />
                   <span className="text-[9px] font-mono text-crimson/40">
-                    SEM URL DE PREÇO — USA BUSCA "«ITEM» «REDE» PREÇO" (#32)
+                    SEM URL DE PREÇO — USA BUSCA "«ITEM» «REDE» PREÇO" (#32/#38)
                   </span>
                 </div>
                 <div className="flex flex-col gap-1 md:col-span-2">

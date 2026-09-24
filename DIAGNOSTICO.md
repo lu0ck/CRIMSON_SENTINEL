@@ -915,3 +915,27 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.23 expandir seed de market-handlers (#38)
+
+**Problema:** decisão aberta em §6.17/§6.18 — “seed de redes **não** expandido neste commit (6 do #32; expandir conforme OSM/UI)”. Com só 6 redes (tatico, bretas, carrefour, pao-de-acucar, assai, atacadao), a maioria dos `establishments` descobertos via OSM (`tags.brand` → `chain`) ou digitados na UI REDE caía no **Tier 3** (skip) e o Tier 1 search nunca rodava.
+
+**Escopo de #38 (só registry + placeholder de UI):**
+
+| Change | Detalhe |
+|---|---|
+| Seed `marketHandlers` | 6 → **31** entradas — nacionais (Extra, Ponto, Minasu, Mundial, Sam's Club, 7-Eleven…) e regionais (Zaffari/SC-RS, Bomboniere, Prezunic, Sendas/Fortaleza, Angeloni, Diana, Verdemar, Gbarbosa, Imperatriz, Bonanza, Parcela Amarela, Sonda…) |
+| Matching | inalterado — `resolveMarketHandler` + `normalizeText` (aliases com ≥5 chars no includes bidirecional) |
+| UI REDE | placeholder MercadoTab atualizado (lista de exemplos); hint `#32/#38` |
+| Cascade/bulk | **sem mudança** — cap `MARKET_SEARCH_BULK_MAX = 8` continua (#33) |
+
+**Arquivos:** `src/lib/market-handlers.ts`, `MercadoTab.tsx` (placeholder), docs.
+
+**Decisões:**
+- Redes escolhidas p/ cobertura OSM típica BR (GPA, Zaffari group, Sendas, Sul, Nordeste) — não é catálogo exaustivo; crescer via OSM/UI
+- Sem alteração de custo: bulk continua cap 8/run; search explícito por `establishmentId` continua ilimitado (#32)
+- `searchLabel` em pt para a query `«item» «rede» preço`
+
+**Validação #38:** `npx tsc --noEmit` → 0; `resolveMarketHandler("Zaffari")` / `("Sendas")` / `("Extra")` → handler não-null; chains fora do seed → null (Tier 3).
+
+---
+

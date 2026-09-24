@@ -2,6 +2,7 @@
 // Quando establishments.price_url está vazio, o scan local usa chain/nome
 // para montar query "«item» «rede» preço" (Serper/Tavily) e extrair preço
 // via NVIDIA/Gemini — mesmo espírito do store-handlers, mas por rede.
+// #38 — seed expandido (6 → 26+ redes nacionais/regionais; §6.23).
 
 import OpenAI from "openai";
 import { GoogleGenAI } from "@google/genai";
@@ -46,6 +47,131 @@ export const marketHandlers: MarketHandler[] = [
     chainKey: "atacadao",
     aliases: ["atacadao", "atacadao atacadista", "grupo atacadista atacadao"],
     searchLabel: "Atacadao",
+  },
+  {
+    chainKey: "extra",
+    aliases: ["extra", "supermercado extra", "hiper extra", "extra supermercados"],
+    searchLabel: "Extra Supermercados",
+  },
+  {
+    chainKey: "ponto",
+    aliases: ["ponto", "ponto extra", "supermercado ponto", "gpa ponto"],
+    searchLabel: "Ponto Extra",
+  },
+  {
+    chainKey: "minasu",
+    aliases: ["minasu", "supermercado minasu"],
+    searchLabel: "Minasu",
+  },
+  {
+    chainKey: "mundial",
+    aliases: ["mundial", "supermercados mundial", "supermercado mundial"],
+    searchLabel: "Supermercados Mundial",
+  },
+  {
+    chainKey: "zaffari",
+    aliases: ["zaffari", "supermercados zaffari", "extra zaffari"],
+    searchLabel: "Zaffari",
+  },
+  {
+    chainKey: "bomboniere",
+    aliases: ["bomboniere", "supermercados bomboniere"],
+    searchLabel: "Bomboniere",
+  },
+  {
+    chainKey: "prezunic",
+    aliases: ["prezunic", "supermercados prezunic"],
+    searchLabel: "Prezunic",
+  },
+  {
+    chainKey: "sendas",
+    aliases: ["sendas", "supermercados sendas", "sendas atacarejo"],
+    searchLabel: "Sendas",
+  },
+  {
+    chainKey: "sendas-fortaleza",
+    aliases: ["sendas fortaleza", "supermercado fortaleza", "supermercados fortaleza"],
+    searchLabel: "Sendas Fortaleza",
+  },
+  {
+    chainKey: "angeloni",
+    aliases: ["angeloni", "supermercados angeloni"],
+    searchLabel: "Angeloni",
+  },
+  {
+    chainKey: "diana",
+    aliases: ["diana", "supermercados diana", "diana supermercados"],
+    searchLabel: "Diana Supermercados",
+  },
+  {
+    chainKey: "verdemar",
+    aliases: ["verdemar", "supermercados verdemar"],
+    searchLabel: "Verdemar",
+  },
+  {
+    chainKey: "supermercados-real",
+    aliases: ["supermercados real", "supermercado real"],
+    searchLabel: "Supermercados Real",
+  },
+  {
+    chainKey: "sams-club",
+    aliases: ["sams club", "samsclub", "sam s club"],
+    searchLabel: "Sam's Club",
+  },
+  {
+    chainKey: "parcela-amarela",
+    aliases: ["parcela amarela", "supermercados parcela amarela"],
+    searchLabel: "Parcela Amarela",
+  },
+  {
+    chainKey: "imperatriz",
+    aliases: ["supermercados imperatriz", "imperatriz supermercados"],
+    searchLabel: "Supermercados Imperatriz",
+  },
+  {
+    chainKey: "bonanza",
+    aliases: ["supermercados bonanza", "bonanza supermercados"],
+    searchLabel: "Supermercados Bonanza",
+  },
+  {
+    chainKey: "gbarbosa",
+    aliases: ["gbarbosa", "grupo gbarbosa", "supermercados gbarbosa"],
+    searchLabel: "Gbarbosa",
+  },
+  {
+    chainKey: "sonda",
+    aliases: ["sonda", "sonda supermercados", "supermercados sonda"],
+    searchLabel: "Sonda Supermercados",
+  },
+  {
+    chainKey: "seven-eleven",
+    aliases: ["7 eleven", "seven eleven", "sete e meio"],
+    searchLabel: "7-Eleven",
+  },
+  {
+    chainKey: "supermercados-ideal",
+    aliases: ["supermercados ideal", "supermercado ideal"],
+    searchLabel: "Supermercados Ideal",
+  },
+  {
+    chainKey: "atacadao-da-familia",
+    aliases: ["atacadao da familia", "atacadao familia"],
+    searchLabel: "Atacadão da Família",
+  },
+  {
+    chainKey: "super-bom-preco",
+    aliases: ["super bom preco", "supermercado super bom preco"],
+    searchLabel: "Super Bom Preço",
+  },
+  {
+    chainKey: "redebompreco",
+    aliases: ["rede bom preco", "redebompreco"],
+    searchLabel: "Rede Bom Preço",
+  },
+  {
+    chainKey: "hiper-rio",
+    aliases: ["hiper rio", "supermercado hiper rio"],
+    searchLabel: "Hiper Rio",
   },
 ];
 

@@ -52,6 +52,7 @@
 - ~~**sendWhatsappMessage lista+rota → operador**~~ — **RESOLVIDO (#35)**: só `@c.us` + composer + endpoint + botão + setting `whatsapp_operator_chat_id`; sem auto-send. DIAGNOSTICO §6.20.
 - ~~**múltiplas listas nomeadas + export CSV/TXT com melhor preço**~~ — **RESOLVIDO (#36)**: `shopping_lists`/`list_id`, seletor Mercado (localStorage), export da lista aberta com preços (CSV escape RFC4180 + TXT). DIAGNOSTICO §6.21.
 - ~~**export lista LISTS (Product Archives)**~~ — **RESOLVIDO (#37)**: botões CSV/TXT/COPIAR no header da lista aberta; nome + link + menor preço (client-side). DIAGNOSTICO §6.22.
+- ~~**expandir seed de market-handlers**~~ — **RESOLVIDO (#38)**: registry 6 → 31 redes (nacionais + regionais BR); placeholder REDE na UI; cascade/bulk inalterados (cap 8). DIAGNOSTICO §6.23.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---
@@ -111,7 +112,7 @@
 **Fontes de dados → ferramentas:**
 | Fonte | Ferramenta atual | Ações |
 |---|---|---|
-| **Sites dos comércios** (Tatico, Bretas, etc.) | ~~`store-handlers` + novo registry **`market-handlers`** por rede + **Serper/Tavily** na busca "«item» «rede» preço"~~ — **FEITO (#32)**: `src/lib/market-handlers.ts` (seed 6 redes) + cascade sem `price_url`; DIAGNOSTICO §6.17 | Extração via **Gemini/NVIDIA**; sem catálogo web → **`socialDependent`** (coleta social) |
+| **Sites dos comércios** (Tatico, Bretas, etc.) | ~~`store-handlers` + novo registry **`market-handlers`** por rede + **Serper/Tavily** na busca "«item» «rede» preço"~~ — **FEITO (#32)**: `src/lib/market-handlers.ts` + cascade sem `price_url`; DIAGNOSTICO §6.17 — seed expandido **#38** (31 redes, §6.23) | Extração via **Gemini/NVIDIA**; sem catálogo web → **`socialDependent`** (coleta social) |
 | **Stories dos mercados** (Instagram) | venv `instagrapi` (:8721) + **Gemini Vision** | ~~Reconhecimento de preço na imagem → vira observação local~~ — **FEITO (#34)**: dual-write promo+obs (`source:"instagram"`, 24h); DIAGNOSTICO §6.19 |
 | **Grupos de promoções no WhatsApp** | `whatsapp-web.js` (`message_create` filtrando grupos) | ~~Parse → Gemini → observação local~~ — **FEITO (#34)**: bridge `whatsapp`/`telegram` + flash A/C; §6.19 |
 | **Status de contatos de mercado** | já implementado | continua |
