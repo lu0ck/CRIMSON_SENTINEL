@@ -21,7 +21,7 @@ import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, lis
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
-import { ShoppingListRepository } from "./src/repositories/shoppingListRepository.ts";
+import { ShoppingListRepository, ShoppingListsRepository, DEFAULT_LIST_ID } from "./src/repositories/shoppingListRepository.ts";
 import { PriceObservationRepository } from "./src/repositories/priceObservationRepository.ts";
 import { PromotionRepository } from "./src/repositories/promotionRepository.ts";
 import { RouteRepository } from "./src/repositories/routeRepository.ts";
@@ -912,9 +912,44 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // #36 — listas nomeadas (workstation, cozinha, ...)
+  app.get("/api/shopping-lists", (_req, res) => {
+    try {
+      res.json(ShoppingListsRepository.getAll());
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.post("/api/shopping-lists", (req, res) => {
+    try {
+      const { id, name } = req.body || {};
+      if (!String(name || "").trim()) {
+        return res.status(400).json({ error: "nome da lista é obrigatório" });
+      }
+      const list = ShoppingListsRepository.save({ id, name: String(name) });
+      res.json({ status: "ok", list });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
+  app.delete("/api/shopping-lists/:id", (req, res) => {
+    try {
+      if (req.params.id === DEFAULT_LIST_ID) {
+        return res.status(400).json({ error: "não é possível excluir a lista Geral" });
+      }
+      ShoppingListsRepository.delete(req.params.id);
+      res.json({ status: "ok" });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   app.get("/api/shopping-list-items", (req, res) => {
     try {
-      res.json(ShoppingListRepository.getAll());
+      const listId = req.query.listId as string | undefined;
+      res.json(ShoppingListRepository.getAll(listId));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
@@ -928,6 +963,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         const u = normalizeUnit(body.unit);
         body.unit = u;
       }
+      if (!body.listId) body.listId = DEFAULT_LIST_ID;
       ShoppingListRepository.save(body);
       res.json({ status: "ok", item: ShoppingListRepository.getById(req.body.id) });
     } catch (error: any) {
@@ -1612,11 +1648,12 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   // ---- INSIGHTS LOCAIS (FASE 7) -------------------------------------------
 
   // Análise determinística imediata (sem rede): melhor estabelecimento por item,
-  // custo por estabelecimento, economia entre estratégias.
+  // custo por estabelecimento, economia entre estratégias. #36: ?listId= filtra a lista aberta.
   app.get("/api/local-insights", (req, res) => {
     try {
+      const listId = req.query.listId as string | undefined;
       const insights = buildLocalInsights(
-        ShoppingListRepository.getAll(),
+        ShoppingListRepository.getAll(listId),
         PriceObservationRepository.getAll(),
         EstablishmentRepository.getAll(),
         PromotionRepository.getAll()
@@ -1834,23 +1871,126 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  // ---- SHOPPING LIST EXPORT/IMPORT ----
+  // ---- SHOPPING LIST EXPORT/IMPORT (#36 — lista aberta + preços) ----
   app.get("/api/shopping-list-items/export", (req, res) => {
     try {
-      const format = (req.query.format as string) || "json";
-      const items = ShoppingListRepository.getAll();
-      if (format === "csv") {
-        const headers = "name,quantity,unit,category,checked,targetPrice,productId";
-        const rows = items.map((it) =>
-          [it.name, it.quantity ?? 1, it.unit ?? "", it.category ?? "", it.checked ? "1" : "0", it.targetPrice ?? "", it.productId ?? ""].join(",")
+      const format = (req.query.format as string) || "json"; // json | csv | txt
+      const listId = (req.query.listId as string) || undefined;
+      const withPrices = req.query.prices !== "0"; // default: inclui melhor preço
+      const items = ShoppingListRepository.getAll(listId);
+
+      let listName = "lista-compras";
+      if (listId) {
+        const list = ShoppingListsRepository.getById(listId);
+        if (list?.name) listName = list.name.replace(/[^\w\-]+/g, "_").slice(0, 40);
+      }
+
+      // Melhor preço por item (mesmo fonte do LocalTab insights)
+      const bestByItem = new Map<
+        string,
+        { bestPrice: number; bestEstablishmentName: string; promotionApplied: boolean; withinTarget: boolean }
+      >();
+      if (withPrices) {
+        const insights = buildLocalInsights(
+          items,
+          PriceObservationRepository.getAll(),
+          EstablishmentRepository.getAll(),
+          PromotionRepository.getAll({ activeOnly: true })
         );
+        for (const i of insights.items) {
+          bestByItem.set(i.itemId, {
+            bestPrice: i.bestPrice,
+            bestEstablishmentName: i.bestEstablishmentName,
+            promotionApplied: i.promotionApplied,
+            withinTarget: i.withinTarget,
+          });
+        }
+      }
+
+      const csvEscape = (v: unknown): string => {
+        const s = v === null || v === undefined ? "" : String(v);
+        return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+      };
+      const fmtNum = (n?: number): string =>
+        n === undefined || n === null || !Number.isFinite(n)
+          ? ""
+          : String(Math.round(n * 100) / 100);
+
+      if (format === "csv") {
+        const priceCols = withPrices
+          ? ",bestPrice,bestStore,promotionApplied,withinTarget"
+          : "";
+        const headers =
+          `name,quantity,unit,category,checked,targetPrice,productId,listId${priceCols}`;
+        const rows = items.map((it) => {
+          const base = [
+            it.name,
+            it.quantity ?? 1,
+            it.unit ?? "",
+            it.category ?? "",
+            it.checked ? "1" : "0",
+            it.targetPrice ?? "",
+            it.productId ?? "",
+            it.listId ?? "",
+          ].map(csvEscape);
+          if (withPrices) {
+            const b = bestByItem.get(it.id);
+            base.push(
+              b ? fmtNum(b.bestPrice) : "",
+              b?.bestEstablishmentName ?? "",
+              b ? (b.promotionApplied ? "1" : "0") : "",
+              b ? (b.withinTarget ? "1" : "0") : ""
+            );
+          }
+          return base.join(",");
+        });
         const csv = [headers, ...rows].join("\n");
         res.setHeader("Content-Type", "text/csv; charset=utf-8");
-        res.setHeader("Content-Disposition", 'attachment; filename="lista-compras.csv"');
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${listName}.csv"`
+        );
         res.send(csv);
+      } else if (format === "txt") {
+        const lines: string[] = [];
+        lines.push(`🛡️ [SENTINELA] LISTA — ${listName} (${items.length} itens)`);
+        lines.push(`exportado: ${new Date().toLocaleString("pt-BR")}`);
+        lines.push("");
+        items.forEach((it, idx) => {
+          const qty = `${it.quantity ?? 1}${it.unit ? " " + it.unit : ""}`;
+          const b = withPrices ? bestByItem.get(it.id) : undefined;
+          const price =
+            b && b.bestPrice > 0
+              ? ` | melhor: R$ ${b.bestPrice.toFixed(2)} em ${b.bestEstablishmentName}${b.promotionApplied ? " (PROMO)" : ""}`
+              : withPrices
+                ? " | sem preço"
+                : "";
+          const target = it.targetPrice ? ` | alvo R$ ${it.targetPrice.toFixed(2)}` : "";
+          const checked = it.checked ? " [x]" : " [ ]";
+          lines.push(
+            `${idx + 1}. ${checked} ${it.name} — ${qty}${price}${target}`
+          );
+        });
+        if (withPrices) {
+          const total = [...bestByItem.values()]
+            .filter((b) => b.bestPrice > 0)
+            .reduce((s, b) => s + b.bestPrice, 0);
+          lines.push("");
+          lines.push(`💵 Total melhor preço (só itens com preço): R$ ${total.toFixed(2)}`);
+        }
+        const txt = lines.join("\n");
+        res.setHeader("Content-Type", "text/plain; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${listName}.txt"`
+        );
+        res.send(txt);
       } else {
         res.setHeader("Content-Type", "application/json");
-        res.setHeader("Content-Disposition", 'attachment; filename="lista-compras.json"');
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="${listName}.json"`
+        );
         res.json(items);
       }
     } catch (error: any) {
@@ -1860,7 +2000,11 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
   app.post("/api/shopping-list-items/import", (req, res) => {
     try {
-      const items = req.body;
+      const body = req.body;
+      // Aceita array puro ou { listId, items: [] }
+      const items = Array.isArray(body) ? body : body?.items;
+      const listId =
+        (!Array.isArray(body) && body?.listId) || DEFAULT_LIST_ID;
       if (!Array.isArray(items)) {
         return res.status(400).json({ error: "Esperado um array de itens" });
       }
@@ -1870,6 +2014,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
         if (!item.id) {
           item.id = `item-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
         }
+        if (!item.listId) item.listId = listId;
         ShoppingListRepository.save(item);
         imported++;
       }

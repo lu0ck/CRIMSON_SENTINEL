@@ -152,6 +152,7 @@ export interface ShoppingListItemRow {
   checked: number;
   target_price: number | null;
   product_id: string | null;
+  list_id: string | null;
   created_at: string;
 }
 
@@ -246,6 +247,7 @@ export function shoppingListItemRowToShoppingListItem(row: ShoppingListItemRow):
     checked: !!row.checked,
     targetPrice: row.target_price ?? undefined,
     productId: row.product_id ?? undefined,
+    listId: row.list_id ?? undefined,
   };
 }
 

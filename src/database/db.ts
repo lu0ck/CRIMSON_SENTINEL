@@ -80,8 +80,14 @@ export function getDb(): Database.Database {
   ensureColumn("route_stops", "arrival_time_estimate", "arrival_time_estimate TEXT");
   ensureColumn("route_stops", "quiet_score", "quiet_score REAL");
 
-  // shopping_list_items: FK opcional para products (FASE 5)
+  // shopping_list_items: FK opcional para products (FASE 5) + list_id (#36)
   ensureColumn("shopping_list_items", "product_id", "product_id TEXT");
+  ensureColumn("shopping_list_items", "list_id", "list_id TEXT");
+  // Seed + backfill: itens legados sem lista vão para "Geral"
+  db.prepare(
+    `UPDATE shopping_list_items SET list_id = 'list-geral'
+     WHERE list_id IS NULL OR list_id = ''`
+  ).run();
 
   // notification_log: details JSON para URLs/snippets (compare)
   ensureColumn("notification_log", "details", "details TEXT");

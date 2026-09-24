@@ -78,6 +78,18 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const [promotions, setPromotions] = useState<Promotion[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // #36 — listas nomeadas (workstation, cozinha, ...)
+  const [shoppingLists, setShoppingLists] = useState<{ id: string; name: string }[]>([]);
+  const [activeListId, setActiveListId] = useState<string>(() => {
+    try {
+      return localStorage.getItem("sentinela_active_shopping_list") || "list-geral";
+    } catch {
+      return "list-geral";
+    }
+  });
+  const [newListName, setNewListName] = useState("");
+  const [showListForm, setShowListForm] = useState(false);
+
   const [showEstForm, setShowEstForm] = useState(false);
   const [showItemForm, setShowItemForm] = useState(false);
   const [showPromoForm, setShowPromoForm] = useState(false);
@@ -211,12 +223,21 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
     }
   };
 
+  const loadLists = async () => {
+    try {
+      const data = await apiJson("/api/shopping-lists");
+      setShoppingLists(Array.isArray(data) ? data : []);
+    } catch {
+      setShoppingLists([]);
+    }
+  };
+
   const loadAll = async () => {
     setLoading(true);
     try {
       const [e, i, o, p] = await Promise.all([
         apiJson("/api/establishments"),
-        apiJson("/api/shopping-list-items"),
+        apiJson(`/api/shopping-list-items?listId=${encodeURIComponent(activeListId)}`),
         apiJson("/api/price-observations"),
         apiJson("/api/promotions"),
       ]);
@@ -230,6 +251,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       setLoading(false);
     }
     loadDupPairs();
+    loadLists();
   };
 
   useEffect(() => {
@@ -241,7 +263,58 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
     }, 60_000);
     return () => clearInterval(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeListId]);
+
+  const selectList = (id: string) => {
+    setActiveListId(id);
+    try {
+      localStorage.setItem("sentinela_active_shopping_list", id);
+    } catch {
+      // ignore
+    }
+    playSound("click");
+  };
+
+  const createList = async () => {
+    const name = newListName.trim();
+    if (!name) {
+      toast("NOME DA LISTA OBRIGATÓRIO", "error");
+      return;
+    }
+    try {
+      const res = await apiJson("/api/shopping-lists", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name }),
+      });
+      const list = res?.list;
+      toast(`LISTA "${list?.name || name}" CRIADA`, "success");
+      setNewListName("");
+      setShowListForm(false);
+      await loadLists();
+      if (list?.id) selectList(list.id);
+    } catch (err: any) {
+      toast("FALHA AO CRIAR LISTA", "error", String(err?.message || err));
+    }
+  };
+
+  const deleteList = async (id: string) => {
+    if (id === "list-geral") {
+      toast("NÃO É POSSÍVEL EXCLUIR A LISTA GERAL", "error");
+      return;
+    }
+    const list = shoppingLists.find((l) => l.id === id);
+    if (!confirm(`Excluir lista "${list?.name || id}" e TODOS os itens dela?`)) return;
+    try {
+      await apiJson(`/api/shopping-lists/${id}`, { method: "DELETE" });
+      toast("LISTA EXCLUÍDA", "success");
+      if (activeListId === id) selectList("list-geral");
+      await loadLists();
+      loadAll();
+    } catch (err: any) {
+      toast("FALHA AO EXCLUIR LISTA", "error", String(err?.message || err));
+    }
+  };
 
   const [scanningEstId, setScanningEstId] = useState<string | null>(null);
   const [localScanIntervalMs, setLocalScanIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
@@ -291,16 +364,27 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
     }
   };
 
-  // ---- Shopping list export/import ------------------------------------------
+  // ---- Shopping list export/import (#36 — só a lista aberta, com preços) ----
 
-  const exportShoppingList = async (format: "json" | "csv") => {
+  const exportShoppingList = async (format: "json" | "csv" | "txt") => {
     try {
-      const res = await fetch(`/api/shopping-list-items/export?format=${format}`);
+      const params = new URLSearchParams({
+        format,
+        listId: activeListId,
+        prices: format === "json" ? "0" : "1",
+      });
+      const res = await fetch(`/api/shopping-list-items/export?${params}`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: res.statusText }));
+        throw new Error(err.error || res.statusText);
+      }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
-      a.download = `lista-compras.${format}`;
+      const listName =
+        shoppingLists.find((l) => l.id === activeListId)?.name || "lista";
+      a.download = `${listName.replace(/[^\w\-]+/g, "_").slice(0, 40) || "lista"}.${format}`;
       a.click();
       URL.revokeObjectURL(url);
       toast(`LISTA EXPORTADA (${format.toUpperCase()})`, "success");
@@ -348,6 +432,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         category: itemCategory.trim() || undefined,
         targetPrice: itemTarget ? parseFloat(itemTarget) : undefined,
         checked: false,
+        listId: activeListId,
       };
       await apiJson("/api/shopping-list-items", {
         method: "POST",
@@ -603,24 +688,55 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         </div>
       )}
 
-      {/* ===== LISTA DE COMPRAS ===== */}
+      {/* ===== LISTA DE COMPRAS (#36 — seletor + export da lista aberta) ===== */}
       <section>
-        <div className="flex items-center justify-between">
-          <SectionTitle icon={<ShoppingCart size={16} />}>LISTA DE COMPRAS ({items.length})</SectionTitle>
-          <div className="flex gap-2">
-            <button
-              onClick={() => exportShoppingList("json")}
-              className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1"
-              title="Exportar como JSON"
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <SectionTitle icon={<ShoppingCart size={16} />}>
+            LISTA DE COMPRAS — {shoppingLists.find((l) => l.id === activeListId)?.name || "Geral"} ({items.length})
+          </SectionTitle>
+          <div className="flex gap-2 flex-wrap items-center">
+            <select
+              value={activeListId}
+              onChange={(e) => selectList(e.target.value)}
+              className="bg-black/60 border border-crimson/30 px-2 py-1 font-mono text-[10px] text-crimson focus:outline-none focus:border-crimson"
+              title="Abrir lista (#36)"
             >
-              <Download size={12} /> JSON
+              {(shoppingLists.length
+                ? shoppingLists
+                : [{ id: "list-geral", name: "Geral" }]
+              ).map((l) => (
+                <option key={l.id} value={l.id}>
+                  {l.name}
+                </option>
+              ))}
+            </select>
+            <button
+              onClick={() => { playSound("click"); setShowListForm(!showListForm); }}
+              className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1"
+              title="Criar nova lista (ex: workstation, cozinha)"
+            >
+              <Plus size={12} /> NOVA
             </button>
             <button
               onClick={() => exportShoppingList("csv")}
               className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1"
-              title="Exportar como CSV"
+              title="Exportar lista aberta em CSV com melhor preço"
             >
               <Download size={12} /> CSV
+            </button>
+            <button
+              onClick={() => exportShoppingList("txt")}
+              className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1"
+              title="Exportar lista aberta em TXT com melhor preço"
+            >
+              <Download size={12} /> TXT
+            </button>
+            <button
+              onClick={() => exportShoppingList("json")}
+              className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1"
+              title="Exportar lista aberta em JSON"
+            >
+              <Download size={12} /> JSON
             </button>
             <button
               onClick={() => importFileRef.current?.click()}
@@ -644,6 +760,46 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
             </button>
           </div>
         </div>
+
+        <AnimatePresence>
+          {showListForm && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: "auto" }}
+              exit={{ opacity: 0, height: 0 }}
+              className="hud-border bg-black/40 p-4 mt-4 overflow-hidden"
+            >
+              <label className={labelCls}>NOVA LISTA (ex: workstation, cozinha)</label>
+              <div className="flex items-center gap-2 mt-1.5">
+                <input
+                  className={inputCls}
+                  value={newListName}
+                  onChange={(e) => setNewListName(e.target.value)}
+                  placeholder="nome da lista"
+                  onKeyDown={(e) => e.key === "Enter" && createList()}
+                />
+                <button onClick={() => createList()} className="hud-button flex items-center gap-2">
+                  <Plus size={14} /> CRIAR
+                </button>
+                {activeListId !== "list-geral" && (
+                  <button
+                    onClick={() => deleteList(activeListId)}
+                    className="hud-button flex items-center gap-2 text-red-400"
+                    title="Excluir lista ativa e seus itens"
+                  >
+                    <Trash2 size={14} /> EXCLUIR LISTA
+                  </button>
+                )}
+                <button
+                  onClick={() => setShowListForm(false)}
+                  className="hud-button text-crimson/60"
+                >
+                  FECHAR
+                </button>
+              </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
 
         <AnimatePresence>
           {showItemForm && (

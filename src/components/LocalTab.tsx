@@ -287,7 +287,16 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
   const loadInsights = async () => {
     setInsightsLoading(true);
     try {
-      const data = await apiJson("/api/local-insights");
+      // #36 — insights da lista aberta (localStorage compartilhado com Mercado)
+      let activeList = "list-geral";
+      try {
+        activeList = localStorage.getItem("sentinela_active_shopping_list") || "list-geral";
+      } catch {
+        // ignore
+      }
+      const data = await apiJson(
+        `/api/local-insights?listId=${encodeURIComponent(activeList)}`
+      );
       setInsights(data.insights);
       setInsightSummary(data.summary);
     } catch (err: any) {
@@ -320,12 +329,21 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
     }
   };
 
+  const loadActiveListId = (): string => {
+    try {
+      return localStorage.getItem("sentinela_active_shopping_list") || "list-geral";
+    } catch {
+      return "list-geral";
+    }
+  };
+
   const loadAll = async () => {
     setLoading(true);
     try {
+      const activeList = loadActiveListId();
       const [e, i, o, p, r] = await Promise.all([
         apiJson("/api/establishments"),
-        apiJson("/api/shopping-list-items"),
+        apiJson(`/api/shopping-list-items?listId=${encodeURIComponent(activeList)}`),
         apiJson("/api/price-observations"),
         apiJson("/api/promotions"),
         apiJson("/api/routes"),

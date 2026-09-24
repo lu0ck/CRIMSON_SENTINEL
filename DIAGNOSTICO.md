@@ -857,3 +857,35 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.21 múltiplas listas + export CSV/TXT com melhor preço (#36)
+
+**Problema:** a lista de compras local era **uma única lista flat global** (`shopping_list_items` sem `list_id`) — não dava para ter "workstation" e "cozinha" separadas nem exportar "só a lista aberta". Export CSV/JSON existia mas **sem preço mais barato**, **sem TXT**, e o CSV não escapava vírgulas/aspas.
+
+**Escopo de #36:**
+
+| Change | Detalhe |
+|---|---|
+| Tabela `shopping_lists` | id, name; seed `list-geral` = "Geral" |
+| Coluna `list_id` | `shopping_list_items.list_id` + migração `ensureColumn` + backfill NULL/'' → `list-geral` |
+| Seletor de lista | MercadoTab: `<select>` + NOVA/EXCLUIR; ativa em `localStorage` `sentinela_active_shopping_list` |
+| GET filter | `GET /api/shopping-list-items?listId=`; LocalTab e insights respeitam a lista aberta |
+| CRUD listas | `GET/POST/DELETE /api/shopping-lists` (Geral não excluível; delete lista apaga itens) |
+| Export | `GET …/export?format=csv\|txt\|json&listId=&prices=1` — default prices=1 para csv/txt |
+| CSV com preços | colunas `bestPrice,bestStore,promotionApplied,withinTarget` + **escape RFC4180** |
+| TXT | `item · qtd · melhor R$ X em loja (PROMO) · alvo` + total |
+| Filename | nome da lista (slug) |
+| Item novo | grava `listId` ativo |
+| Insights | `GET /api/local-insights?listId=` |
+
+**Arquivos:** `schema.sql`, `db.ts`, `types.ts`, `repositories/types.ts`, `shoppingListRepository.ts` (+ `ShoppingListsRepository`), `server.ts`, `MercadoTab.tsx`, `LocalTab.tsx`, docs.
+
+**Decisões:**
+- Lista ativa = `localStorage` (não settings) — UI-only, sem coupling com workers
+- Export default **com preços** em csv/txt; json legado sem preços (`prices=0`)
+- Delete lista = apaga itens da lista (confirm no client)
+- Workers/rota/scan continuam `getAll()` global (rota pode misturar listas)
+
+**Validação #36:** `npx tsc --noEmit` → 0; criar lista "cozinha" → só itens dela; trocar p/ "workstation" → outros itens; CSV/TXT traz melhor preço da lista aberta; nome com vírgula não quebra CSV.
+
+---
+

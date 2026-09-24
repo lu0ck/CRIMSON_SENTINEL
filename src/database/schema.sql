@@ -101,6 +101,15 @@ CREATE TABLE IF NOT EXISTS establishments (
 CREATE INDEX IF NOT EXISTS idx_establishments_category ON establishments(category);
 CREATE INDEX IF NOT EXISTS idx_establishments_coords ON establishments(lat, lng);
 
+-- Listas nomeadas da lista de compras local (#36 — "workstation", "cozinha"...)
+CREATE TABLE IF NOT EXISTS shopping_lists (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+INSERT OR IGNORE INTO shopping_lists (id, name) VALUES ('list-geral', 'Geral');
+
 -- Itens da lista de compras local
 CREATE TABLE IF NOT EXISTS shopping_list_items (
   id TEXT PRIMARY KEY,
@@ -110,8 +119,11 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   category TEXT, -- "mercearia", "hortifruti", "limpeza", etc.
   checked INTEGER DEFAULT 0,
   target_price REAL,
+  list_id TEXT, -- #36: lista aberta (FK shopping_lists); NULL = legado → Geral
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE INDEX IF NOT EXISTS idx_shopping_list_items_list ON shopping_list_items(list_id);
 
 -- Observações de preço em estabelecimentos (preço coletado in-loco ou via scraping local)
 CREATE TABLE IF NOT EXISTS price_observations (

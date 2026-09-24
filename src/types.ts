@@ -70,6 +70,12 @@ export interface Establishment {
   instagramHandle?: string;
 }
 
+export interface ShoppingList {
+  id: string;
+  name: string;
+  createdAt?: string;
+}
+
 export interface ShoppingListItem {
   id: string;
   name: string;
@@ -79,6 +85,7 @@ export interface ShoppingListItem {
   checked?: boolean;
   targetPrice?: number;
   productId?: string;
+  listId?: string;
 }
 
 export interface PriceObservation {
