@@ -1027,3 +1027,36 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+## 6.27 fix: orçamento de scrape + attempts 2 (timeout 600s ainda estourava) (#42)
+
+**Problema (após #41):** usuário ainda viu `ERRO: Job polling timed out (retry, tentativa 2/3, estado: active)` + `2 TARGETS FAILED TO RESOLVE`, com espera longa e ~metade dos targets não salvos.
+
+**Causa raiz:**
+1. **1 tentativa do `advancedScrape` podia passar de 600s** — até 9 estratégias × 90s = **810s**, **sem orçamento total** no loop.
+2. **BullMQ `attempts: 3`** (default da fila) + backoff 30s/60s → pior caso **~40 min** de vida do job.
+3. Deadline do `pollJob` é **absoluto** (600s do início); `attemptsMade=2` + `active` = rodando a **3ª** tentativa; dica de UI mostrava `2/3` (off-by-one, `/3` hardcoded).
+4. Timeout **não salva o produto** (o job pode completar depois — resultado órfão); batch **2 em 2 sequenciais** multiplica a espera.
+
+**Escopo de #42:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| Orçamento **180s**/tentativa | `src/lib/scraper.ts` | `SCRAPE_BUDGET_MS=180_000`; quebra o cascade se estourar; estratégias caras puladas se restam &lt;45s (reserva p/ FETCH/GEMINI baratas); timeout por estratégia = `min(90s, restante)` |
+| `attempts: 2` só scrape | `server.ts` (`POST /api/scrape`) | `queue.add(..., { attempts: 2 })` — pior caso `2×180+30 = 390s` **&lt; 600s** do poll |
+| Poll de graça no timeout | `src/App.tsx` (`pollJob`) | 1 fetch extra após o deadline; se `completed`, **retorna o resultado** (evita órfão) |
+| Dica de retry corrigida | `src/App.tsx` | `tentativa ${attemptsMade+1}/${maxAttempts}` (addProduct passa `maxAttempts=2`) |
+| Docs | DIAGNOSTICO/README/roadmap | §6.27 |
+
+**Decisões:**
+- Budget **180s** (não subir timeout p/ 900s+): resolve a raiz sem o usuário esperar mais
+- `attempts: 2` (não 1): ainda cobre 1 retry transitório; com budget, cabe no poll de 600s
+- Reserva 45s para estratégias baratas no fim do cascade (FETCH/GEMINI costumam resolver HTML simples)
+- Sites anti-bot (Shopee etc.) podem **ainda** falhar — toast será `Failed to scrape…` (falso real), não timeout eterno
+- Fora de escopo: concorrência do batch (2→4), cancelamento server-side, mudar backoff global
+
+**Arquivos:** `src/lib/scraper.ts`, `server.ts`, `src/App.tsx`, docs.
+
+**Validação #42:** `npx tsc --noEmit` → 0; job difícil termina &lt; ~200s (failed ou completed); timeout (se ocorrer) exibe `tentativa N/2`; poll de graça captura completed tardio.
+
+---
+

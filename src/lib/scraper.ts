@@ -624,12 +624,29 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   const partials: ScrapeResult[] = [];
   const totalStrategies = strategies.length;
   const strategiesTried: string[] = [];
+  // #42 — orçamento total por tentativa (hoje podia chegar a 9×90s = 810s)
+  const scrapeStartedAt = Date.now();
+  const SCRAPE_BUDGET_MS = 180_000;
+  const CHEAP_OK_MS = 45_000;
+  const isCheapStrategy = (name: string) =>
+    name === "FETCH_FALLBACK" || name === "GEMINI_FALLBACK";
 
   for (let si = 0; si < strategies.length; si++) {
     const strategy = strategies[si];
     let strategyBrowser: any = null;
     const abortController = new AbortController();
-    const timeoutMs = 90000;
+    const remainingMs = SCRAPE_BUDGET_MS - (Date.now() - scrapeStartedAt);
+    if (remainingMs <= 0) {
+      console.log(`[Scraper] ⏱ Budget ${SCRAPE_BUDGET_MS / 1000}s estourado — parando cascade`);
+      break;
+    }
+    if (!isCheapStrategy(strategy.name) && remainingMs < CHEAP_OK_MS) {
+      console.log(`[Scraper] ⏱ Budget baixo (${Math.round(remainingMs / 1000)}s) — pulando ${strategy.name}, reservando p/ baratas`);
+      strategiesTried.push(strategy.name);
+      continue;
+    }
+    // Timeout da estratégia limitado pelo restante do orçamento
+    const timeoutMs = Math.min(90000, Math.max(5000, remainingMs));
     let timeoutId: ReturnType<typeof setTimeout> | null = null;
 
     try {
@@ -649,7 +666,7 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
       const timeoutPromise = new Promise<null>((_, reject) => {
         timeoutId = setTimeout(() => {
           abortController.abort();
-          reject(new Error(`Strategy timeout (${timeoutMs / 1000}s)`));
+          reject(new Error(`Strategy timeout (${Math.round(timeoutMs / 1000)}s)`));
         }, timeoutMs);
       });
 

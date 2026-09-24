@@ -296,12 +296,15 @@ app.post("/api/scrape", async (req, res) => {
     if (isRedisAvailable()) {
       // Caminho normal: enfileira via BullMQ
       const queue = getScanQueue();
+      // #42 — scrape: 2 tentativas (não 3). Com budget de 180s/tentativa,
+      // pior caso ≈ 2×180+30 = 390s < 600s do pollJob. Retry de cascata
+      // inteira quase nunca muda o resultado em sites anti-bot.
       const job = await queue.add("scrape", {
         type: "scrape",
         url,
         productId,
         profileId,
-      });
+      }, { attempts: 2 });
       safeLog(`[scrape] enfileirado job ${job.id} para ${url}`);
       return res.json({ jobId: job.id, status: "queued" });
     }

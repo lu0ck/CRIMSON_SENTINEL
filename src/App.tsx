@@ -889,23 +889,27 @@ const deleteComparisonResult = (productId: string, index: number) => {
     intervalMs = 2000,
     timeoutMs = 590_000,
     queue = "scan",
-    onProgress?: (p: any) => void
+    onProgress?: (p: any) => void,
+    maxAttempts = 3
   ): Promise<any> => {
     const deadline = Date.now() + timeoutMs;
     let lastState = "unknown";
     let lastAttempts = 0;
+    const fetchJob = async () => {
+      const res = await fetch(`/api/jobs/${queue}/${jobId}`, { signal });
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Job status fetch failed");
+      }
+      return res.json();
+    };
     while (Date.now() < deadline) {
       if (signal?.aborted) {
         const err: any = new Error("Aborted");
         err.name = "AbortError";
         throw err;
       }
-      const res = await fetch(`/api/jobs/${queue}/${jobId}`, { signal });
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}));
-        throw new Error(errData.error || "Job status fetch failed");
-      }
-      const job = await res.json();
+      const job = await fetchJob();
       lastState = job.state || lastState;
       lastAttempts = job.attemptsMade ?? lastAttempts;
       // #41 — progresso real do worker (estratégias do scrape, etc.)
@@ -921,9 +925,24 @@ const deleteComparisonResult = (productId: string, index: number) => {
         throw err;
       }
     }
+    // #42 — 1 poll de graça: o job pode ter completado exatamente no deadline
+    if (!signal?.aborted) {
+      try {
+        const job = await fetchJob();
+        lastState = job.state || lastState;
+        lastAttempts = job.attemptsMade ?? lastAttempts;
+        if (job.state === "completed") return job.returnvalue;
+        if (job.state === "failed") throw new Error(job.failedReason || "Job failed");
+      } catch (e: any) {
+        if (e?.name === "AbortError") throw e;
+        // segue para o timeout com o último estado conhecido
+      }
+    }
+    // attemptsMade = nº de falhas; tentativa em execução = attemptsMade + 1
+    const runningAttempt = lastAttempts + 1;
     const retryHint =
-      lastAttempts > 0 || lastState === "delayed"
-        ? ` (retry, tentativa ${lastAttempts}/3, estado: ${lastState})`
+      lastAttempts > 0 || lastState === "delayed" || lastState === "active"
+        ? ` (retry, tentativa ${runningAttempt}/${maxAttempts}, estado: ${lastState})`
         : "";
     throw new Error(`Job polling timed out${retryHint}`);
   };
@@ -1030,8 +1049,8 @@ const queued = await response.json();
     if (!queued.jobId) throw new Error(queued.error || "Scrape queueing failed");
 
     // FASE 4: aguarda o worker processar via polling
-    // #41 — timeout 240s→600s (scraper multi-stratégia 90s cada + retries 30s/60s
-    // legitimamente passam de 4 min); onProgress = % real de estratégias.
+    // #41/#42 — timeout 600s; scrape attempts=2 + budget 180s/tentativa
+    // (pior caso ≈390s < 600s); onProgress = % real de estratégias.
     const info = await pollJob(queued.jobId, controller.signal, 2000, 600_000, "scan", (p) => {
       const total = Number(p.totalStrategies) || 1;
       const tried = Number(p.triedCount) || 0;
@@ -1047,7 +1066,7 @@ const queued = await response.json();
         currentEngine: engine,
         strategiesTried: Array.isArray(p.strategiesTried) ? p.strategiesTried : prev.strategiesTried,
       }));
-    });
+    }, 2);
 
     if (info?.method) {
       setSystemMessage(`DATA EXTRACTED VIA: ${info.method.toUpperCase()}`);
