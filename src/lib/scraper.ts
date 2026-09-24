@@ -49,13 +49,13 @@ const USER_AGENTS = [
 
 // MAX_PRICE movido para price.ts (#27).
 
-// Modelos NVIDIA NIM (#43): -0731 retorna 410 Gone; ordem = fail-fast → glm → nemotron
-const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash";
-const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
-const NVIDIA_MODELS = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL, "nvidia/llama-3.3-nemotron-super-49b-v1"];
+// Modelos NVIDIA NIM (#43): -0731/-flash EOL 410 Gone; sondados em 2026-09-24
+const NVIDIA_EXTRACT_MODEL = "z-ai/glm-5.3";
+const NVIDIA_FALLBACK_MODEL = "openai/gpt-oss-20b";
+const NVIDIA_MODELS = [NVIDIA_EXTRACT_MODEL, NVIDIA_FALLBACK_MODEL, "nvidia/nemotron-3-super-120b-a12b"];
 const NVIDIA_MAX_RETRIES = 2;
 const NVIDIA_RETRY_DELAY_MS = 2_000;
-const NVIDIA_MODEL_TIMEOUT_MS = 20_000;
+const NVIDIA_MODEL_TIMEOUT_MS = 30_000;
 
 // #43 — circuit de quota Gemini free tier (20/dia): após 429, pula estratégias ~1h
 let geminiQuotaUntil = 0;

@@ -33,9 +33,9 @@ const COMPARE_SCRAPE_TIMEOUT_MS = 30_000;
 const COMPARE_NVIDIA_TIMEOUT_MS = 30_000;
 const NVIDIA_MAX_RETRIES = 2;
 const NVIDIA_RETRY_DELAY_MS = 2_000;
-// #43 — -0731 retorna 410 Gone
-const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash";
-const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
+// #43 — -0731/-flash EOL 410; sondado 2026-09-24
+const NVIDIA_EXTRACT_MODEL = "z-ai/glm-5.3";
+const NVIDIA_FALLBACK_MODEL = "openai/gpt-oss-20b";
 const LM_STUDIO_TIMEOUT_MS = 120_000;
 const LM_STUDIO_DEFAULT_URL = "http://127.0.0.1:1234/v1";
 const LM_STUDIO_API_KEY = process.env.LM_STUDIO_API_KEY || "lm-studio";

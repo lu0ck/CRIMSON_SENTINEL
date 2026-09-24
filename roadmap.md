@@ -57,7 +57,7 @@
 - ~~**prioridade na lista de compras**~~ — **RESOLVIDO (#40)**: coluna `priority` (alta/media/baixa) sem índice, `ORDER BY` alta→media→baixa→nome, form+badge Mercado, coluna `priority` no CSV export. DIAGNOSTICO §6.25.
 - ~~**timeout TRACKING TARGETS + barra 99%**~~ — **RESOLVIDO (#41)**: `pollJob` 240s→600s + hint de retry; progresso real via `job.updateProgress` por estratégia; barra batch `N/M` (simulação fake removida). DIAGNOSTICO §6.26.
 - ~~**timeout 600s ainda estourava (active tentativa 2/3)**~~ — **RESOLVIDO (#42)**: budget **180s**/tentativa no `advancedScrape`, scrape `attempts:2` (pior caso 390s), poll de graça p/ resultado tardio, dica `N/2`. DIAGNOSTICO §6.27.
-- ~~**Shopee/ML falham (NVIDIA 410 + Gemini 429 + SEARCH por último)**~~ — **RESOLVIDO (#43)**: fail-fast NVIDIA (`deepseek-v4-flash` sem -0731, timeout 20s/modelo), circuit Gemini 1h, `extractNameFromUrl`, SEARCH_VERIFY antes de NVIDIA/Vision. DIAGNOSTICO §6.28.
+- ~~**Shopee/ML falham (NVIDIA 410 + Gemini 429 + SEARCH por último)**~~ — **RESOLVIDO (#43)**: fail-fast NVIDIA (modelos sondados `z-ai/glm-5.3`/`gpt-oss-20b`/`nemotron-3-super`, timeout 30s/modelo), circuit Gemini 1h, `extractNameFromUrl`, SEARCH_VERIFY antes de NVIDIA/Vision. DIAGNOSTICO §6.28.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---

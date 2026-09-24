@@ -213,9 +213,9 @@ export interface MarketSearchHit {
   method: string;
 }
 
-// #43 — -0731 retorna 410 Gone
-const NVIDIA_EXTRACT_MODEL = "deepseek-ai/deepseek-v4-flash";
-const NVIDIA_FALLBACK_MODEL = "z-ai/glm-5.3-flash";
+// #43 — -0731/-flash EOL 410; sondado 2026-09-24
+const NVIDIA_EXTRACT_MODEL = "z-ai/glm-5.3";
+const NVIDIA_FALLBACK_MODEL = "openai/gpt-oss-20b";
 const NVIDIA_MAX_RETRIES = 2;
 const NVIDIA_RETRY_DELAY_MS = 2_000;
 const SEARCH_TIMEOUT_MS = 20_000;

@@ -1074,7 +1074,7 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 | Change | Arquivo | Detalhe |
 |---|---|---|
-| NVIDIA fail-fast | `scraper.ts`, `market-handlers.ts`, `scanWorker.ts` | modelos: `deepseek-v4-flash` (sem -0731), `glm-5.3-flash`, `nemotron-super-49b`; **410/404/timeout 20s → pula modelo** sem retry |
+| NVIDIA fail-fast | `scraper.ts`, `market-handlers.ts`, `scanWorker.ts` | modelos sondados 2026-09-24: `z-ai/glm-5.3`, `openai/gpt-oss-20b`, `nvidia/nemotron-3-super-120b-a12b`; **410/404/timeout 30s → pula modelo** sem retry (`-0731`/`v4-flash` EOL desde ago/2026) |
 | Gemini circuit 1h | `scraper.ts` | `noteGeminiQuotaBlock()` após 429; pula `GEMINI_VISION`/`GEMINI_FALLBACK`/grounding até 1h |
 | Nome do slug da URL | `scraper.ts` | `extractNameFromUrl` — Shopee `-i.shop.item`, ML `/up/MLB…` → hint p/ busca |
 | SEARCH_VERIFY **antes** de NVIDIA/Vision | `scraper.ts` | ordem: Playwright → **SEARCH** → NVIDIA → Vision → FETCH → Gemini; hint = DOM ∪ slug |
