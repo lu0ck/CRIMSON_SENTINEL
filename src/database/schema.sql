@@ -121,7 +121,6 @@ CREATE TABLE IF NOT EXISTS shopping_list_items (
   target_price REAL,
   list_id TEXT, -- #36: lista aberta (FK shopping_lists); NULL = legado → Geral
   priority TEXT CHECK (priority IN ('alta','media','baixa') OR priority IS NULL), -- #40
-  sort_order INTEGER, -- #45: posição manual ("ordem de compra"); NULL = não definida
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

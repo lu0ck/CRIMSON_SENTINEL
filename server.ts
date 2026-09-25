@@ -21,7 +21,7 @@ import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, lis
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
-import { ShoppingListRepository, ShoppingListsRepository, DEFAULT_LIST_ID, normalizePriority, normalizeSortBy } from "./src/repositories/shoppingListRepository.ts";
+import { ShoppingListRepository, ShoppingListsRepository, DEFAULT_LIST_ID, normalizePriority } from "./src/repositories/shoppingListRepository.ts";
 import { PriceObservationRepository } from "./src/repositories/priceObservationRepository.ts";
 import { PromotionRepository } from "./src/repositories/promotionRepository.ts";
 import { RouteRepository } from "./src/repositories/routeRepository.ts";
@@ -991,25 +991,7 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   app.get("/api/shopping-list-items", (req, res) => {
     try {
       const listId = req.query.listId as string | undefined;
-      // #45 — ?sortBy=prioridade|preco_asc|preco_desc|az|za|manual (default: prioridade)
-      const sortBy = normalizeSortBy(req.query.sortBy);
-      res.json(ShoppingListRepository.getAll(listId, sortBy));
-    } catch (error: any) {
-      res.status(500).json({ error: error.message });
-    }
-  });
-
-  // #45 — grava a "ordem de compra" (sequência completa de ids da lista)
-  app.post("/api/shopping-list-items/reorder", (req, res) => {
-    try {
-      const { listId, ids } = req.body as { listId?: string; ids?: unknown };
-      if (!Array.isArray(ids) || ids.length === 0 || !ids.every((i) => typeof i === "string")) {
-        res.status(400).json({ error: "ids: string[] obrigatório" });
-        return;
-      }
-      const lid = listId || DEFAULT_LIST_ID;
-      const updated = ShoppingListRepository.reorder(lid, ids);
-      res.json({ status: "ok", updated });
+      res.json(ShoppingListRepository.getAll(listId));
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }

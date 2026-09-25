@@ -102,8 +102,6 @@ export function getDb(): Database.Database {
   ensureColumn("shopping_list_items", "list_id", "list_id TEXT");
   // #40 — prioridade (alta|media|baixa|NULL). Sem índice (evita bug index-before-column #39).
   ensureColumn("shopping_list_items", "priority", "priority TEXT");
-  // #45 — posição manual da "ordem de compra" (NULL = ainda não posicionada)
-  ensureColumn("shopping_list_items", "sort_order", "sort_order INTEGER");
   // Seed + backfill: itens legados sem lista vão para "Geral"
   db.prepare(
     `UPDATE shopping_list_items SET list_id = 'list-geral'

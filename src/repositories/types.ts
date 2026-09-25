@@ -154,7 +154,6 @@ export interface ShoppingListItemRow {
   product_id: string | null;
   list_id: string | null;
   priority: string | null;
-  sort_order: number | null;
   created_at: string;
 }
 
@@ -252,7 +251,6 @@ export function shoppingListItemRowToShoppingListItem(row: ShoppingListItemRow):
     productId: row.product_id ?? undefined,
     listId: row.list_id ?? undefined,
     priority: p === "alta" || p === "media" || p === "baixa" ? p : null,
-    sortOrder: row.sort_order ?? undefined,
   };
 }
 

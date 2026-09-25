@@ -88,8 +88,6 @@ export interface ShoppingListItem {
   listId?: string;
   /** #40 — prioridade na lista: alta | media | baixa (null = sem) */
   priority?: "alta" | "media" | "baixa" | null;
-  /** #45 — posição manual na "ordem de compra" (null = não posicionada) */
-  sortOrder?: number;
 }
 
 export interface PriceObservation {

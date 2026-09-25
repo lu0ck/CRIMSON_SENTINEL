@@ -17,8 +17,6 @@ import {
   Download,
   Upload,
   Merge,
-  ArrowUp,
-  ArrowDown,
 } from "lucide-react";
 import type {
   Establishment,
@@ -73,10 +71,6 @@ function SectionTitle({ icon, children }: { icon: React.ReactNode; children: Rea
   );
 }
 
-const SORT_STORAGE_KEY = "sentinela_shopping_sort";
-// #45 — espelho dos modos do backend (não importar repository: puxaria better-sqlite3)
-type SortMode = "prioridade" | "preco_asc" | "preco_desc" | "az" | "za" | "manual";
-
 export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoTabProps) {
   const [establishments, setEstablishments] = useState<Establishment[]>([]);
   const [items, setItems] = useState<ShoppingListItem[]>([]);
@@ -101,23 +95,6 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const [showPromoForm, setShowPromoForm] = useState(false);
   const [showObsForm, setShowObsForm] = useState(false);
   const [showEstMap, setShowEstMap] = useState(false);
-
-  // #45 — modo de ordenação da LISTA DE COMPRAS (persistido no localStorage)
-  const SORT_OPTIONS: { value: SortMode; label: string }[] = [
-    { value: "prioridade", label: "PRIORIDADE" },
-    { value: "preco_asc", label: "MENOR PREÇO" },
-    { value: "preco_desc", label: "MAIOR PREÇO" },
-    { value: "az", label: "A → Z" },
-    { value: "za", label: "Z → A" },
-    { value: "manual", label: "ORDEM DE COMPRA" },
-  ];
-  const [sortMode, setSortMode] = useState<SortMode>(() => {
-    try {
-      return (localStorage.getItem("sentinela_shopping_sort") as SortMode) || "prioridade";
-    } catch {
-      return "prioridade";
-    }
-  });
 
   const [estName, setEstName] = useState("");
   const [estCep, setEstCep] = useState("");
@@ -261,7 +238,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
     try {
       const [e, i, o, p] = await Promise.all([
         apiJson("/api/establishments"),
-        apiJson(`/api/shopping-list-items?listId=${encodeURIComponent(activeListId)}&sortBy=${sortMode}`),
+        apiJson(`/api/shopping-list-items?listId=${encodeURIComponent(activeListId)}`),
         apiJson("/api/price-observations"),
         apiJson("/api/promotions"),
       ]);
@@ -297,69 +274,6 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       // ignore
     }
     playSound("click");
-  };
-
-  // #45 — recarrega só os itens com o modo de ordenação informado
-  const loadItems = async (mode: SortMode): Promise<ShoppingListItem[]> => {
-    const i = await apiJson(
-      `/api/shopping-list-items?listId=${encodeURIComponent(activeListId)}&sortBy=${mode}`
-    );
-    const list = Array.isArray(i) ? i : [];
-    setItems(list);
-    return list;
-  };
-
-  // #45 — troca o modo de ordenação; "manual" semeia a partir da ordem atual
-  const changeSort = async (mode: SortMode) => {
-    playSound("click");
-    try {
-      if (mode === "manual") {
-        const prevOrder = items.map((it) => it.id);
-        const manualList = await loadItems("manual");
-        const hasManual = manualList.some(
-          (it) => it.sortOrder !== undefined && it.sortOrder !== null
-        );
-        // primeira ativação: grava a ordem que o usuário está vendo como base
-        if (!hasManual && prevOrder.length > 0) {
-          await apiJson("/api/shopping-list-items/reorder", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ listId: activeListId, ids: prevOrder }),
-          });
-          setItems(items); // mantém a ordem anterior (já é a ordem manual gravada)
-        }
-      } else {
-        await loadItems(mode);
-      }
-      setSortMode(mode);
-      try {
-        localStorage.setItem(SORT_STORAGE_KEY, mode);
-      } catch {
-        // ignore
-      }
-    } catch (err: any) {
-      toast("FALHA AO ORDENAR LISTA", "error", String(err?.message || err));
-    }
-  };
-
-  // #45 — move item ↑↓ na "ordem de compra" (otimista + persiste no servidor)
-  const moveItem = async (idx: number, dir: -1 | 1) => {
-    const target = idx + dir;
-    if (target < 0 || target >= items.length) return;
-    const next = [...items];
-    [next[idx], next[target]] = [next[target], next[idx]];
-    setItems(next);
-    playSound("click");
-    try {
-      await apiJson("/api/shopping-list-items/reorder", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ listId: activeListId, ids: next.map((it) => it.id) }),
-      });
-    } catch (err: any) {
-      toast("FALHA AO SALVAR ORDEM", "error", String(err?.message || err));
-      await loadItems("manual"); // reverte para o estado do servidor
-    }
   };
 
   const createList = async () => {
@@ -798,19 +712,6 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                 </option>
               ))}
             </select>
-            {/* #45 — modo de ordenação da lista */}
-            <select
-              value={sortMode}
-              onChange={(e) => void changeSort(e.target.value as SortMode)}
-              className="bg-black/60 border border-crimson/30 px-2 py-1 font-mono text-[10px] text-crimson focus:outline-none focus:border-crimson"
-              title="Ordenar lista (#45): prioridade, preço, alfabética ou ordem de compra"
-            >
-              {SORT_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
             <button
               onClick={() => { playSound("click"); setShowListForm(!showListForm); }}
               className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1"
@@ -1033,7 +934,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         </AnimatePresence>
 
         <div className="mt-4 flex flex-col gap-2">
-          {items.map((item, idx) => (
+          {items.map((item) => (
             <div key={item.id} className="hud-border bg-black/40 p-4 flex flex-col gap-3">
               <div className="flex items-center gap-4">
                 <button
@@ -1047,33 +948,6 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                 >
                   {item.checked && <CheckCircle2 size={12} />}
                 </button>
-                {/* #45 — mover item na "ordem de compra" (só no modo manual) */}
-                {sortMode === "manual" && (
-                  <div className="flex flex-col gap-0.5 shrink-0">
-                    <button
-                      onClick={() => void moveItem(idx, -1)}
-                      disabled={idx === 0}
-                      className={cn(
-                        "border border-crimson/30 p-0.5",
-                        idx === 0 ? "opacity-20 cursor-not-allowed" : "hover:bg-crimson hover:text-black"
-                      )}
-                      title="Subir item"
-                    >
-                      <ArrowUp size={11} />
-                    </button>
-                    <button
-                      onClick={() => void moveItem(idx, 1)}
-                      disabled={idx === items.length - 1}
-                      className={cn(
-                        "border border-crimson/30 p-0.5",
-                        idx === items.length - 1 ? "opacity-20 cursor-not-allowed" : "hover:bg-crimson hover:text-black"
-                      )}
-                      title="Descer item"
-                    >
-                      <ArrowDown size={11} />
-                    </button>
-                  </div>
-                )}
                 <div className="flex-1 flex flex-col gap-0.5">
                   <span className={cn(
                     "font-mono text-sm font-bold",
