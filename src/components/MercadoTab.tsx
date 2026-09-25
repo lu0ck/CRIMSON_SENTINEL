@@ -37,7 +37,8 @@ interface MercadoTabProps {
     signal?: AbortSignal,
     intervalMs?: number,
     timeoutMs?: number,
-    queue?: string
+    queue?: string,
+    onProgress?: (p: any) => void
   ) => Promise<any>;
 }
 
@@ -318,6 +319,9 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   };
 
   const [scanningEstId, setScanningEstId] = useState<string | null>(null);
+  // #52 — progresso vivo do SCAN PREÇOS + último resultado persistente
+  const [scanProgress, setScanProgress] = useState<any>(null);
+  const [lastScan, setLastScan] = useState<{ at: string; rv: any } | null>(null);
   const [localScanIntervalMs, setLocalScanIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
   const [nextLocalPriceScanMinutes, setNextLocalPriceScanMinutes] = useState<number | null>(null);
   const [savingLocalInterval, setSavingLocalInterval] = useState(false);
@@ -576,21 +580,55 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   const scanEstablishmentPrices = async (id: string) => {
     try {
       setScanningEstId(id);
+      setScanProgress(null);
       const data = await apiJson("/api/local-price-scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ establishmentId: id, profileId }),
       });
-      const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan");
+      const result = await pollJob(data.jobId, undefined, 3000, 600_000, "scan", (p: any) =>
+        setScanProgress(p)
+      );
       const rv = result || {};
       const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}${rv.socialDependent ? ` • SOCIAL ${rv.socialDependent}` : ""}`;
-      playSound("scan");
-      toast(`SCAN DE PREÇOS CONCLUÍDO (${rv.establishments ?? 0} EST.)`, "success", summary);
+      playSound(rv.errors > 0 ? "error" : "scan");
+      toast(
+        `SCAN DE PREÇOS CONCLUÍDO (${rv.establishments ?? 0} EST.)`,
+        rv.errors > 0 ? "error" : "success",
+        summary
+      );
+      setLastScan({ at: new Date().toISOString(), rv });
       loadAll();
     } catch (err: any) {
+      playSound("error");
       toast("FALHA NO SCAN DE PREÇOS", "error", String(err?.message || err));
     } finally {
       setScanningEstId(null);
+      setScanProgress(null);
+    }
+  };
+
+  // % de progresso do scan ativo (current/total do worker)
+  const scanPct = Math.min(
+    100,
+    Math.round(
+      ((scanProgress?.current ?? 0) / Math.max(1, scanProgress?.total ?? 1)) * 100
+    )
+  );
+
+  // #52 — meta de status por item do último scan (card ÚLTIMO SCAN)
+  const localStatusMeta = (status: string) => {
+    switch (status) {
+      case "recorded":
+        return { cls: "text-green-500", label: "REGISTRADO" };
+      case "duplicate":
+        return { cls: "text-crimson/40", label: "DUPLICADO" };
+      case "no-price":
+        return { cls: "text-amber-500/70", label: "SEM PREÇO" };
+      case "error":
+        return { cls: "text-red-500", label: "ERRO" };
+      default:
+        return { cls: "text-amber-400", label: "SOCIAL" };
     }
   };
 
@@ -1158,7 +1196,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
           {establishments.map((est) => (
             <div
               key={est.id}
-              className={`hud-border bg-black/40 p-4 flex items-center gap-4 ${est.priceUrl ? "cursor-pointer hover:border-crimson/40" : ""}`}
+              className={`hud-border bg-black/40 p-4 flex flex-wrap items-center gap-4 ${est.priceUrl ? "cursor-pointer hover:border-crimson/40" : ""}`}
               onClick={() => est.priceUrl && window.open(est.priceUrl, "_blank")}
             >
               <div className="w-10 h-10 bg-crimson/5 border border-crimson/20 flex items-center justify-center shrink-0">
@@ -1184,13 +1222,66 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                   disabled={scanningEstId === est.id}
                   className="hud-button flex items-center gap-1.5 text-[10px] px-2 py-1.5 shrink-0"
                 >
-                  {scanningEstId === est.id ? <Loader2 size={12} className="animate-spin" /> : <Navigation size={12} />}
-                  SCAN PREÇOS
+                  {scanningEstId === est.id ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin" />
+                      SCANEANDO {scanPct}%
+                    </>
+                  ) : (
+                    <>
+                      <Navigation size={12} />
+                      SCAN PREÇOS
+                    </>
+                  )}
                 </button>
               )}
               <button onClick={(e) => { e.stopPropagation(); deleteEstablishment(est.id); }} className="text-crimson/30 hover:text-crimson shrink-0">
                 <Trash2 size={14} />
               </button>
+              {/* #52 — painel de progresso dentro do card durante o scan */}
+              <AnimatePresence>
+                {scanningEstId === est.id && (
+                  <motion.div
+                    initial={{ opacity: 0, height: 0 }}
+                    animate={{ opacity: 1, height: "auto" }}
+                    exit={{ opacity: 0, height: 0 }}
+                    className="w-full basis-full border-t border-crimson/10 pt-3"
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <div className="flex items-center justify-between gap-3 mb-1.5">
+                      <span className="text-[10px] font-mono text-crimson/70 flex items-center gap-1.5 min-w-0">
+                        <Loader2 size={11} className="animate-spin shrink-0" />
+                        <span className="truncate">
+                          {scanProgress?.label
+                            ? `${scanPct}% — ${String(scanProgress.label)}`
+                            : "NA FILA DO WORKER..."}
+                        </span>
+                      </span>
+                      <span className="text-[10px] font-mono text-crimson/60 whitespace-nowrap">
+                        ✅ {scanProgress?.recorded ?? 0} • DUP {scanProgress?.duplicates ?? 0} • ⚠ {scanProgress?.errors ?? 0}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-black/60 border border-crimson/20 overflow-hidden">
+                      <div
+                        className="h-full bg-crimson/80 transition-all duration-500"
+                        style={{ width: `${scanPct}%` }}
+                      />
+                    </div>
+                    <div className="flex items-center justify-between mt-1 gap-3">
+                      <span className="text-[9px] font-mono text-crimson/40 truncate">
+                        ETAPA {scanProgress?.current ?? 0}/{scanProgress?.total ?? "?"}
+                        {scanProgress?.itemTotal ? ` • ITEM ${scanProgress.itemIndex}/${scanProgress.itemTotal}` : ""}
+                      </span>
+                      {scanProgress?.strategy && (
+                        <span className="text-[9px] font-mono text-crimson/40 whitespace-nowrap">
+                          {scanProgress.strategy}
+                          {scanProgress.strategyTotal ? ` ${scanProgress.strategyTried}/${scanProgress.strategyTotal}` : ""}
+                        </span>
+                      )}
+                    </div>
+                  </motion.div>
+                )}
+              </AnimatePresence>
             </div>
           ))}
           {establishments.length === 0 && (
@@ -1199,6 +1290,61 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
             </div>
           )}
         </div>
+
+        {/* #52 — resultado persistente do último scan (não some como o toast) */}
+        {lastScan && (
+          <div className="mt-4 hud-border bg-black/40 p-4">
+            <div className="flex items-center justify-between mb-2 gap-3 flex-wrap">
+              <span className="font-mono text-[10px] text-crimson/70 tracking-widest flex items-center gap-1.5">
+                <CheckCircle2 size={12} className="text-green-500/70" />
+                ÚLTIMO SCAN — {new Date(lastScan.at).toLocaleString("pt-BR")}
+              </span>
+              <span className="font-mono text-[10px] text-crimson/50">
+                ✅ {lastScan.rv?.recorded ?? 0} • DUP {lastScan.rv?.duplicates ?? 0} • ⚠ {lastScan.rv?.errors ?? 0}
+                {(lastScan.rv?.socialDependent ?? 0) > 0 ? ` • SOCIAL ${lastScan.rv.socialDependent}` : ""}
+              </span>
+            </div>
+            <div className="flex flex-col gap-1">
+              {(lastScan.rv?.outcomes ?? []).map((o: any) =>
+                (o.results ?? []).map((r: any) => {
+                  const meta = localStatusMeta(r.status);
+                  return (
+                    <div
+                      key={`${o.establishmentId}-${r.itemId}`}
+                      className="flex items-center gap-2 text-[11px] font-mono bg-black/30 border border-crimson/10 px-2 py-1"
+                    >
+                      <span className={`${meta.cls} shrink-0`}>●</span>
+                      <span className="text-crimson/70 truncate">{r.itemName}</span>
+                      <span className={`${meta.cls} shrink-0 whitespace-nowrap`}>
+                        {meta.label}
+                        {r.status === "recorded" && r.price ? ` ${fmtBRL(r.price)}` : ""}
+                      </span>
+                      {r.status === "error" && r.error && (
+                        <span className="text-red-500/70 truncate">— {r.error}</span>
+                      )}
+                      {r.method && (
+                        <span className="text-crimson/30 truncate hidden md:inline">({r.method})</span>
+                      )}
+                      <span className="flex-1" />
+                      {r.url && (
+                        <a
+                          href={r.url}
+                          target="_blank"
+                          rel="noreferrer"
+                          onClick={(e) => e.stopPropagation()}
+                          className="text-crimson/40 hover:text-crimson shrink-0"
+                          title={r.url}
+                        >
+                          ↗
+                        </a>
+                      )}
+                    </div>
+                  );
+                })
+              )}
+            </div>
+          </div>
+        )}
 
         <AnimatePresence>
           {dupPairs.length > 0 && (

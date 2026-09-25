@@ -1237,6 +1237,16 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
+  // #52 — limpa toda a Central de Alertas (botão LIMPAR TUDO da aba ALERTAS).
+  app.delete("/api/notifications", (req, res) => {
+    try {
+      const deleted = NotificationRepository.clearAll();
+      res.json({ deleted });
+    } catch (error: any) {
+      res.status(500).json({ error: error.message });
+    }
+  });
+
   // ---- MONITORAMENTO SOCIAL (FASE 8) --------------------------------------
 
   // Fontes configuradas (WhatsApp/Instagram).

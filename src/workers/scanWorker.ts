@@ -769,11 +769,66 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
   }
 
   const outcomes: LocalPriceScanOutcome[] = [];
+  // #52 — progresso global: est. com priceUrl = 1 passo por item; sem priceUrl
+  // (tier social) = 1 passo. Emite por item/estratégia p/ a UI da aba MERCADO.
+  const stepsOf = (e: import("../types").Establishment) =>
+    e.priceUrl ? Math.max(1, items.length) : 1;
+  const totalSteps = targets.reduce((a, e) => a + stepsOf(e), 0) || 1;
+  let doneSteps = 0;
+  let gRec = 0, gDup = 0, gErr = 0, gSocial = 0;
+  void job
+    .updateProgress({
+      current: 0,
+      total: totalSteps,
+      label: "iniciando",
+      recorded: 0,
+      duplicates: 0,
+      errors: 0,
+      socialDependent: 0,
+    })
+    .catch(() => {});
+
   for (const est of targets) {
     // #32 — sem price_url: cascade market-handler / social-dependent dentro de scanEstablishmentPrices
     safeLog(`[scan-worker] local-price-scan ${est.name} (${items.length} itens)`);
-    const outcome = await scanEstablishmentPrices(est, items, apiKeys);
+    const estBase = doneSteps;
+    const outcome = await scanEstablishmentPrices(est, items, apiKeys, (p) => {
+      void job
+        .updateProgress({
+          current: estBase + p.index,
+          total: totalSteps,
+          establishmentName: est.name,
+          label: p.itemName,
+          itemIndex: p.index,
+          itemTotal: p.total,
+          strategy: p.strategy,
+          strategyTried: p.strategyTried,
+          strategyTotal: p.strategyTotal,
+          recorded: gRec + p.recorded,
+          duplicates: gDup + p.duplicates,
+          errors: gErr + p.errors,
+          socialDependent: gSocial,
+        })
+        .catch(() => {});
+    });
     outcomes.push(outcome);
+    doneSteps += stepsOf(est);
+    gRec += outcome.recorded;
+    gDup += outcome.duplicates;
+    gErr += outcome.errors;
+    gSocial += outcome.socialDependent || 0;
+    void job
+      .updateProgress({
+        current: doneSteps,
+        total: totalSteps,
+        establishmentName: est.name,
+        label: `concluído: ${est.name}`,
+        recorded: gRec,
+        duplicates: gDup,
+        errors: gErr,
+        socialDependent: gSocial,
+      })
+      .catch(() => {});
 
     // C1 — detectar flash por cada item registrado neste estabelecimento
     for (const r of outcome.results) {
@@ -810,6 +865,49 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
   const duplicates = outcomes.reduce((a, o) => a + o.duplicates, 0);
   const errors = outcomes.reduce((a, o) => a + o.errors, 0);
   const socialDependent = outcomes.reduce((a, o) => a + (o.socialDependent || 0), 0);
+
+  // #52 — resumo em ALERTAS: scan manual SEMPRE registra (cooldown 0); cron/bulk
+  // só quando houve erro (cooldown 1h evita spam do agendador).
+  if (outcomes.length > 0 && (establishmentId || errors > 0)) {
+    const estName = establishmentId
+      ? outcomes[0]?.establishmentName || establishmentId
+      : `${outcomes.length} estabelecimentos`;
+    const statusLabel = (r: import("../lib/localPriceScrape").LocalScrapeResult) => {
+      switch (r.status) {
+        case "recorded":
+          return `✅ R$ ${r.price}${r.method ? ` (${r.method})` : ""}`;
+        case "duplicate":
+          return `⏭️ duplicado (R$ ${r.price ?? "?"})`;
+        case "no-price":
+          return "➖ sem preço";
+        case "error":
+          return `❌ ${r.error || "erro no scrape"}`;
+        default:
+          return `⏳ depende de social${r.error ? `: ${r.error}` : ""}`;
+      }
+    };
+    const all: string[] = [];
+    for (const o of outcomes) {
+      for (const r of o.results) {
+        const tail =
+          r.url && (r.status === "recorded" || r.status === "error")
+            ? `\n  ${r.url.slice(0, 120)}`
+            : "";
+        all.push(`• ${r.itemName}: ${statusLabel(r)}${tail}`);
+      }
+    }
+    const lines = all.slice(0, 12);
+    if (all.length > lines.length) lines.push(`• ... e mais ${all.length - lines.length} resultado(s)`);
+    const title = errors > 0
+      ? `⚠️ SCAN DE PREÇOS COM ERROS — ${estName}`
+      : `🛒 SCAN DE PREÇOS — ${estName}`;
+    const message =
+      `Registrados: ${recorded} • Duplicados: ${duplicates} • Erros: ${errors}` +
+      `${socialDependent ? ` • Social: ${socialDependent}` : ""}` +
+      (lines.length ? `\n${lines.join("\n")}` : "");
+    recordInAppAlert("local-scan", establishmentId || "cron", title, message, establishmentId ? 0 : 1);
+  }
+
   return {
     establishmentId,
     establishments: outcomes.length,

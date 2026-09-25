@@ -1290,3 +1290,29 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Limitações / próximos passos:** renovar a quota do **Gemini** (chave em 429 — é a maior alavanca: com quota, o caminho Gemini+confirm é o melhor); NVIDIA NIM lento hoje (o caminho novo já aproveita quando responde rápido); retry com query reduzida quando Tavily+Serper retornam 0 seria o próximo passo.
 
 **Arquivos:** `src/App.tsx`, `src/workers/scanWorker.ts`, `src/lib/compare.ts`, docs.
+
+## 6.37 UX: SCAN PREÇOS da aba MERCADO invisível (só spinner, sem resultado, sem alerta) + limpar ALERTAS (#52)
+
+**Sintoma:** clicar SCAN PREÇOS no SUPERMERCADO TATICO (price_url = página de ofertas) → "só gira a bolinha"; o scan terminou (~3 min) sem mostrar o que fez, quantos achou, % ou erros; nada foi parar na Central de Alertas; e a aba ALERTAS não tinha como limpar a fila.
+
+**Causa raiz (job 571, `recorded: 2`):** (1) `handleLocalPriceScan` **nunca emitia `job.updateProgress`** e `scanEstablishmentPrices` não tinha callback por item → o `pollJob` do MercadoTab (que sequer passava `onProgress`) só via `state`; (2) feedback final = só toast efêmero, sem painel persistente com o resultado por item; (3) o fluxo local só criava alerta para *flash promotion* — **resumo/erros do scan nunca chamavam `recordInAppAlert`**; (4) `NotificationsTab` só tinha ATUALIZAR LOG (repository sem `clearAll`, API sem `DELETE`).
+
+**Mudanças:**
+
+| # | Mudança | Arquivo | Detalhe |
+|---|---|---|---|
+| A | Progresso por item/estratégia | `localPriceScrape.ts` | tipo `LocalScanProgress`; `scanEstablishmentPrices` ganha `onItemProgress` (emite antes/depois de cada item com contagem viva); `scrapeViaPriceUrl` repassa `advancedScrape({ onProgress })` → estratégia atual da cascata |
+| B | `updateProgress` global | `scanWorker.ts` `handleLocalPriceScan` | `totalSteps` = Σ itens por est. com priceUrl (sem url = 1); payload `{current, total, establishmentName, label, itemIndex/Total, strategy/Tried/Total, recorded, duplicates, errors, socialDependent}` em `iniciando` → por item/estratégia → `concluído:` |
+| C | Resumo em ALERTAS | `scanWorker.ts` | scan **manual sempre** (cooldown 0): `🛒 SCAN DE PREÇOS — <EST>` (ou `⚠️ ... COM ERROS` se `errors>0`) com `Registrados/Duplicados/Erros/Social` + até 12 linhas `• item: ✅ R$ x (método)/⏭️ duplicado/❌ erro` + URL; **cron/bulk só se `errors>0`** (entityId `cron`, cooldown 1h) |
+| D | Limpar ALERTAS | `notificationRepository.ts`, `server.ts` | `clearAll()` (DELETE FROM notification_log → changes) + `DELETE /api/notifications` → `{deleted}` |
+| E | Painel no card + ÚLTIMO SCAN | `MercadoTab.tsx` | `pollJob(..., onProgress)`; card do est **expande durante o scan**: botão `SCANEANDO %`, barra de %, `label` (item/estratégia), contadores vivos `✅/DUP/⚠`, `ETAPA n/total` + `ESTRATÉGIA x/y`; após concluir, card **ÚLTIMO SCAN** persistente (timestamp, totais, 1 linha por item com status colorido/preço/método/URL ↗); toast vira erro quando `errors>0` |
+| F | Botão LIMPAR TUDO | `NotificationsTab.tsx` | ícone/label `SCAN LOCAL` (`Radar`, azul) p/ `entityType local-scan`; botão em 2 cliques (`LIMPAR TUDO` → `CONFIRMAR LIMPEZA?` em 3s) → DELETE → toast `N alertas removidos` |
+
+**Validação #52:** `npm run lint` → 0.
+
+**Smoke #52 (est `est-1789755442377-ys5tqt`, profile 3g5znt9hm):**
+- **job 575** (cache quente): payload final correto `current:2/total:2, label "concluído: SUPERMERCADO TATICO", duplicates:2` (dedup do preço idêntico de 16h) → alerta **#127** `🛒 SCAN DE PREÇOS — SUPERMERCADO TATICO` com `Registrados: 0 • Duplicados: 2` + linhas `⏭️ duplicado (R$ 750)`;
+- **job 577** (cache limpo, caminho completo): progresso intermediário real a cada 1,2s — `Feijão dona de • PLAYWRIGHT_STEALTH 0/7 → PLAYWRIGHT_BASIC 1/7 → SEARCH_VERIFY 2/7 → NVIDIA_NIM 3/7` → `arroz 5KG` com contadores vivos (`errors:1` já visível entre itens) → `concluído` com **erros: 2** → alerta **#132** `⚠️ SCAN DE PREÇOS COM ERROS` com `❌ Failed to scrape... (tried: ...)` + URL por item;
+- `DELETE /api/notifications` → `{"deleted":105}` e `GET` → `[]`; Vite/PM2 sem erros de compilação (7 processos online, API 200).
+
+**Arquivos:** `src/lib/localPriceScrape.ts`, `src/workers/scanWorker.ts`, `src/repositories/notificationRepository.ts`, `server.ts`, `src/components/MercadoTab.tsx`, `src/components/NotificationsTab.tsx`, docs.

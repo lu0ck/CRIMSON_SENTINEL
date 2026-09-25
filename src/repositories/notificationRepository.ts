@@ -94,6 +94,13 @@ export const NotificationRepository = {
     );
   },
 
+  // #52 — limpar toda a Central de Alertas (botão LIMPAR TUDO).
+  clearAll(): number {
+    const db = getDb();
+    const info = db.prepare("DELETE FROM notification_log").run();
+    return Number(info.changes || 0);
+  },
+
   getScanLog(limit = 20): NotificationLogEntry[] {
     const db = getDb();
     const rows = db

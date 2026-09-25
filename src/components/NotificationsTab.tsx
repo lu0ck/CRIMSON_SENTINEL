@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
-import { Bell, ShieldAlert, Store, ShoppingCart, Percent, Loader2, XCircle, ChevronDown, ExternalLink } from "lucide-react";
+import { Bell, ShieldAlert, Store, ShoppingCart, Percent, Loader2, XCircle, ChevronDown, ExternalLink, Radar, Trash2 } from "lucide-react";
 import type { NotificationLogEntry } from "../repositories/notificationRepository";
 import { formatLocalDateTime } from "../lib/datetime";
 
@@ -32,6 +32,8 @@ const entityMeta = (entityType: string) => {
       return { icon: <Bell size={14} />, label: "COMPARAR", color: "text-crimson" };
     case "trigger":
       return { icon: <ShieldAlert size={14} />, label: "TRIGGER", color: "text-amber-500" };
+    case "local-scan":
+      return { icon: <Radar size={14} />, label: "SCAN LOCAL", color: "text-blue-400" };
     default:
       return { icon: <Bell size={14} />, label: entityType.toUpperCase(), color: "text-crimson" };
   }
@@ -49,6 +51,7 @@ export function NotificationsTab({ addToast, playSound }: NotificationsTabProps)
   const [notifications, setNotifications] = useState<NotificationLogEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [clearConfirm, setClearConfirm] = useState(false);
 
   const load = async () => {
     setLoading(true);
@@ -59,6 +62,27 @@ export function NotificationsTab({ addToast, playSound }: NotificationsTabProps)
       addToast("FALHA AO CARREGAR NOTIFICAÇÕES", "error", String(err?.message || err));
     } finally {
       setLoading(false);
+    }
+  };
+
+  // #52 — LIMPAR TUDO com confirmação em 2 cliques (3s para cancelar).
+  const clearAll = async () => {
+    if (!clearConfirm) {
+      setClearConfirm(true);
+      playSound("click");
+      window.setTimeout(() => setClearConfirm(false), 3000);
+      return;
+    }
+    try {
+      const r = await apiJson("/api/notifications", { method: "DELETE" });
+      playSound("success");
+      addToast("ALERTAS LIMPOS", "success", `${r.deleted} registro(s) removido(s)`);
+      setNotifications([]);
+    } catch (err: any) {
+      playSound("error");
+      addToast("FALHA AO LIMPAR ALERTAS", "error", String(err?.message || err));
+    } finally {
+      setClearConfirm(false);
     }
   };
 
@@ -223,15 +247,28 @@ export function NotificationsTab({ addToast, playSound }: NotificationsTabProps)
         </div>
       )}
 
-      <button
-        className="hud-button text-xs py-2 px-4"
-        onClick={() => {
-          playSound("click");
-          load();
-        }}
-      >
-        ATUALIZAR LOG
-      </button>
+      <div className="flex items-center gap-3">
+        <button
+          className="hud-button text-xs py-2 px-4"
+          onClick={() => {
+            playSound("click");
+            load();
+          }}
+        >
+          ATUALIZAR LOG
+        </button>
+        {notifications.length > 0 && (
+          <button
+            className={`hud-button text-xs py-2 px-4 flex items-center gap-2 ${
+              clearConfirm ? "border-red-500/60 text-red-400" : ""
+            }`}
+            onClick={clearAll}
+          >
+            <Trash2 size={12} />
+            {clearConfirm ? "CONFIRMAR LIMPEZA?" : "LIMPAR TUDO"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

@@ -9,7 +9,7 @@
 //   Tier 3 — sem price_url e sem chain/handler → social-dependent (1 por est.)
 
 import type { ShoppingListItem, Establishment, PriceObservation } from "../types";
-import { advancedScrape } from "./scraper";
+import { advancedScrape, type ScrapeProgressInfo } from "./scraper";
 import { isValidPrice, sanitizePrice } from "./price";
 import { PriceObservationRepository } from "../repositories/priceObservationRepository";
 import { safeLog } from "./safeLog";
@@ -29,6 +29,25 @@ export interface LocalScrapeResult {
   error?: string;
   url: string;
 }
+
+// #52 — progresso vivo do scan local (emitido por item e por estratégia).
+export interface LocalScanProgress {
+  /** item dentro do estabelecimento (1-based) */
+  index: number;
+  /** total de itens do estabelecimento */
+  total: number;
+  itemName: string;
+  /** estratégia do scraper quando disponível (ex.: PLAYWRIGHT_STEALTH) */
+  strategy?: string;
+  strategyTried?: number;
+  strategyTotal?: number;
+  /** contagem viva dentro deste estabelecimento */
+  recorded: number;
+  duplicates: number;
+  errors: number;
+}
+
+export type LocalScrapeProgressCallback = (p: LocalScanProgress) => void;
 
 export interface LocalPriceScanOutcome {
   establishmentId: string;
@@ -106,7 +125,7 @@ async function scrapeViaPriceUrl(
   establishment: Establishment,
   item: ShoppingListItem,
   apiKeys: LocalScrapeApiKeys,
-  opts?: { maxPriceTolerance?: number }
+  opts?: { maxPriceTolerance?: number; onStrategyProgress?: (p: ScrapeProgressInfo) => void }
 ): Promise<LocalScrapeResult> {
   const url = buildSearchUrl(establishment.priceUrl!, item.name);
   const recent = PriceObservationRepository.getAll({
@@ -115,7 +134,11 @@ async function scrapeViaPriceUrl(
   })[0];
 
   try {
-    const info = await advancedScrape(url, apiKeys);
+    const info = await advancedScrape(url, {
+      ...apiKeys,
+      // #52 — estratégia atual da cascata (UI mostra PLAYWRIGHT → SEARCH → ...)
+      onProgress: opts?.onStrategyProgress,
+    });
     if (!info || !isValidPrice(info.price)) {
       return {
         itemId: item.id,
@@ -255,7 +278,7 @@ export async function scrapeItemPrice(
   establishment: Establishment,
   item: ShoppingListItem,
   apiKeys: LocalScrapeApiKeys,
-  opts?: { maxPriceTolerance?: number }
+  opts?: { maxPriceTolerance?: number; onStrategyProgress?: (p: ScrapeProgressInfo) => void }
 ): Promise<LocalScrapeResult> {
   if (establishment.priceUrl) {
     return scrapeViaPriceUrl(establishment, item, apiKeys, opts);
@@ -282,7 +305,8 @@ export async function scrapeItemPrice(
 export async function scanEstablishmentPrices(
   establishment: Establishment,
   items: ShoppingListItem[],
-  apiKeys: LocalScrapeApiKeys
+  apiKeys: LocalScrapeApiKeys,
+  onItemProgress?: LocalScrapeProgressCallback
 ): Promise<LocalPriceScanOutcome> {
   const base = {
     establishmentId: establishment.id,
@@ -313,8 +337,30 @@ export async function scanEstablishmentPrices(
   }
 
   const results: LocalScrapeResult[] = [];
-  for (const item of items) {
-    results.push(await scrapeItemPrice(establishment, item, apiKeys));
+  const liveCounts = () => ({
+    recorded: results.filter((r) => r.status === "recorded").length,
+    duplicates: results.filter((r) => r.status === "duplicate").length,
+    errors: results.filter((r) => r.status === "error").length,
+  });
+  for (let i = 0; i < items.length; i++) {
+    const item = items[i];
+    const emit = (strategy?: string, strategyTried?: number, strategyTotal?: number) =>
+      onItemProgress?.({
+        index: i + 1,
+        total: items.length,
+        itemName: item.name,
+        strategy,
+        strategyTried,
+        strategyTotal,
+        ...liveCounts(),
+      });
+    emit(); // início do item
+    results.push(
+      await scrapeItemPrice(establishment, item, apiKeys, {
+        onStrategyProgress: (p) => emit(p.strategy, p.triedCount, p.totalStrategies),
+      })
+    );
+    emit(); // item concluído (contagens atualizadas)
   }
 
   const socialHits = results.filter((r) => r.status === "social-dependent");
