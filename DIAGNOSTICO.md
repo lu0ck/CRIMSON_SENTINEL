@@ -1121,3 +1121,24 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+
+## 6.30 feature: ordenação dos produtos na aba LIST — preço, A–Z, ordem manual ↑↓ (#45)
+
+**Pedido:** ordenar os itens das **listas da aba LIST** (não a aba Mercado): menor→maior preço, vice-versa, alfabética e **ordem de compra manual**.
+
+**Histórico:** a primeira implementação (`c2eb014`) foi feita na aba Mercado por engano → **revertida** (`dee1860`) e refeita no lugar certo.
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| Coluna `sort_order INTEGER` em **products** | `schema.sql`, `db.ts` (`ensureColumn`), `productRepository.ts` (INSERT + SET — sem isso não grava) | posição manual |
+| Ordenação client-side | `App.tsx` (`sortedListProducts` useMemo) | 6 modos: `padrao` / `preco_asc` / `preco_desc` (preço ≤0 → fim) / `az` / `za` / `manual` (`sortOrder` ASC, NULL → fim); aplicada no render **e** no export (`listExportProducts`) |
+| Seletor | `App.tsx` header da lista (ao lado de MATRIX VIEW) | persiste em `localStorage` (`sentinela_products_sort`) |
+| Botões ↑↓ | `App.tsx` wrapper do `ProductRow` | só no modo manual; swap + reatribui índices + `saveData()` (POST `/api/data`, caminho já usado pela UI) |
+| 1ª ativação do manual | `changeProductSort` | semeia `sortOrder` = índice da ordem visível |
+| Tipo | `types.ts`, `repositories/types.ts` | `Product.sortOrder?: number` |
+
+**Validação #45:** `npm run lint` → 0; select troca a ordem; ↑↓ persistem após reload (`sort_order` no banco); export usa a mesma ordem.
+
+**Arquivos:** `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/productRepository.ts`, `src/repositories/types.ts`, `src/types.ts`, `src/App.tsx`, docs.

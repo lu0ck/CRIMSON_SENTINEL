@@ -45,7 +45,9 @@ import {
   Copy,
   Check,
   Store,
-  Download
+  Download,
+  ArrowUp,
+  ArrowDown
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId, isSearchUrl } from "./lib/url";
@@ -147,6 +149,10 @@ function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }
 
+// #45 — ordenação dos produtos na aba LIST (persistida no localStorage)
+type ProductSortMode = "padrao" | "preco_asc" | "preco_desc" | "az" | "za" | "manual";
+const PRODUCT_SORT_KEY = "sentinela_products_sort";
+
 export default function App() {
   const [data, setData] = useState<AppData>({
     profiles: [],
@@ -168,6 +174,14 @@ export default function App() {
   const [newProfileName, setNewProfileName] = useState("");
   const [activeTab, setActiveTab] = useState<"dashboard" | "lists" | "mercado" | "settings" | "local" | "alerts" | "social" | "triggers" | "history">("dashboard");
   const [selectedListId, setSelectedListId] = useState<string | null>(null);
+  // #45 — modo de ordenação dos produtos da lista selecionada
+  const [productSortMode, setProductSortMode] = useState<ProductSortMode>(() => {
+    try {
+      return (localStorage.getItem(PRODUCT_SORT_KEY) as ProductSortMode) || "padrao";
+    } catch {
+      return "padrao";
+    }
+  });
   const [isAddingProduct, setIsAddingProduct] = useState(false);
   const [isAddingList, setIsAddingList] = useState(false);
   const [newUrls, setNewUrls] = useState<string[]>([""]);
@@ -494,6 +508,37 @@ export default function App() {
   const profileProducts = data.products.filter(p => p.profileId === activeProfileId);
   const profileLists = data.lists.filter(l => l.profileId === activeProfileId);
 
+  // #45 — produtos da lista selecionada já ordenados (preço, alfabética ou ordem manual)
+  const sortedListProducts = React.useMemo(() => {
+    if (!selectedListId) return [];
+    const arr = profileProducts.filter(p => p.listId === selectedListId);
+    const priceKey = (p: Product, dir: "asc" | "desc") => {
+      const v = p.currentPrice;
+      if (!v || v <= 0) return dir === "asc" ? Infinity : -Infinity;
+      return v;
+    };
+    switch (productSortMode) {
+      case "preco_asc":
+        return [...arr].sort((a, b) => priceKey(a, "asc") - priceKey(b, "asc"));
+      case "preco_desc":
+        return [...arr].sort((a, b) => priceKey(b, "desc") - priceKey(a, "desc"));
+      case "az":
+        return [...arr].sort((a, b) => a.name.localeCompare(b.name, "pt-BR", { sensitivity: "base" }));
+      case "za":
+        return [...arr].sort((a, b) => b.name.localeCompare(a.name, "pt-BR", { sensitivity: "base" }));
+      case "manual":
+        return [...arr].sort((a, b) => {
+          const ao = a.sortOrder, bo = b.sortOrder;
+          if (ao == null && bo == null) return 0;
+          if (ao == null) return 1; // sem posição → fim
+          if (bo == null) return -1;
+          return ao - bo;
+        });
+      default:
+        return arr;
+    }
+  }, [profileProducts, selectedListId, productSortMode]);
+
   const listHistoryData = React.useMemo(() => {
     const allDates = Array.from(new Set(
       profileProducts.flatMap(p => p.priceHistory.map(h => h.date))
@@ -567,6 +612,45 @@ export default function App() {
     const newData = { ...data, products: data.products.filter(p => p.id !== id) };
     saveData(newData);
     setSystemMessage("PRODUCT REMOVED FROM DATABASE");
+  };
+
+  // #45 — troca o modo de ordenação da lista; "manual" semeia a ordem visível
+  const changeProductSort = (mode: ProductSortMode) => {
+    playSound("click");
+    setProductSortMode(mode);
+    try {
+      localStorage.setItem(PRODUCT_SORT_KEY, mode);
+    } catch {
+      // ignore
+    }
+    if (mode === "manual") {
+      const needsSeed = sortedListProducts.some((p) => p.sortOrder == null);
+      if (needsSeed) {
+        const seed = new Map(sortedListProducts.map((p, i) => [p.id, i]));
+        saveData({
+          ...data,
+          products: data.products.map((p) =>
+            seed.has(p.id) ? { ...p, sortOrder: seed.get(p.id)! } : p
+          ),
+        });
+      }
+    }
+  };
+
+  // #45 — move produto ↑↓ na "ordem de compra" (persiste via saveData)
+  const moveProduct = (idx: number, dir: -1 | 1) => {
+    const target = idx + dir;
+    if (target < 0 || target >= sortedListProducts.length) return;
+    playSound("click");
+    const next = [...sortedListProducts];
+    [next[idx], next[target]] = [next[target], next[idx]];
+    const orderMap = new Map(next.map((p, i) => [p.id, i]));
+    saveData({
+      ...data,
+      products: data.products.map((p) =>
+        orderMap.has(p.id) ? { ...p, sortOrder: orderMap.get(p.id)! } : p
+      ),
+    });
   };
 
   const updateProductTargetPrice = (id: string, targetPrice: number | undefined) => {
@@ -755,9 +839,7 @@ const deleteComparisonResult = (productId: string, index: number) => {
     }
   };
 
-  const listExportProducts = selectedListId
-    ? profileProducts.filter(p => p.listId === selectedListId)
-    : [];
+  const listExportProducts = sortedListProducts;
 
   const lowestPrice = (p: Product): number => {
     const candidates = [p.currentPrice];
@@ -2035,6 +2117,20 @@ const queued = await response.json();
                           >
                             <Grid3X3 size={12} /> MATRIX VIEW
                           </button>
+                          {/* #45 — ordenação da lista */}
+                          <select
+                            value={productSortMode}
+                            onChange={(e) => changeProductSort(e.target.value as ProductSortMode)}
+                            className="bg-black border border-crimson/30 px-2 py-1 font-mono text-[10px] text-crimson focus:outline-none focus:border-crimson"
+                            title="Ordenar produtos (#45): preço, alfabética ou ordem de compra"
+                          >
+                            <option value="padrao">ORDEM: PADRÃO</option>
+                            <option value="preco_asc">MENOR PREÇO</option>
+                            <option value="preco_desc">MAIOR PREÇO</option>
+                            <option value="az">A → Z</option>
+                            <option value="za">Z → A</option>
+                            <option value="manual">ORDEM DE COMPRA</option>
+                          </select>
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
@@ -2115,23 +2211,53 @@ const queued = await response.json();
                     )}
 
                     <div className="grid grid-cols-1 gap-4">
-                      {profileProducts.filter(p => p.listId === selectedListId).map((product, idx) => (
+                      {sortedListProducts.map((product, idx) => (
                         <motion.div
                           key={product.id}
                           initial={{ opacity: 0, x: -20 }}
                           animate={{ opacity: 1, x: 0 }}
                           transition={{ delay: idx * 0.05 }}
+                          className={productSortMode === "manual" ? "flex items-start gap-2" : ""}
                         >
-                          <ProductRow 
-                            product={product} 
-                            onDelete={() => { playSound('click'); deleteProduct(product.id); }} 
-                            onCompare={() => { playSound('click'); compareProduct(product); }}
-                            onClick={() => { playSound('click'); setSelectedProductId(product.id); }}
-                            isComparing={comparingProduct === product.id}
-                          />
+                          {/* #45 — mover produto na "ordem de compra" (só no modo manual) */}
+                          {productSortMode === "manual" && (
+                            <div className="flex flex-col gap-1 shrink-0 pt-4">
+                              <button
+                                onClick={() => { playSound('click'); moveProduct(idx, -1); }}
+                                disabled={idx === 0}
+                                className={cn(
+                                  "border border-crimson/30 p-1",
+                                  idx === 0 ? "opacity-20 cursor-not-allowed" : "hover:bg-crimson hover:text-black"
+                                )}
+                                title="Subir item"
+                              >
+                                <ArrowUp size={12} />
+                              </button>
+                              <button
+                                onClick={() => { playSound('click'); moveProduct(idx, 1); }}
+                                disabled={idx === sortedListProducts.length - 1}
+                                className={cn(
+                                  "border border-crimson/30 p-1",
+                                  idx === sortedListProducts.length - 1 ? "opacity-20 cursor-not-allowed" : "hover:bg-crimson hover:text-black"
+                                )}
+                                title="Descer item"
+                              >
+                                <ArrowDown size={12} />
+                              </button>
+                            </div>
+                          )}
+                          <div className="flex-1">
+                            <ProductRow
+                              product={product}
+                              onDelete={() => { playSound('click'); deleteProduct(product.id); }}
+                              onCompare={() => { playSound('click'); compareProduct(product); }}
+                              onClick={() => { playSound('click'); setSelectedProductId(product.id); }}
+                              isComparing={comparingProduct === product.id}
+                            />
+                          </div>
                         </motion.div>
                       ))}
-                      {profileProducts.filter(p => p.listId === selectedListId).length === 0 && (
+                      {sortedListProducts.length === 0 && (
                         <div className="hud-border p-12 text-center text-crimson/30 font-mono">
                           NO PRODUCTS IN THIS ARCHIVE
                         </div>

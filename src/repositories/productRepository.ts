@@ -46,8 +46,8 @@ export const ProductRepository = {
   save(product: Product): void {
     const db = getDb();
     db.prepare(
-      `INSERT INTO products (id, url, name, current_price, previous_price, currency, available, image_url, last_updated, list_id, profile_id, target_price, last_scrape_method, comparison_results)
-       VALUES (@id, @url, @name, @current_price, @previous_price, @currency, @available, @image_url, @last_updated, @list_id, @profile_id, @target_price, @last_scrape_method, @comparison_results)
+      `INSERT INTO products (id, url, name, current_price, previous_price, currency, available, image_url, last_updated, list_id, profile_id, target_price, last_scrape_method, comparison_results, sort_order)
+       VALUES (@id, @url, @name, @current_price, @previous_price, @currency, @available, @image_url, @last_updated, @list_id, @profile_id, @target_price, @last_scrape_method, @comparison_results, @sort_order)
        ON CONFLICT(id) DO UPDATE SET
          url=excluded.url, name=excluded.name, current_price=excluded.current_price,
          previous_price=excluded.previous_price, currency=excluded.currency,
@@ -55,7 +55,8 @@ export const ProductRepository = {
          last_updated=excluded.last_updated, list_id=excluded.list_id,
          profile_id=excluded.profile_id, target_price=excluded.target_price,
          last_scrape_method=excluded.last_scrape_method,
-         comparison_results=excluded.comparison_results`
+         comparison_results=excluded.comparison_results,
+         sort_order=excluded.sort_order`
     ).run({
       id: product.id,
       url: product.url,
@@ -73,6 +74,7 @@ export const ProductRepository = {
       comparison_results: product.comparisonResults
         ? JSON.stringify(product.comparisonResults)
         : null,
+      sort_order: product.sortOrder ?? null,
     });
 
     this.syncPriceHistory(product.id, product.priceHistory);

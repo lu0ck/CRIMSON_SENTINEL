@@ -59,6 +59,7 @@
 - ~~**timeout 600s ainda estourava (active tentativa 2/3)**~~ — **RESOLVIDO (#42)**: budget **180s**/tentativa no `advancedScrape`, scrape `attempts:2` (pior caso 390s), poll de graça p/ resultado tardio, dica `N/2`. DIAGNOSTICO §6.27.
 - ~~**Shopee/ML falham (NVIDIA 410 + Gemini 429 + SEARCH por último)**~~ — **RESOLVIDO (#43)**: fail-fast NVIDIA (modelos sondados `z-ai/glm-5.3`/`gpt-oss-20b`/`nemotron-3-super`, timeout 30s/modelo), circuit Gemini 1h, `extractNameFromUrl`, SEARCH_VERIFY antes de NVIDIA/Vision (interno: NVIDIA → regex → Gemini). DIAGNOSTICO §6.28.
 - ~~**Alerta falso Telegram (preço frete/parcela ≤ alvo)**~~ — **RESOLVIDO (#44)**: `isPriceRealistic` exportada; fallback do scraper não devolve preço irreal (sem cache); `scanWorker` não persiste/não alerta preço irreal (2 call sites); prompt NVIDIA "preço à vista, ignore frete/parcela"; dados da pasta GD900 corrigidos (7,18 → 26,79). DIAGNOSTICO §6.29.
+- **Ordenação dos produtos na aba LIST** — **#45**: 6 modos (`padrao`/`preco_asc`/`preco_desc`/`az`/`za`/`manual`), coluna `products.sort_order`, seletor + botões ↑↓ no header/conteúdo da lista, persistência em localStorage; 1ª versão na aba Mercado revertida (`dee1860`). DIAGNOSTICO §6.30.
 - **Vitrine de validação (8 links)** — ✅ **8/8** com nome, preço e foto (detalhe na FASE 14): 3× AliExpress, 1× Kabum, 1× Pichau, 1× Amazon, 2× Mercado Livre.
 
 ---

@@ -78,6 +78,9 @@ export function getDb(): Database.Database {
   // price_observations: valid_until heurístico (FASE 5)
   ensureColumn("price_observations", "valid_until", "valid_until TEXT");
 
+  // #45 — posição manual do produto na lista da aba LIST ("ordem de compra")
+  ensureColumn("products", "sort_order", "sort_order INTEGER");
+
   // promotions: product_id (FK opcional), discount_pct, is_flash (FASE 6/8), expires_at distinto end_date
   ensureColumn("promotions", "product_id", "product_id TEXT");
   ensureColumn("promotions", "discount_pct", "discount_pct REAL");
