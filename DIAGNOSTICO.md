@@ -1240,3 +1240,26 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Smoke #49 (end-to-end):** após restart: `PRAGMA table_info(products)` → `bought_at`/`bought_price` presentes; roundtrip via `POST /api/data` (mesmo caminho do `mutateData` da UI): marcar `830434` → `2026-09-25T03:30:00.000Z|123.45` no DB e no `GET /api/data`; desfazer → `NULL|NULL`, total de produtos intacto (20); `GET /` 200 (tela) e 7 processos PM2 online.
 
 **Arquivos:** `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/types.ts`, `src/repositories/productRepository.ts`, `src/types.ts`, `src/App.tsx`, `src/workers/scanWorker.ts`, docs.
+
+## 6.35 bug+feature: "800 Robux" em link do AliExpress — busca sem hint validado (#50)
+
+**Sintoma:** link colado `https://pt.aliexpress.com/item/1005007300070052.html?...pdp_npi=...BRL+665.99...` virou produto **"800 Robux" R$ 50,00** (card ALVO_IDENTIFICADO/VALOR_ATUAL do modal de detalhes), nenhum aviso na aba ALERTAS, e a seção de comprados estava invisível (nenhum item marcado).
+
+**Causa raiz (jobs 542/543):** (1) a página deu o **nome certo** (`MACHINIST X99 MD8...`) mas `price=0` (preço não renderizou) e o wrapper Playwright **descartava o resultado inteiro**; (2) sem partials, o hint da `SEARCH_VERIFY` virou o **número cru do item** (`1005007300070052` — slug numérico passava pelo `extractNameFromUrl`); (3) busca Tavily por esse ID → snippets aleatórios → LLM respondeu `"800 Robux" R$ 50` **sem validação de nome contra o hint**; (4) SUCCESS → `NVIDIA_NIM`/`GEMINI_VISION` (página real) nunca rodaram; (5) `isPriceRealistic(50, "800 Robux")` passa (com o nome da placa-mãe o gate ≥R$200 rejeitaria). O preço real (R$ 665,99) estava no próprio parâmetro `pdp_npi` do link.
+
+**Mudanças:**
+
+| # | Mudança | Arquivo | Detalhe |
+|---|---|---|---|
+| A | Slug numérico não é nome | `scraper.ts` `extractNameFromUrl` | `isIdLike` = `^[A-Z]{2,4}\d{6,}` **ou** `^\d{6,}$` → sem slug descritivo → `""` (vira "sem hint" no SEARCH_VERIFY → grounding/null) |
+| B | Nome da página sobrevive sem preço | `scraper.ts` wrapper Playwright + loop + `mergeResults` | handler/genérico mantêm o nome com preço 0 (`partial` name-only); `mergeResults` escolhe nome de **todos** os partials (e foto), preço continua exigindo `isValidPrice`; novo `bestPartialName` alimenta o hint da SEARCH_VERIFY |
+| C | Nome do LLM validado | `scraper.ts` `titleMatchesHint` (agora export, escopo de módulo) | saída NVIDIA da SEARCH_VERIFY exige overlap com o hint (≥2 palavras comuns ou razão ≥0.34): `"800 Robux"` ≠ `"MACHINIST X99..."` → `null` → cascata continua; hint só-dígitos tratado como ausente |
+| D | Preço do link AliExpress | `scraper.ts` `extractAliExpressPdpPrice` + estratégia `URL_PRICE_FALLBACK` | parser do `pdp_npi` (host só AliExpress, `BRL x` distintos → promo = 2º) → partial de preço baixa qualidade (`priceConfirmed=false`, q−1) entre PLAYWRIGHT e SEARCH |
+| E | Alerta de sucesso não confirmado | `scanWorker.ts` `handleScrape` | `!priceConfirmed && method ~ /SEARCH/` → `recordInAppAlert("scrape", url, "⚠️ SCRAPE NÃO CONFIRMADO PELA PÁGINA", ...)` (dedup 1h) na aba ALERTAS |
+| F | Comprados sempre visíveis | `App.tsx` | BOUGHT ARCHIVE sem o gate `boughtProducts.length > 0`; estado vazio `NENHUM ITEM COMPRADO AINDA — MARQUE PRODUTOS COM O ÍCONE DO CARRINHO NA LISTA` |
+
+**Validação #50:** `npm run lint` → 0; unitário 11/11 (`/tmp/opencode/test50.ts`: id AliExpress/ML puro → `""`, slug descritivo via walk-up preservado, `pdp_npi` → 665.99/unico/sem-param/domínio alheio → null, `titleMatchesHint` rejeita "800 Robux"/aceita sinônimo).
+
+**Smoke #50 (job 547, force):** mesma URL → **`name="MACHINIST X99 MD8 Placa-mãe LGA 2011-3 Suporte Dual Xeon..."`, `price=665.99`**, method `MERGED_PLAYWRIGHT_BASIC+OG`, strategies `PLAYWRIGHT_STEALTH → PLAYWRIGHT_BASIC → URL_PRICE_FALLBACK → ...` (**SEARCH_VERIFY não precisou rodar**); **sem** log `URL name hint: 1005007300070052` (A) e zero caches com "800 Robux" (o cache desta URL, `d6p9bq.json`, agora guarda o resultado correto); 19 produtos intactos, nenhum alerta indevido; resultado sem `SEARCH` no method → E corretamente não disparou.
+
+**Arquivos:** `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, `src/App.tsx`, docs.
