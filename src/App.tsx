@@ -374,6 +374,11 @@ export default function App() {
   const dataRef = useRef<AppData>(data);
   useEffect(() => { dataRef.current = data; }, [data]);
 
+  // #48 — watermark do snapshot: quando o servidor gerou o `data` base.
+  // Só muda em fetchData (par atomico com dataRef) — mutações locais mantêm a
+  // mesma geração. Vai no body do POST /api/data como `loadedAt`.
+  const loadedAtRef = useRef<number>(Date.now());
+
   // #47 — mutação anti-resurrection: aplica o updater no estado MAIS RECENTE (não no
   // snapshot do render), persiste via POST /api/data e faz rollback se falhar
   // (só se ninguém tiver escrito por cima nesse meio-tempo).
@@ -387,7 +392,7 @@ export default function App() {
       const response = await fetch("/api/data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(next),
+        body: JSON.stringify({ ...next, loadedAt: loadedAtRef.current }),
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return true;
@@ -412,7 +417,7 @@ export default function App() {
       const response = await fetch("/api/data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newData)
+        body: JSON.stringify({ ...newData, loadedAt: loadedAtRef.current })
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (error) {
@@ -430,7 +435,7 @@ export default function App() {
       const response = await fetch("/api/data", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newData)
+        body: JSON.stringify({ ...newData, loadedAt: loadedAtRef.current })
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       dataRef.current = newData; // #47 — mantém o espelho em sincronia com o estado
@@ -464,6 +469,10 @@ export default function App() {
       if (!response.ok) throw new Error(`HTTP Error: ${response.status}`);
       const json = await response.json();
       console.log('fetchData success, data received');
+      // #48 — par atômico espelho+watermark (relógio do servidor no header)
+      const loadedAt = Number(response.headers.get("X-Loaded-At"));
+      dataRef.current = json;
+      if (Number.isFinite(loadedAt) && loadedAt > 0) loadedAtRef.current = loadedAt;
       setData(json);
       setIsDataLoaded(true);
     } catch (error) {
@@ -1167,7 +1176,9 @@ const deleteComparisonResult = (productId: string, index: number) => {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ 
                 url: url,
-                profileId: activeProfileId 
+                profileId: activeProfileId,
+                // #48 — ADD manual: busca fresca, ignora cache de 30min
+                force: true
               }),
               signal: individualController.signal
             });
@@ -1210,8 +1221,13 @@ const queued = await response.json();
       const saveResult = await saveResponse.json();
       if (saveResult.action === "exists") {
         console.log(`Product already exists: ${product.name}`);
+        addToast("ITEM JÁ ESTAVA NA LISTA — busca fresca aplicada", "info");
       } else if (saveResult.action === "updated") {
         console.log(`Product price updated: ${product.name}`);
+        addToast(
+          `PREÇO ATUALIZADO: R$ ${saveResult.product?.previousPrice} → R$ ${saveResult.product?.currentPrice}`,
+          "success"
+        );
       }
       batchResults.push({ url, success: true, name: info.name, price: info.price, method: info.method, timestamp: Date.now() });
       return product;
@@ -1270,8 +1286,13 @@ const queued = await response.json();
     
     if (saveResult.action === "exists") {
       console.log(`Product already exists: ${product.name}`);
+      addToast("ITEM JÁ ESTAVA NA LISTA — busca fresca aplicada", "info");
     } else if (saveResult.action === "updated") {
       console.log(`Product price updated: ${product.name}`);
+      addToast(
+        `PREÇO ATUALIZADO: R$ ${saveResult.product?.previousPrice} → R$ ${saveResult.product?.currentPrice}`,
+        "success"
+      );
     }
     
     batchResults.push({ url, success: true, name: info?.name, price: info?.price, method: info?.method, timestamp: Date.now() });

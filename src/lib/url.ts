@@ -34,6 +34,9 @@ const TRACKING_PARAMS = [
   "smid",
   "smile",
   "linkCode",
+  // #48 — rastreio AliExpress (spm/scm): presença deles não muda a oferta
+  "spm",
+  "scm",
 ];
 
 const PRODUCT_ID_PATTERNS: { regex: RegExp; format: (m: RegExpMatchArray) => string }[] = [
@@ -77,6 +80,41 @@ export function generateProductId(url: string): string {
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
     const char = normalized.charCodeAt(i);
+    hash = (hash << 5) - hash + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash).toString(36);
+}
+
+// #48 — chave de OFERTA: forma canônica + query LIMPA e ordenada.
+// normalizeProductUrl descarta a query inteira (evita duplicar por tracking);
+// aqui preservamos a query RELEVANTE para distinguir vendas/ofertas diferentes
+// do mesmo produto (ex.: mesmo item AliExpress com outro vendedor na query).
+// Mesma oferta com params em ordem diferente → mesma chave.
+export function canonicalOfferUrl(url: string): string {
+  try {
+    const parsed = new URL(ensureHttps(url));
+    for (const param of TRACKING_PARAMS) {
+      parsed.searchParams.delete(param);
+    }
+    parsed.hash = "";
+    const pairs = [...parsed.searchParams.entries()].sort(([a], [b]) => a.localeCompare(b));
+    const query = pairs
+      .map(([k, v]) => `${encodeURIComponent(k)}=${encodeURIComponent(v)}`)
+      .join("&");
+    const base = normalizeProductUrl(ensureHttps(url));
+    return query ? `${base}?${query}` : base;
+  } catch {
+    return url;
+  }
+}
+
+// #48 — sufixo estável p/ id de item de oferta separada (`${baseId}~${suffix}`).
+export function hashOfferSuffix(url: string): string {
+  const key = canonicalOfferUrl(url);
+  let hash = 0;
+  for (let i = 0; i < key.length; i++) {
+    const char = key.charCodeAt(i);
     hash = (hash << 5) - hash + char;
     hash = hash & hash;
   }

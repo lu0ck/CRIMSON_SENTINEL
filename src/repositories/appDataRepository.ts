@@ -13,12 +13,14 @@ export const AppDataRepository = {
     };
   },
 
-  saveAll(data: AppData): void {
+  saveAll(data: AppData, loadedAtMs?: number): void {
     const db = getDb();
     const tx = db.transaction(() => {
       ProfileRepository.saveAll(data.profiles);
       ProductListRepository.saveAll(data.lists);
-      ProductRepository.saveAll(data.products);
+      // #48 — watermark: linhas criadas após o load do cliente são preservadas
+      // (snapshot desatualizado nunca apaga produto recém-adicionado)
+      ProductRepository.saveAll(data.products, loadedAtMs);
     });
     tx();
   },

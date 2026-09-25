@@ -15,7 +15,7 @@ import { ProductRepository } from "./src/repositories/productRepository.ts";
 import { ProfileRepository } from "./src/repositories/profileRepository.ts";
 import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
-import { normalizeProductUrl, generateProductId, ensureHttps } from "./src/lib/url.ts";
+import { generateProductId, ensureHttps, canonicalOfferUrl, hashOfferSuffix } from "./src/lib/url.ts";
 import { getScanQueue, getRouteQueue, getSocialQueue } from "./src/queue/queues.ts";
 import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, listSocialScheduledJob } from "./src/queue/schedulers.ts";
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
@@ -126,6 +126,9 @@ async function startServer() {
     try {
       const data = AppDataRepository.getAll();
       safeLog('Data read success, profiles: ' + data.profiles.length + ', products: ' + data.products.length);
+      // #48 — watermark: momento em que ESTE snapshot foi lido; o cliente devolve
+      // em loadedAt no POST e saveAll só apaga linhas criadas antes dele.
+      res.set("X-Loaded-At", String(Date.now()));
       res.json(data);
     } catch (error) {
       safeLog("Error reading database: " + error);
@@ -135,7 +138,9 @@ async function startServer() {
 
   app.post("/api/data", async (req, res) => {
     try {
-      AppDataRepository.saveAll(req.body);
+      // #48 — loadedAt viaja junto do snapshot (relógio do servidor, sem skew)
+      const { loadedAt, ...appData } = req.body ?? {};
+      AppDataRepository.saveAll(appData, Number(loadedAt));
       // #25 — AUTO-REFRESH INTERVAL (profiles.refreshInterval em horas) alimenta
       // o scheduler scan-interval-12h; sincroniza scan_interval_ms e re-registra.
       try {
@@ -165,95 +170,95 @@ async function startServer() {
       const product = req.body;
       const data = AppDataRepository.getAll();
 
-if (!data.products) data.products = [];
+      if (!data.products) data.products = [];
 
-// Prevent duplicates by normalized URL and listId
-    const normalizedUrl = normalizeProductUrl(product.url);
-    const normalizedId = generateProductId(product.url);
+      // #48 — dedup por OFERTA: mesma lista + canonicalOfferUrl igual.
+      // A query relevante (vendedor/oferta) distingue itens; tracking (utm/spm/…)
+      // é ignorado. Mesma URL com outra oferta → ITEM SEPARADO (escolha do user).
+      const offerKey = canonicalOfferUrl(product.url || "");
+      const baseId = generateProductId(product.url || "");
+      safeLog("[Product] Checking offer=" + offerKey + ", baseId=" + baseId);
 
-    safeLog("[Product] Checking: url=" + normalizedUrl + ", id=" + normalizedId);
-
-    const exists = data.products.some((p: any) => {
-      const normalizedExisting = normalizeProductUrl(p.url);
-      const urlMatch = normalizedExisting === normalizedUrl;
-      const idMatch = p.id === normalizedId;
-      safeLog("[Product] Compare with existing: " + p.id + " vs " + normalizedId + " (idMatch=" + idMatch + ")");
-      return (urlMatch || idMatch) && p.listId === product.listId;
-    });
-
-    // Se existe, verificar se o nome está correto
-    if (exists) {
-      const existingProduct = data.products.find((p: any) =>
-        (normalizeProductUrl(p.url) === normalizedUrl || p.id === normalizedId) && p.listId === product.listId
+      const existingProduct = data.products.find(
+        (p: any) =>
+          p.listId === product.listId &&
+          canonicalOfferUrl(p.url || "") === offerKey
       );
 
-      // Se o produto existente tem nome muito diferente do novo, pode ser dado corrompido
-      if (existingProduct && product.name && existingProduct.name) {
-        const existingNameLower = existingProduct.name.toLowerCase();
-        const newNameLower = product.name.toLowerCase();
-
-        // Verificar se os nomes têm palavras em comum
-        const existingWords = existingNameLower.split(/\s+/);
-        const newWords = newNameLower.split(/\s+/);
-        const commonWords = existingWords.filter(w => w.length > 3 && newWords.includes(w));
-
-        if (commonWords.length === 0) {
-          // Nomes completamente diferentes - dados corrompidos
-          safeLog("[Product] WARNING: Existing product has completely different name!");
-          safeLog("[Product] Existing: " + existingProduct.name);
-          safeLog("[Product] New: " + product.name);
-          safeLog("[Product] Deleting corrupted product and adding new one...");
-
-          // Deletar produto corrompido
-          ProductRepository.delete(existingProduct.id);
-
-          // Adicionar novo produto
-          if (!product.id || product.id.length < 8) {
-            product.id = normalizedId;
+      if (existingProduct) {
+        // Nome corrompido (sem palavras em comum): RENOMEAR IN PLACE.
+        // #48 — antes era delete+reinsere e perdia todo o price_history (FK cascade).
+        if (
+          product.name &&
+          existingProduct.name &&
+          product.name.length >= 8 &&
+          !/^unknown product$/i.test(product.name.trim())
+        ) {
+          const existingWords = existingProduct.name.toLowerCase().split(/\s+/);
+          const newWords = product.name.toLowerCase().split(/\s+/);
+          const commonWords = existingWords.filter(
+            (w: string) => w.length > 3 && newWords.includes(w)
+          );
+          if (commonWords.length === 0) {
+            safeLog(
+              "[Product] WARNING: nome sem palavras em comum — renomeando in place: '" +
+                existingProduct.name + "' → '" + product.name + "'"
+            );
+            existingProduct.name = product.name;
           }
-          ProductRepository.save(product);
-          safeLog("Product added (replaced corrupted): " + product.name + " to list " + product.listId + " (ID: " + product.id + ")");
-          res.json({ status: "ok", action: "replaced", product: product });
-          return;
         }
-      }
-    }
 
-    if (!exists) {
-      // Use normalized ID if not given
-      if (!product.id || product.id.length < 8) {
-        product.id = normalizedId;
+        // Refresh dos dados da oferta (URL colada, imagem, preço+histórico)
+        const now = new Date().toISOString();
+        let action = "exists";
+        if (product.url) existingProduct.url = product.url;
+        if (product.imageUrl) existingProduct.imageUrl = product.imageUrl;
+        if (
+          (!existingProduct.name || existingProduct.name === "UNKNOWN PRODUCT") &&
+          product.name
+        ) {
+          existingProduct.name = product.name;
+        }
+        if (typeof product.available === "boolean") {
+          existingProduct.available = product.available;
+        }
+        if (
+          product.currentPrice &&
+          product.currentPrice !== existingProduct.currentPrice
+        ) {
+          existingProduct.previousPrice = existingProduct.currentPrice;
+          existingProduct.currentPrice = product.currentPrice;
+          existingProduct.priceHistory = existingProduct.priceHistory || [];
+          existingProduct.priceHistory.push({ date: now, price: product.currentPrice });
+          action = "updated";
+        }
+        existingProduct.lastUpdated = now;
+        ProductRepository.save(existingProduct);
+        safeLog(
+          "[Product] Already exists (offer): " + offerKey + " → action=" + action
+        );
+        res.json({ status: "ok", action, product: existingProduct });
+        return;
+      }
+
+      // Item novo (oferta nova): id base se livre; colisão com OUTRA lista/oferta
+      // → sufixo estável pelo hash da oferta (#48).
+      product.id = baseId;
+      if (data.products.some((p: any) => p.id === product.id)) {
+        product.id = `${baseId}~${hashOfferSuffix(product.url || "")}`;
+      }
+      let n = 2;
+      while (data.products.some((p: any) => p.id === product.id)) {
+        product.id = `${baseId}~${hashOfferSuffix(product.url || "")}${n++}`;
       }
       ProductRepository.save(product);
       safeLog("Product added: " + product.name + " to list " + product.listId + " (ID: " + product.id + ")");
       res.json({ status: "ok", action: "added", product: product });
-    } else {
-      safeLog("Product already exists: " + normalizedUrl + " in list " + product.listId);
-      // Atualizar preço se encontrou versão mais recente
-      const existingProduct = data.products.find((p: any) =>
-        (normalizeProductUrl(p.url) === normalizedUrl || p.id === normalizedId) && p.listId === product.listId
-      );
-      if (existingProduct && product.currentPrice && product.currentPrice !== existingProduct.currentPrice) {
-        existingProduct.previousPrice = existingProduct.currentPrice;
-        existingProduct.currentPrice = product.currentPrice;
-        existingProduct.lastUpdated = new Date().toISOString();
-        existingProduct.priceHistory = existingProduct.priceHistory || [];
-        existingProduct.priceHistory.push({
-          date: new Date().toISOString(),
-          price: product.currentPrice
-        });
-        ProductRepository.save(existingProduct);
-        safeLog("Product price updated: " + existingProduct.name + " from R$ " + existingProduct.previousPrice + " to R$ " + existingProduct.currentPrice);
-        res.json({ status: "ok", action: "updated", product: existingProduct });
-      } else {
-      res.json({ status: "ok", action: "exists", product: existingProduct });
-      }
+    } catch (error) {
+      safeLog("Error adding product: " + error);
+      res.status(500).json({ error: "Failed to add product" });
     }
-  } catch (error) {
-    safeLog("Error adding product: " + error);
-    res.status(500).json({ error: "Failed to add product" });
-  }
-});
+  });
 
   app.post("/api/test-discord", async (req, res) => {
     const { webhookUrl } = req.body;
@@ -286,7 +291,7 @@ if (!data.products) data.products = [];
   });
 
 app.post("/api/scrape", async (req, res) => {
-  let { url, productId, profileId } = req.body;
+  let { url, productId, profileId, force } = req.body;
   // #27 — ensureHttps (FONTE ÚNICA em url.ts)
   if (url) url = ensureHttps(url);
   try {
@@ -296,15 +301,17 @@ app.post("/api/scrape", async (req, res) => {
       // Caminho normal: enfileira via BullMQ
       const queue = getScanQueue();
       // #42 — scrape: 2 tentativas (não 3). Com budget de 180s/tentativa,
-      // pior caso ≈ 2×180+30 = 390s < 600s do pollJob. Retry de cascata
+      // pior caso ≈2×180+30 = 390s < 600s do pollJob. Retry de cascata
       // inteira quase nunca muda o resultado em sites anti-bot.
       const job = await queue.add("scrape", {
         type: "scrape",
         url,
         productId,
         profileId,
+        // #48 — ADD manual ignora o cache de 30min
+        force: force === true,
       }, { attempts: 2 });
-      safeLog(`[scrape] enfileirado job ${job.id} para ${url}`);
+      safeLog(`[scrape] enfileirado job ${job.id} para ${url}${force ? " (force)" : ""}`);
       return res.json({ jobId: job.id, status: "queued" });
     }
 
@@ -319,6 +326,8 @@ app.post("/api/scrape", async (req, res) => {
       geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
       serperApiKey: profile?.serperApiKey,
       tavilyApiKey: profile?.tavilyApiKey,
+      // #48
+      skipCache: force === true,
     });
     safeLog(`[scrape] scraping direto OK via ${result.method} para ${url}`);
     updateLastScanTimestamp();

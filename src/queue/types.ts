@@ -8,6 +8,7 @@ export interface ScrapeJobPayload {
   url: string;
   productId?: string; // se fornecido, salva o preço no produto após scrape
   profileId?: string;
+  force?: boolean; // #48 — ADD manual: ignora cache de 30min
 }
 
 export interface ScanAllJobPayload {

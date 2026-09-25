@@ -57,7 +57,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
 }
 
 async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
-  const { url, productId, profileId } = job.data;
+  const { url, productId, profileId, force } = job.data;
   const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
 
   const info = await advancedScrape(url, {
@@ -66,6 +66,8 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
     geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
     serperApiKey: profile?.serperApiKey,
     tavilyApiKey: profile?.tavilyApiKey,
+    // #48 — ADD manual: ignora cache de 30min
+    skipCache: force === true,
     // #41 — progresso real por estratégia (UI deixa de simular/engatar em 99%)
     onProgress: (p) => {
       void job.updateProgress(p).catch(() => {});

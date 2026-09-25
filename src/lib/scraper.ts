@@ -473,6 +473,8 @@ export interface ScrapeOptions {
   tavilyApiKey?: string;
   /** #41 — progresso real por estratégia (worker → job.updateProgress → UI) */
   onProgress?: (p: ScrapeProgressInfo) => void;
+  /** #48 — ignora o cache de 30min (ADD manual do usuário: busca sempre fresca) */
+  skipCache?: boolean;
 }
 
 export interface ScrapeProgressInfo {
@@ -556,7 +558,10 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   const cacheFile = path.join(CACHE_DIR, `${urlHash}.json`);
 
   // Verificar cache com expiração de 30 minutos (FASE 14)
-  if (fs.existsSync(cacheFile)) {
+  // #48 — skipCache: ADD manual ignora o cache e faz busca fresca
+  if (options.skipCache) {
+    console.log(`[Scraper] Cache bypassed (skipCache=true): ${url.substring(0, 60)}...`);
+  } else if (fs.existsSync(cacheFile)) {
     const stats = fs.statSync(cacheFile);
     const cacheAge = Date.now() - stats.mtimeMs;
     const MAX_CACHE_AGE = 30 * 60 * 1000;
