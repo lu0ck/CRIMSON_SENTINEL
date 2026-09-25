@@ -1187,3 +1187,56 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Arquivos:** `src/App.tsx`, `src/workers/scanWorker.ts`, `src/components/PriceHistoryTab.tsx`, `src/lib/priceHistory.ts`, docs.
 
 **Smoke #47 (end-to-end):** job 523 `scrape` com `productId` de produto **deletado** → scrape OK (R$ 369,99) e produto NÃO ressuscitou (API + DB count 0); teste de mecanismo no DB real (`tsx`): save → delete → `getById` guard = SKIP, e save cego = **RESSUSCITOU** (prova do bug antigo); stack reiniciada com o código final (api + 4 workers online); `GET /api/data` 200.
+
+## 6.33 fix: colar link "já conhecido" — sem busca fresca + produto sumia + oferta de outro vendedor (#48)
+
+**Sintomas (logs 09-23/24):** mesmo link do AliExpress colado 3× → `Product added` **4×** (o card sumia entre adds); job 529 `Cache hit (434s old)` = "nem faz a busca"; branch exists só escrevia `console.log` = "tratado como já conhecido" sem nenhum feedback.
+
+**Causas:**
+1. **Cache de 30min** do `advancedScrape` (chave = hash da URL completa) devolvia dado velho no ADD manual.
+2. **`ProductRepository.saveAll`** apagava do banco todo id ausente do snapshot do `POST /api/data` — qualquer `saveData`/`saveDataSilent`/`mutateData` de snapshot **anterior** ao add (janela fetch↔escrita, comparação longa, timer de debounce) deletava o produto recém-criado → loop de "re-add".
+3. **Dedup por forma canônica do path** (`normalizeProductUrl` descarta a query inteira) fundia links de **outro vendedor/oferta** no item existente, e o branch exists não atualizava `url`/imagem/`lastUpdated`.
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| `skipCache` | `lib/scraper.ts` | opção em `ScrapeOptions` → ignora o cache de 30min (gravação do cache continua) |
+| `force` no fluxo | `queue/types.ts`, `server.ts` `POST /api/scrape`, `scanWorker.handleScrape`, `App.tsx` `addProduct` | payload `force` → `skipCache: force`; ADD manual sempre `force: true` (queue e fallback direto) |
+| Watermark anti-wipe | `server.ts` `GET/POST /api/data`, `App.tsx`, `appDataRepository.ts`, `productRepository.ts` | GET devolve header **`X-Loaded-At`** (relógio do servidor); frontend guarda em `loadedAtRef` (par atômico com `dataRef` só em `fetchData`) e envia `loadedAt` em `saveData`/`saveDataSilent`/`mutateData`; `saveAll` só apaga linhas com `created_at <= loadedAt` (UTC s) — snapshot desatualizado **nunca** apaga produto criado após o load; `loadedAt` ausente = comportamento antigo (compat). `profiles`/`product_lists` mantêm o loop antigo (nota: mesma classe, não relatada) |
+| Dedup por OFERTA | `lib/url.ts`, `server.ts` `POST /api/products` | novo `canonicalOfferUrl()` = forma canônica + **query limpa e ordenada** (TRACKING_PARAMS + `spm`/`scm`); existe ⇔ mesma lista + mesma offerKey; **outra oferta do mesmo path = item separado** (escolha do usuário) com id estável `${baseId}~${hash}` (`hashOfferSuffix`, com contador anti-colisão); `generateProductId` inalterado (compat com ids existentes) |
+| Refresh + feedback | `server.ts`, `App.tsx` | exists: atualiza `url` (a colada), imagem, nome (só se vazio/`UNKNOWN PRODUCT`), disponibilidade, preço + ponto no `priceHistory` + `lastUpdated`; toasts **"ITEM JÁ ESTAVA NA LISTA — busca fresca aplicada"** / **"PREÇO ATUALIZADO: R$ x → R$ y"** (antes: só `console.log`) |
+| Nome corrompido | `server.ts` | passou a **renomear in place** — antes `ProductRepository.delete`+reinsere perdia todo o `price_history` (FK `ON DELETE CASCADE`); guarda contra renomear para "UNKNOWN PRODUCT" |
+
+**Escolha do usuário (#48):** link com a mesma página de produto porém query diferente (outro vendedor/oferta) → **item separado** na lista (não mesclar).
+
+**Validação #48:** `npm run lint` → 0; unitário 11/11 (`/tmp/opencode/test48.ts`: offerKey ignora tracking, distingue oferta, ordem de params irrelevante, suffix estável, baseId inalterado, watermark preserva linha nova/apaga antiga, sem `loadedAt` = comportamento antigo).
+
+**Smoke #48 (end-to-end):** `X-Loaded-At` no GET /api/data; produto novo (id `7j3kbs`) **sobreviveu** a `POST /api/data` de snapshot antigo sem ele (com `loadedAt` anterior ao `created_at`) e foi **apagado** por snapshot novo (`loadedAt` atual) → deletes legítimos seguem funcionando; dedup: mesma URL → `exists` (sem nova linha) / preço menor → `updated` + histórico; mesma URL + `sellerId` → **novo item** `8m0t7r~oh1cwv` (`added`), repaste da mesma oferta → `exists` (sem 3º); jobs 533/534: sem force → scrape normal, **com force → `[Scraper] Cache bypassed (skipCache=true)`** (API log: `job 534 ... (force)`); limpeza restaurou 20 produtos e preço/histórico originais.
+
+**Arquivos:** `src/lib/scraper.ts`, `src/lib/url.ts`, `src/queue/types.ts`, `server.ts`, `src/workers/scanWorker.ts`, `src/repositories/appDataRepository.ts`, `src/repositories/productRepository.ts`, `src/App.tsx`, docs.
+
+## 6.34 feature: COMPRADO — item comprado sai da lista ativa, histórico preservado (#49)
+
+**Peça do usuário:** botão de COMPRADO ao lado dos existentes (buscar/apagar); janela perguntando o **preço total pago**; data/hora da compra; sai da lista; mantém todo o histórico; seção de comprados **no fim da página** da aba LISTS.
+
+**Escolhas do usuário (#49):** scan pós-compra = **parar** (preço congela no momento da compra); preço pago = **obrigatório** (> 0).
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| Colunas | `schema.sql`, `db.ts` | `bought_at TEXT`, `bought_price REAL` + `ensureColumn` (migração no boot) |
+| Tipos/repo | `repositories/types.ts`, `types.ts`, `productRepository.ts` | `ProductRow.bought_at/bought_price`, `rowToObj` → `boughtAt/boughtPrice`, `Product.boughtAt?/boughtPrice?`, upsert do `save()` |
+| Botão + modal | `App.tsx` `ProductRow` | 3º botão (`ShoppingBag`) entre comparar e apagar → `Modal "MARCAR COMO COMPRADO"` com input **obrigatório** (`> 0`, botão desabilitado + aviso), mostra último preço rastreado; confirma via `mutateData` (não toca em `priceHistory`) + toast |
+| Seção BOUGHT ARCHIVE | `App.tsx` | **no fim da página da aba LISTS** (profile-wide, com tag da lista): nome, comprado em (data/hora pt-BR), PAGO vs último rastreado, clique → modal de detalhes, botão **DESFAZER** (volta à lista ativa) |
+| Badge | `App.tsx` `ProductDetailModal` | "COMPRADO {data} — PAGO R$ {x}" no cabeçalho (histórico completo segue visível) |
+| Exclusões dos comprados | `App.tsx` | `activeProducts` = não-comprados em: conteúdo da lista (`sortedListProducts`), export, contagem `X ITEMS`, budget %/barra, gate `>= 2` (comparar), `ComparisonMatrix`, `compareAllProducts`, `recentProducts`, `productsFingerprint` (mudou → PriceHistoryTab refaz fetch e **mantém** o comprado), NODOS, StatCards TOTAL/QUEDAS |
+| Mantém comprados | `App.tsx` | `listHistoryData`/`selectedListHistoryData` (gráfico histórico: preço congelado = verdade); `PriceHistoryTab` (servidor retorna todos) |
+| Worker | `scanWorker.ts` `handleScanAll` | pula produto com `boughtAt` (log `item comprado, pulando`) → preço congela |
+
+**Validação #49:** `npm run lint` → 0.
+
+**Smoke #49 (end-to-end):** após restart: `PRAGMA table_info(products)` → `bought_at`/`bought_price` presentes; roundtrip via `POST /api/data` (mesmo caminho do `mutateData` da UI): marcar `830434` → `2026-09-25T03:30:00.000Z|123.45` no DB e no `GET /api/data`; desfazer → `NULL|NULL`, total de produtos intacto (20); `GET /` 200 (tela) e 7 processos PM2 online.
+
+**Arquivos:** `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/types.ts`, `src/repositories/productRepository.ts`, `src/types.ts`, `src/App.tsx`, `src/workers/scanWorker.ts`, docs.
