@@ -47,7 +47,8 @@ import {
   Store,
   Download,
   ArrowUp,
-  ArrowDown
+  ArrowDown,
+  ShoppingBag
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId, isSearchUrl } from "./lib/url";
@@ -559,10 +560,18 @@ export default function App() {
   const profileProducts = data.products.filter(p => p.profileId === activeProfileId);
   const profileLists = data.lists.filter(l => l.profileId === activeProfileId);
 
+  // #49 — comprados: fora da lista ativa (conteúdo, export, budget, compare, scan).
+  // boughtProducts alimenta a seção BOUGHT ARCHIVE no fim da aba LISTS.
+  const activeProducts = profileProducts.filter(p => !p.boughtAt);
+  const boughtProducts = profileProducts
+    .filter(p => p.boughtAt)
+    .sort((a, b) => (new Date(b.boughtAt!).getTime() || 0) - (new Date(a.boughtAt!).getTime() || 0));
+
   // #45 — produtos da lista selecionada já ordenados (preço, alfabética ou ordem manual)
   const sortedListProducts = React.useMemo(() => {
     if (!selectedListId) return [];
-    const arr = profileProducts.filter(p => p.listId === selectedListId);
+    // #49 — comprados não aparecem no conteúdo da lista
+    const arr = activeProducts.filter(p => p.listId === selectedListId);
     const priceKey = (p: Product, dir: "asc" | "desc") => {
       const v = p.currentPrice;
       if (!v || v <= 0) return dir === "asc" ? Infinity : -Infinity;
@@ -658,21 +667,24 @@ export default function App() {
   }, [profileProducts, selectedListId]);
 
   // #47 — ATIVIDADE RECENTE: ordena por lastUpdated desc (antes era ordem de inserção)
+  // #49 — comprados congelam (não são mais monitorados) → ficam de fora
   const recentProducts = React.useMemo(
-    () => [...profileProducts]
+    () => [...activeProducts]
       .sort((a, b) => (new Date(b.lastUpdated).getTime() || 0) - (new Date(a.lastUpdated).getTime() || 0))
       .slice(0, 5),
-    [profileProducts]
+    [activeProducts]
   );
 
   // #47 — fingerprint dos produtos: muda → aba HISTÓRICO refaz o fetch
+  // #49 — base = ativos (marcar comprado muda o fingerprint → refetch;
+  // o item comprado permanece no histórico do servidor/PriceHistoryTab)
   const productsFingerprint = React.useMemo(
     () =>
-      `${profileProducts.length}:${profileProducts.reduce(
+      `${activeProducts.length}:${activeProducts.reduce(
         (m, p) => Math.max(m, new Date(p.lastUpdated).getTime() || 0),
         0
       )}`,
-    [profileProducts]
+    [activeProducts]
   );
 
   const closeApp = () => {
@@ -709,6 +721,51 @@ export default function App() {
     // #47 — updater no estado mais recente (não ressuscita produtos de renders velhos)
     void mutateData(prev => ({ ...prev, products: prev.products.filter(p => p.id !== id) }));
     setSystemMessage("PRODUCT REMOVED FROM DATABASE");
+  };
+
+  // #49 — COMPRADO: marca boughtAt/boughtPrice (preço pago OBRIGATÓRIO > 0).
+  // Não mexe em priceHistory; sai da lista ativa e para de ser escaneado.
+  const [boughtTarget, setBoughtTarget] = useState<Product | null>(null);
+  const [boughtPriceInput, setBoughtPriceInput] = useState("");
+
+  const openBoughtModal = (product: Product) => {
+    setBoughtTarget(product);
+    setBoughtPriceInput("");
+  };
+
+  const paidAmount = Number(boughtPriceInput.replace(",", "."));
+
+  const confirmBought = async () => {
+    if (!boughtTarget || !Number.isFinite(paidAmount) || paidAmount <= 0) return;
+    const id = boughtTarget.id;
+    const name = boughtTarget.name;
+    const now = new Date().toISOString();
+    const ok = await mutateData(prev => ({
+      ...prev,
+      products: prev.products.map(p =>
+        p.id === id ? { ...p, boughtAt: now, boughtPrice: paidAmount } : p
+      ),
+    }));
+    if (ok) {
+      playSound("click");
+      addToast("ITEM MARCADO COMO COMPRADO", "success");
+      setSystemMessage(`BOUGHT: ${name.substring(0, 40)} — R$ ${paidAmount.toFixed(2)}`);
+      setBoughtTarget(null);
+      setBoughtPriceInput("");
+    }
+  };
+
+  const undoBought = async (id: string) => {
+    const ok = await mutateData(prev => ({
+      ...prev,
+      products: prev.products.map(p =>
+        p.id === id ? { ...p, boughtAt: undefined, boughtPrice: undefined } : p
+      ),
+    }));
+    if (ok) {
+      playSound("click");
+      addToast("COMPRA DESFEITA — ITEM VOLTOU À LISTA", "info");
+    }
   };
 
   // #45 — troca o modo de ordenação da lista; "manual" semeia a ordem visível
@@ -1526,7 +1583,8 @@ const queued = await response.json();
 
   const compareAllProducts = async () => {
     if (comparingAll || isComparing) return;
-    const listProducts = profileProducts.filter((p) => p.listId === selectedListId);
+    // #49 — comprados fora do compare-all
+    const listProducts = activeProducts.filter((p) => p.listId === selectedListId);
     if (listProducts.length === 0) return;
 
     setComparingAll(true);
@@ -1744,6 +1802,67 @@ const queued = await response.json();
               </div>
             </Modal>
           )}
+
+          {/* #49 — confirmação COMPRADO: preço total pago é OBRIGATÓRIO (> 0) */}
+          {boughtTarget && (
+            <Modal title="MARCAR COMO COMPRADO" onClose={() => { setBoughtTarget(null); setBoughtPriceInput(""); }}>
+              <div className="flex flex-col gap-5 p-2">
+                <div className="flex items-start gap-4">
+                  <ShoppingBag className="text-green-500 shrink-0 mt-1" size={28} />
+                  <div className="min-w-0">
+                    <p className="font-mono text-xs text-crimson/80 break-words">{boughtTarget.name}</p>
+                    <p className="text-[10px] font-mono text-crimson/40 mt-2 uppercase tracking-widest">
+                      Item sai da lista ativa e para de ser escaneado.
+                      <br />Histórico de preços é preservado (modal de detalhes + HISTÓRICO).
+                    </p>
+                    <p className="text-[10px] font-mono text-crimson/50 mt-1">
+                      Último preço rastreado: {boughtTarget.currency} {boughtTarget.currentPrice.toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <label className="text-[10px] font-mono text-crimson/50 tracking-widest block mb-1">
+                    PREÇO TOTAL PAGO (R$) *
+                  </label>
+                  <input
+                    autoFocus
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    inputMode="decimal"
+                    className="hud-input w-full text-sm font-mono"
+                    placeholder="ex: 689,90"
+                    value={boughtPriceInput}
+                    onChange={(e) => setBoughtPriceInput(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === "Enter") void confirmBought(); }}
+                  />
+                  {!Number.isFinite(paidAmount) || paidAmount <= 0 ? (
+                    <p className="text-[10px] font-mono text-red-500/70 mt-1">OBRIGATÓRIO: informe o valor pago (&gt; 0)</p>
+                  ) : null}
+                </div>
+                <div className="flex gap-4">
+                  <button
+                    onClick={() => { setBoughtTarget(null); setBoughtPriceInput(""); }}
+                    className="hud-button flex-1 border-crimson/30"
+                  >
+                    CANCEL
+                  </button>
+                  <button
+                    onClick={() => void confirmBought()}
+                    disabled={!Number.isFinite(paidAmount) || paidAmount <= 0}
+                    className={cn(
+                      "hud-button flex-1 border-green-500/50",
+                      Number.isFinite(paidAmount) && paidAmount > 0
+                        ? "text-green-500 hover:bg-green-500/10"
+                        : "text-crimson/30 border-crimson/20 cursor-not-allowed opacity-50"
+                    )}
+                  >
+                    CONFIRMAR COMPRA
+                  </button>
+                </div>
+              </div>
+            </Modal>
+          )}
           </AnimatePresence>
         </div>
       );
@@ -1936,7 +2055,7 @@ const queued = await response.json();
           <div className="h-8 w-[1px] bg-crimson/30" />
           <div className="flex flex-col items-end">
             <span className="text-crimson/50">NODOS</span>
-            <span className="text-white">{profileProducts.length}</span>
+            <span className="text-white">{activeProducts.length}</span>
           </div>
           <div className="h-8 w-[1px] bg-crimson/30" />
           <button
@@ -2034,10 +2153,10 @@ const queued = await response.json();
                 className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6"
               >
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.1 }}>
-                  <StatCard label="TOTAL DE PRODUTOS" value={profileProducts.length} />
+                  <StatCard label="TOTAL DE PRODUTOS" value={activeProducts.length} />
                 </motion.div>
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.2 }}>
-                  <StatCard label="QUEDAS DE PREÇO" value={profileProducts.filter(p => p.currentPrice < p.previousPrice).length} color="text-green-500" />
+                  <StatCard label="QUEDAS DE PREÇO" value={activeProducts.filter(p => p.currentPrice < p.previousPrice).length} color="text-green-500" />
                 </motion.div>
                 <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: 0.3 }}>
                   <StatCard 
@@ -2070,7 +2189,7 @@ const queued = await response.json();
                         <span className="text-xs text-crimson/50 font-mono">{new Date(product.lastUpdated).toLocaleTimeString()}</span>
                       </motion.div>
                     ))}
-                    {profileProducts.length === 0 && <div className="text-center py-8 text-crimson/30 font-mono italic">NENHUM DADO DETECTADO</div>}
+                    {recentProducts.length === 0 && <div className="text-center py-8 text-crimson/30 font-mono italic">NENHUM DADO DETECTADO</div>}
                   </div>
                 </motion.div>
 
@@ -2181,15 +2300,15 @@ const queued = await response.json();
                         <div className="mb-4">
                           <div className="flex justify-between text-[8px] font-mono text-crimson/50 mb-1 uppercase tracking-widest">
                             <span>BUDGET PROGRESS</span>
-                            <span>{Math.round((profileProducts.filter(p => p.listId === list.id).reduce((sum, p) => sum + p.currentPrice, 0) / list.budget) * 100)}%</span>
+                            <span>{Math.round((activeProducts.filter(p => p.listId === list.id).reduce((sum, p) => sum + p.currentPrice, 0) / list.budget) * 100)}%</span>
                           </div>
                           <div className="h-1 w-full bg-crimson/10 overflow-hidden">
                             <motion.div 
                               initial={{ width: 0 }}
-                              animate={{ width: `${Math.min(100, (profileProducts.filter(p => p.listId === list.id).reduce((sum, p) => sum + p.currentPrice, 0) / list.budget) * 100)}%` }}
+                              animate={{ width: `${Math.min(100, (activeProducts.filter(p => p.listId === list.id).reduce((sum, p) => sum + p.currentPrice, 0) / list.budget) * 100)}%` }}
                               className={cn(
                                 "h-full",
-                                (profileProducts.filter(p => p.listId === list.id).reduce((sum, p) => sum + p.currentPrice, 0) / list.budget) > 1 ? "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]"
+                                (activeProducts.filter(p => p.listId === list.id).reduce((sum, p) => sum + p.currentPrice, 0) / list.budget) > 1 ? "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]" : "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)]"
                               )}
                             />
                           </div>
@@ -2197,7 +2316,7 @@ const queued = await response.json();
                       )}
 
                       <div className="flex items-center justify-between text-xs font-mono text-crimson/50">
-                        <span>{profileProducts.filter(p => p.listId === list.id).length} ITEMS</span>
+                        <span>{activeProducts.filter(p => p.listId === list.id).length} ITEMS</span>
                         <span>{new Date(list.createdAt).toLocaleDateString()}</span>
                       </div>
                     </motion.div>
@@ -2250,7 +2369,7 @@ const queued = await response.json();
                         </div>
                       </div>
                       <div className="flex items-center gap-2">
-                        {profileProducts.filter((p) => p.listId === selectedListId).length >= 2 && (
+                        {activeProducts.filter((p) => p.listId === selectedListId).length >= 2 && (
                           <button
                             onClick={() => { playSound('click'); compareAllProducts(); }}
                             disabled={comparingAll || isComparing}
@@ -2367,6 +2486,7 @@ const queued = await response.json();
                               product={product}
                               onDelete={() => { playSound('click'); deleteProduct(product.id); }}
                               onCompare={() => { playSound('click'); compareProduct(product); }}
+                              onBuy={() => { playSound('click'); openBoughtModal(product); }}
                               onClick={() => { playSound('click'); setSelectedProductId(product.id); }}
                               isComparing={comparingProduct === product.id}
                             />
@@ -2381,6 +2501,56 @@ const queued = await response.json();
                     </div>
                   </motion.div>
                 )}
+              </motion.div>
+            )}
+
+            {/* #49 — BOUGHT ARCHIVE: itens comprados, no fim da página da aba LISTS */}
+            {activeTab === "lists" && boughtProducts.length > 0 && (
+              <motion.div
+                initial={{ opacity: 0, y: 20 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: 0.3 }}
+                className="mt-8"
+              >
+                <div className="flex items-center gap-3 mb-4">
+                  <ShoppingBag size={14} className="text-green-500" />
+                  <h2 className="text-sm font-mono text-crimson/50 tracking-[0.3em]">BOUGHT ARCHIVE ({boughtProducts.length})</h2>
+                  <span className="text-[10px] font-mono text-crimson/30">HISTÓRICO PRESERVADO • FORA DA LISTA ATIVA</span>
+                </div>
+                <div className="hud-border bg-black/40 divide-y divide-crimson/10">
+                  {boughtProducts.map(p => {
+                    const list = profileLists.find(l => l.id === p.listId);
+                    return (
+                      <div key={p.id} className="flex items-center gap-4 px-4 py-3 group hover:bg-crimson/5 transition-colors">
+                        <div
+                          className="flex-1 min-w-0 cursor-pointer"
+                          onClick={() => { playSound("click"); setSelectedProductId(p.id); }}
+                        >
+                          <span className="font-mono text-xs text-crimson/80 truncate block group-hover:text-crimson transition-colors">{p.name}</span>
+                          <span className="text-[10px] font-mono text-crimson/40">
+                            COMPRADO {p.boughtAt ? new Date(p.boughtAt).toLocaleString("pt-BR") : ""}
+                            {list ? ` • ${list.name}` : ""}
+                          </span>
+                        </div>
+                        <div className="text-right shrink-0">
+                          <span className="font-mono text-sm text-green-500 font-bold block">
+                            PAGO {p.currency} {p.boughtPrice != null ? p.boughtPrice.toFixed(2) : "?"}
+                          </span>
+                          <span className="text-[10px] font-mono text-crimson/40">
+                            último rastreado {p.currency} {p.currentPrice.toFixed(2)}
+                          </span>
+                        </div>
+                        <button
+                          onClick={(e) => { e.stopPropagation(); void undoBought(p.id); }}
+                          title="Desfazer compra (voltar à lista ativa)"
+                          className="p-2 text-crimson/30 hover:text-crimson transition-colors hud-border border-crimson/10 hover:border-crimson/40"
+                        >
+                          <RefreshCw size={12} />
+                        </button>
+                      </div>
+                    );
+                  })}
+                </div>
               </motion.div>
             )}
 
@@ -2734,7 +2904,7 @@ const queued = await response.json();
         {showComparisonGrid && selectedListId && (
           <ComparisonMatrix 
             list={profileLists.find(l => l.id === selectedListId)!}
-            products={profileProducts.filter(p => p.listId === selectedListId)}
+            products={activeProducts.filter(p => p.listId === selectedListId)}
             onClose={() => setShowComparisonGrid(false)}
           />
         )}
@@ -3092,7 +3262,7 @@ function StatCard({ label, value, color = "text-white" }: { label: string, value
   );
 }
 
-function ProductRow({ product, onDelete, onCompare, onClick, isComparing }: { product: Product, onDelete: () => void, onCompare: () => void, onClick: () => void, isComparing: boolean }) {
+function ProductRow({ product, onDelete, onCompare, onBuy, onClick, isComparing }: { product: Product, onDelete: () => void, onCompare: () => void, onBuy: () => void, onClick: () => void, isComparing: boolean }) {
   const priceDropped = product.currentPrice < product.previousPrice;
   const priceIncreased = product.currentPrice > product.previousPrice;
 
@@ -3190,6 +3360,14 @@ function ProductRow({ product, onDelete, onCompare, onClick, isComparing }: { pr
           className="p-2 text-crimson/30 hover:text-crimson transition-colors hud-border border-crimson/10 hover:border-crimson/40"
         >
           {isComparing ? <RefreshCw className="animate-spin" size={14} /> : <RefreshCw size={14} />}
+        </button>
+        {/* #49 — COMPRADO: ao lado de comparar/apagar */}
+        <button 
+          onClick={(e) => { e.stopPropagation(); onBuy(); }} 
+          title="Marcar como comprado"
+          className="p-2 text-crimson/30 hover:text-green-500 transition-colors hud-border border-crimson/10 hover:border-green-500/40"
+        >
+          <ShoppingBag size={14} />
         </button>
         <button 
           onClick={(e) => { e.stopPropagation(); onDelete(); }} 
@@ -3415,6 +3593,14 @@ function ProductDetailModal({
         <div className="flex flex-col">
           <span className="text-[10px] font-mono text-crimson/50 tracking-[0.5em] uppercase">ALVO_IDENTIFICADO</span>
           <h2 className="text-3xl font-mono font-bold text-white tracking-tight glow-text">{product.name}</h2>
+          {/* #49 — badge de compra (histórico permanece visível) */}
+          {product.boughtAt && (
+            <span className="inline-flex items-center gap-1 self-start mt-2 px-2 py-1 border border-green-500/50 bg-green-500/10 text-green-500 font-mono text-[10px] tracking-widest uppercase">
+              <ShoppingBag size={10} />
+              COMPRADO {new Date(product.boughtAt).toLocaleString("pt-BR")}
+              {product.boughtPrice != null ? ` — PAGO ${product.currency} ${product.boughtPrice.toFixed(2)}` : ""}
+            </span>
+          )}
           <a
             href={product.url}
             target="_blank"

@@ -149,6 +149,11 @@ async function handleScanAll() {
         safeLog(`[scan-worker] produto removido durante o scan, pulando: ${snap.name || snap.id}`);
         continue;
       }
+      // #49 — item comprado: preço congela, sai do scan-all (histórico preservado)
+      if (product.boughtAt) {
+        safeLog(`[scan-worker] item comprado, pulando: ${product.name || product.id}`);
+        continue;
+      }
       const profile = data.profiles.find((p) => p.id === product.profileId);
       const info = await advancedScrape(product.url, {
         lmStudioUrl: profile?.lmStudioUrl,

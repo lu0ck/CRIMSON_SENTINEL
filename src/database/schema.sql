@@ -59,6 +59,8 @@ CREATE TABLE IF NOT EXISTS products (
   last_scrape_method TEXT,
   comparison_results TEXT, -- JSON array de {site, price, url}
   sort_order INTEGER, -- #45: posição manual na lista ("ordem de compra"); NULL = não definida
+  bought_at TEXT, -- #49: data/hora da compra; item comprado sai da lista ativa
+  bought_price REAL, -- #49: preço total pago na compra
   created_at TEXT NOT NULL DEFAULT (datetime('now')),
   FOREIGN KEY (list_id) REFERENCES product_lists(id) ON DELETE SET NULL,
   FOREIGN KEY (profile_id) REFERENCES profiles(id) ON DELETE CASCADE

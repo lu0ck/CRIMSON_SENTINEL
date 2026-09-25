@@ -14,6 +14,8 @@ export interface Product {
   targetPrice?: number;
   lastScrapeMethod?: string;
   comparisonResults?: { site: string; price: number; url: string }[];
+  boughtAt?: string;
+  boughtPrice?: number;
   /** #45 — posição manual na lista da aba LIST ("ordem de compra") */
   sortOrder?: number;
 }

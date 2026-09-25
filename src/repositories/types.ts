@@ -56,6 +56,8 @@ export interface ProductRow {
   last_scrape_method: string | null;
   comparison_results: string | null;
   sort_order: number | null;
+  bought_at: string | null;
+  bought_price: number | null;
   created_at: string;
 }
 
@@ -121,6 +123,8 @@ export function productRowToProduct(
       ? JSON.parse(row.comparison_results)
       : undefined,
     sortOrder: row.sort_order ?? undefined,
+    boughtAt: row.bought_at ?? undefined,
+    boughtPrice: row.bought_price ?? undefined,
   };
 }
 
