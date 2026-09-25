@@ -155,6 +155,30 @@ function cn(...inputs: ClassValue[]) {
 type ProductSortMode = "padrao" | "preco_asc" | "preco_desc" | "az" | "za" | "manual";
 const PRODUCT_SORT_KEY = "sentinela_products_sort";
 
+// #53 — links que falharam no lote ADD — cache local para copiar e tentar depois
+type FailedTarget = { url: string; error: string; at: number };
+const FAILED_TARGETS_KEY = "sentinela.failedTargets.v1";
+
+function loadFailedTargets(): FailedTarget[] {
+  try {
+    const raw = localStorage.getItem(FAILED_TARGETS_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed)
+      ? parsed.filter((f: any) => f && typeof f.url === "string" && f.url.length > 0)
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveFailedTargets(list: FailedTarget[]): void {
+  try {
+    localStorage.setItem(FAILED_TARGETS_KEY, JSON.stringify(list.slice(0, 50)));
+  } catch {
+    // storage indisponível — o bloco vive só na sessão
+  }
+}
+
 export default function App() {
   const [data, setData] = useState<AppData>({
     profiles: [],
@@ -202,6 +226,11 @@ export default function App() {
   });
   const [scrapeResults, setScrapeResults] = useState<{ url: string; success: boolean; name?: string; price?: number; method?: string; error?: string; timestamp: number }[]>([]);
   const [showScrapeLogDropdown, setShowScrapeLogDropdown] = useState(false);
+  // #53 — bloco de links não encontrados no lote ADD (persiste no localStorage)
+  const [failedTargets, setFailedTargets] = useState<FailedTarget[]>(loadFailedTargets);
+  const [failedCopied, setFailedCopied] = useState(false);
+  const [logFailedCopied, setLogFailedCopied] = useState(false);
+  const [lastAddSummary, setLastAddSummary] = useState<{ ok: number; failed: number } | null>(null);
 
   const [comparisonResults, setComparisonResults] = useState<any[]>([]);
   const [comparingProduct, setComparingProduct] = useState<string | null>(null);
@@ -1183,6 +1212,41 @@ const deleteComparisonResult = (productId: string, index: number) => {
     throw new Error(`Job polling timed out${retryHint}`);
   };
 
+  // #53 — bloco de falhas do ADD: persiste (memória + localStorage), merge com tentativas anteriores
+  const commitFailedTargets = (fresh: FailedTarget[], succeeded?: Set<string>) => {
+    setFailedTargets(prev => {
+      const kept = prev.filter(p => !succeeded?.has(p.url) && !fresh.some(f => f.url === p.url));
+      const next = [...new Map([...fresh, ...kept].map(f => [f.url, f])).values()].slice(0, 50);
+      saveFailedTargets(next);
+      return next;
+    });
+  };
+
+  const copyFailedTargets = async () => {
+    try {
+      await navigator.clipboard.writeText(failedTargets.map(f => f.url).join("\n"));
+      setFailedCopied(true);
+      setTimeout(() => setFailedCopied(false), 2000);
+    } catch {
+      addToast("Não foi possível copiar", "error");
+    }
+  };
+
+  const recoverFailedTargets = () => {
+    setNewUrls(prev => {
+      const existing = prev.filter(u => u.trim());
+      const missing = failedTargets.map(f => f.url).filter(u => !existing.includes(u));
+      return [...existing, ...missing];
+    });
+    playSound("click");
+  };
+
+  const clearFailedTargets = () => {
+    setFailedTargets([]);
+    saveFailedTargets([]);
+    playSound("click");
+  };
+
   const addProduct = async () => {
     if (newUrls.every(u => !u.trim()) || !selectedListId || !activeProfileId) return;
 
@@ -1210,9 +1274,24 @@ const deleteComparisonResult = (productId: string, index: number) => {
     });
 
     let successCount = 0;
-    let failCount = 0;
     let batchDone = 0;
     const batchResults: typeof scrapeResults = [];
+
+    // #53 — URLs que NÃO viraram produto (falha, timeout ou cancelamento) → bloco copiável
+    const finishFailures = () => {
+      const succeeded = new Set(batchResults.filter(r => r.success).map(r => r.url));
+      const errs = new Map(batchResults.filter(r => !r.success).map(r => [r.url, r.error || "Falha no scraping"]));
+      const cancelled = controller.signal.aborted;
+      const failed: FailedTarget[] = urls
+        .filter(u => !succeeded.has(u))
+        .map(u => ({
+          url: u,
+          error: errs.get(u) || (cancelled ? "Cancelado pelo operador" : "Falha no scraping"),
+          at: Date.now(),
+        }));
+      commitFailedTargets(failed, succeeded);
+      return { failed, cancelled };
+    };
 
     try {
       const concurrencyLimit = 2;
@@ -1370,7 +1449,6 @@ const queued = await response.json();
         addToast(`ERRO: ${errorMsg}`, "error", errorDetails);
         batchResults.push({ url, success: false, error: errorMsg, timestamp: Date.now() });
       }
-      failCount++;
       return null;
     }
         }));
@@ -1394,18 +1472,30 @@ const queued = await response.json();
       
       // Final re-fetch to ensure everything is in sync
       await fetchData();
-      
-      if (!controller.signal.aborted) {
+
+      // #53 — registra as URLs que faltaram e o resumo do lote
+      const { failed, cancelled } = finishFailures();
+      if (batchResults.length > 0) setScrapeResults(prev => [...prev, ...batchResults]);
+      setLastAddSummary({ ok: successCount, failed: failed.length });
+
+      if (!cancelled) {
         setNewUrls([""]);
-        setIsAddingProduct(false);
-        setScrapeResults(prev => [...prev, ...batchResults]);
-        setSystemMessage(`SEQUENCE COMPLETE: ${successCount} ACQUIRED, ${failCount} FAILED`);
+        setSystemMessage(`SEQUENCE COMPLETE: ${successCount} ACQUIRED, ${failed.length} FAILED`);
         if (successCount > 0) addToast(`${successCount} TARGETS LOGGED TO ARCHIVE`, "success");
-        if (failCount > 0) addToast(`${failCount} TARGETS FAILED TO RESOLVE`, "error");
+        if (failed.length > 0) addToast(`${failed.length} TARGETS FAILED TO RESOLVE — bloco de falhas aberto no modal`, "error");
         loadNotificationsCount();
+      } else if (failed.length > 0) {
+        addToast(`${failed.length} TARGETS NÃO ADICIONADOS — bloco de falhas no modal`, "info");
       }
+      // #53 — modal só fecha quando nada faltou; com falha fica aberto com o bloco copiável
+      if (failed.length === 0 && !cancelled) setIsAddingProduct(false);
     } catch (error) {
       setSystemMessage("ERROR: CORE SEQUENCE FAILURE");
+      // #53 — mesmo em falha total do fluxo, persiste o que não foi adicionado
+      const { failed } = finishFailures();
+      if (batchResults.length > 0) setScrapeResults(prev => [...prev, ...batchResults]);
+      setLastAddSummary({ ok: successCount, failed: failed.length });
+      if (failed.length > 0) addToast(`${failed.length} TARGETS FAILED TO RESOLVE — bloco de falhas no modal`, "error");
     } finally {
       setIsLoading(false);
       setAbortController(null);
@@ -2015,6 +2105,25 @@ const queued = await response.json();
                     SCRAPE LOG — {scrapeResults.filter(r => r.success).length}/{scrapeResults.length} OK
                   </span>
                   <div className="flex items-center gap-2">
+                    {scrapeResults.some(r => !r.success) && (
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          navigator.clipboard
+                            .writeText(scrapeResults.filter(r => !r.success).map(r => r.url).join("\n"))
+                            .then(() => {
+                              setLogFailedCopied(true);
+                              setTimeout(() => setLogFailedCopied(false), 2000);
+                            })
+                            .catch(() => {});
+                        }}
+                        className="text-crimson/60 hover:text-crimson transition-colors text-[10px] font-mono flex items-center gap-1"
+                        title="Copiar as URLs que falharam nesta sessão (1 por linha)"
+                      >
+                        {logFailedCopied ? <Check size={10} className="text-green-400" /> : <Copy size={10} />}
+                        {logFailedCopied ? "COPIADO" : "COPIAR FALHOS"}
+                      </button>
+                    )}
                     {scrapeResults.length > 0 && (
                       <button
                         onClick={(e) => { e.stopPropagation(); setScrapeResults([]); setShowScrapeLogDropdown(false); }}
@@ -2405,7 +2514,7 @@ const queued = await response.json();
                             )}
                           </button>
                         )}
-                        <button onClick={() => { playSound('click'); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
+                        <button onClick={() => { playSound('click'); setLastAddSummary(null); setIsAddingProduct(true); }} className="hud-button flex items-center gap-2">
                           <Plus size={16} /> ADD LINK
                         </button>
                         <button
@@ -2991,6 +3100,57 @@ const queued = await response.json();
                   </button>
                 )}
               </div>
+
+              {/* #53 — BLOCO DE FALHAS: links que não foram encontrados, para copiar e tentar depois */}
+              {!isLoading && failedTargets.length > 0 && (
+                <div className="border border-red-500/40 bg-red-500/5 rounded flex flex-col gap-2 p-3">
+                  {lastAddSummary && (
+                    <div className="flex items-center gap-3 text-[10px] font-mono font-bold tracking-widest">
+                      <span className="text-green-400">{lastAddSummary.ok} ENCONTRADOS</span>
+                      <span className="text-red-400">{lastAddSummary.failed} FALHARAM</span>
+                    </div>
+                  )}
+                  <div className="flex items-center justify-between gap-2 flex-wrap">
+                    <span className="text-[10px] font-mono font-bold text-red-400 tracking-widest">
+                      ⚠ LINKS NÃO ENCONTRADOS ({failedTargets.length}) — COPIE E TENTE DEPOIS
+                    </span>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={copyFailedTargets}
+                        className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 border border-crimson/40 text-crimson hover:bg-crimson/10 transition-colors"
+                        title="Copiar só as URLs (1 por linha) para colar em TARGET URLS"
+                      >
+                        {failedCopied ? <Check size={11} className="text-green-400" /> : <Copy size={11} />}
+                        {failedCopied ? "COPIADO!" : "COPIAR"}
+                      </button>
+                      <button
+                        onClick={recoverFailedTargets}
+                        className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 border border-blue-400/40 text-blue-300 hover:bg-blue-400/10 transition-colors"
+                        title="Preencher os campos acima com estas URLs (retry = BEGIN TRACKING)"
+                      >
+                        <ArrowRight size={11} /> RECOLHER NOS CAMPOS
+                      </button>
+                      <button
+                        onClick={clearFailedTargets}
+                        className="flex items-center gap-1 text-[10px] font-mono px-2 py-1 border border-red-500/40 text-red-400 hover:bg-red-500/10 transition-colors"
+                        title="Descartar este bloco"
+                      >
+                        <Trash2 size={11} /> LIMPAR
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-1 max-h-[150px] overflow-y-auto pr-1 custom-scrollbar">
+                    {failedTargets.map(f => (
+                      <div key={f.url} className="flex items-start gap-2 text-[10px] font-mono">
+                        <span className="text-red-300/80 break-all flex-1">{f.url}</span>
+                        <span className="text-crimson/40 shrink-0 max-w-[45%] truncate" title={f.error}>
+                          {f.error}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
               
               <div className="flex gap-2 mt-4">
                 {isLoading ? (

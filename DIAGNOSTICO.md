@@ -1316,3 +1316,27 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 - `DELETE /api/notifications` → `{"deleted":105}` e `GET` → `[]`; Vite/PM2 sem erros de compilação (7 processos online, API 200).
 
 **Arquivos:** `src/lib/localPriceScrape.ts`, `src/workers/scanWorker.ts`, `src/repositories/notificationRepository.ts`, `server.ts`, `src/components/MercadoTab.tsx`, `src/components/NotificationsTab.tsx`, docs.
+
+## 6.38 UX: links que o ADD não encontrou não voltavam para copiar e tentar depois (#53)
+
+**Sintoma:** operador colou **14 links** no modal ADD TRACKING TARGETS da lista COMPRAS CASA → só **7 entraram** (DB confirmou: exatamente 7 produtos criados no lote 19:28–19:41). As 7 falhas apareciam só em toast que some, no SCRAPE LOG escondido do topo (estado de sessão — apagado pelo restart de 19:48) e em entradas soltas `✗ SCRAPE FALHOU` no ALERTAS (uma por URL, URL dentro do texto). **Nenhum lugar devolvia um bloco copiável** para re-colar e tentar depois.
+
+**Causa raiz:** `addProduct()` fechava o modal sempre no fim (`setIsAddingProduct(false)`), descartava `batchResults` do campo de visão (dropdown pequeno, sessão only) e nunca registrava falha em estado persistente. Cancelamento no meio do lote nem era contado (`return null` sem registro).
+
+**Mudanças (só fronte — Vite HMR, sem restart):**
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Cache local das falhas | `App.tsx` | tipo `FailedTarget {url, error, at}` + `load/saveFailedTargets` (`localStorage` `sentinela.failedTargets.v1`, dedupe por URL, cap 50) |
+| B | `finishFailures()` no fim do lote | `addProduct()` | **falha = toda URL da tentativa que NÃO virou produto** (scrape falhou/timeout, ou cancelada — antes canceladas nem eram registradas); merge com falhas anteriores removendo as que agora succeed; roda também no `catch` de falha total |
+| C | Modal fica aberto com falhas | `addProduct()` | só fecha se `failed === 0 && !abortado`; banner `X ENCONTRADOS • Y FALHARAM`; toast novo `... — bloco de falhas aberto no modal` |
+| D | **BLOCO DE FALHAS** no modal | `App.tsx` | `⚠ LINKS NÃO ENCONTRADOS (n) — COPIE E TENTE DEPOIS` com cada URL + erro (truncado com tooltip); botões **COPIAR** (URLs puras, 1 por linha — pronto para colar em TARGET URLS), **RECOLHER NOS CAMPOS** (preenche os inputs → retry = BEGIN TRACKING), **LIMPAR**; reaparece ao reabrir o modal/reload (cache local) |
+| E | COPIAR FALHOS no SCRAPE LOG | dropdown do topo | botão ao lado de CLEAR: copia as URLs falhas da sessão (1 por linha) |
+
+**Validação #53:** `npm run lint` → 0. Smoke Playwright real (chromium headless, `localhost:3001`, lista COMPRAS CASA):
+
+- **A — cancelamento (determinístico):** 2 URLs inválidas → BEGIN → ABORT em 3s → **A1** bloco `(2)` → **A2** banner `2 FALHARAM` → **A3** localStorage `["...alpha | Cancelado pelo operador", "...bravo | Cancelado pelo operador"]` → **A4** modal aberto → **A5** clipboard = 2 URLs puras (`\n`) → **A6** reload → bloco **persistiu** → **A7** LIMPAR zera bloco + localStorage;
+- **B — falha real do worker:** 2 URLs `127.0.0.1:9/zqxb53*` → lote terminou em **93s** com `1 ENCONTRADOS 1 FALHARAM` (o SEARCH_VERIFY acha conteúdo para gibberish — pré-existente) → **B1** bloco `(1)` com erro real `Failed to scrape product data from all strategies (tried: PLAYWRIGHT_STEALTH, PLAYWRIGHT_BASIC, SEARCH_VERIFY, NVIDIA_NIM, FETCH_FALLBACK)` → **B4** modal aberto → **B5** limpeza;
+- Poluição de teste removida: produtos `ihkt7k`/`iww3vb` + `price_history` + alertas #135–137 (0 restos).
+
+**Arquivos:** `src/App.tsx` (estado/helpers, `finishFailures`, bloco no modal, COPIAR FALHOS no SCRAPE LOG), docs. Sem mudança de API/worker.
