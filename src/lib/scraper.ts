@@ -75,27 +75,54 @@ function isNvidiaModelGone(err: any): boolean {
     /model.*(not found|removed|gone|deprecated)/i.test(msg);
 }
 // #43 — nome do produto a partir do slug da URL (Shopee/ML anti-bot não dão nome na página)
-function extractNameFromUrl(rawUrl: string): string {
+export function extractNameFromUrl(rawUrl: string): string {
   try {
     const u = new URL(ensureHttps(rawUrl));
     const parts = u.pathname.split("/").filter(Boolean);
     if (parts.length === 0) return "";
     let slug = parts[parts.length - 1];
     slug = slug.replace(/-i\.\d+\.\d+$/i, "").replace(/\.(html?|php|aspx?)$/i, "");
-    if (/^[A-Z]{2,4}\d{6,}$/i.test(slug)) {
+    // #50 — ID puro (AliExpress /item/100500... ou /up/MLBU...) não é nome de produto
+    const isIdLike = (s: string) => /^[A-Z]{2,4}\d{6,}$/i.test(s) || /^\d{6,}$/.test(s);
+    if (isIdLike(slug)) {
       for (let i = parts.length - 2; i >= 0; i--) {
         const p = parts[i];
         if (/^(up|p|pd|producto|produto|item|pid)$/i.test(p) || /^\d+$/.test(p)) continue;
         slug = p.replace(/-i\.\d+\.\d+$/i, "");
         break;
       }
-      // ainda é só o ID (ex: /up/MLBU...) — sem slug, não vira busca
-      if (/^[A-Z]{2,4}\d{6,}$/i.test(slug)) return "";
+      // ainda é só o ID (ex: /up/MLBU... ou /item/100500...) — sem slug, não vira busca
+      if (isIdLike(slug)) return "";
     }
     const name = slug.replace(/[-_+]+/g, " ").replace(/\s+/g, " ").trim();
     return name.length >= 8 ? name : "";
   } catch {
     return "";
+  }
+}
+
+// #50 — preço embutido no link do AliExpress (pdp_npi: original!promo).
+// Sinal da URL do usuário, usado só quando a página não renderiza valor.
+export function extractAliExpressPdpPrice(rawUrl: string): number | null {
+  try {
+    const u = new URL(ensureHttps(rawUrl));
+    if (!/(^|\.)aliexpress\./.test(u.hostname)) return null;
+    const npi = u.searchParams.get("pdp_npi");
+    if (!npi) return null;
+    const seen: number[] = [];
+    for (const m of npi.matchAll(/BRL\s*([\d.,]+)/g)) {
+      const s = m[1];
+      const v = /,\d{2}$/.test(s)
+        ? parseFloat(s.replace(/\./g, "").replace(",", "."))
+        : parseFloat(s);
+      if (Number.isFinite(v) && v > 0 && !seen.includes(v)) seen.push(v);
+    }
+    if (seen.length === 0) return null;
+    // estrutura: [preço original, promo] — pega a promo; sem promo, o único
+    const price = seen.length >= 2 ? seen[1] : seen[0];
+    return Number.isFinite(price) && price > 0 ? price : null;
+  } catch {
+    return null;
   }
 }
 
@@ -491,22 +518,34 @@ type ScrapeStrategy = {
 
 // FASE 14 — compõe o melhor resultado entre estratégias:
 // melhor nome + melhor preço (confirmado/prioridade) + melhor foto.
+// #50 — melhor nome entre TODOS os partials (inclusive os sem preço)
+function bestPartialName(partials: ScrapeResult[]): string {
+  let best = "";
+  for (const r of partials) {
+    const n = (r?.name || "").trim();
+    if (n.length >= 5 && n.length > best.length && isProductNameValid(n)) best = n;
+  }
+  return best;
+}
+
 function mergeResults(partials: ScrapeResult[]): ScrapeResult | null {
-  const all = partials.filter((p) => p && typeof p === "object" && isValidPrice(p.price));
+  const valid = partials.filter((p) => p && typeof p === "object");
+  const all = valid.filter((p) => isValidPrice(p.price));
   if (all.length === 0) return null;
 
-  // MELHOR NOME
+  // MELHOR NOME — #50: considera também resultados SEM preço (nome da página
+  // sobrevive quando o site não renderizou o valor; combina com preço de outra fonte)
   let bestName = "";
   let bestNameSource = "";
-  for (const r of all) {
+  for (const r of valid) {
     const n = (r.name || "").trim();
-    if (n.length > bestName.length && n.length >= 5) {
+    if (n.length > bestName.length && n.length >= 5 && isProductNameValid(n)) {
       bestName = n;
       bestNameSource = r.nameSource || r.method || "";
     }
   }
 
-  // MELHOR PREÇO — prioridade: confirmado > STEALTH/NVIDIA/GEMINI > FETCH
+  // MELHOR PREÇO — prioridade: confirmado > STEALTH/NVIDIA/GEMINI > busca > URL > FETCH
   const priceCandidates = [...all].sort((a, b) => {
     const quality = (r: ScrapeResult) => {
       let q = 0;
@@ -514,6 +553,7 @@ function mergeResults(partials: ScrapeResult[]): ScrapeResult | null {
       if ((r.method || "").includes("STEALTH")) q += 2;
       if ((r.method || "").includes("NVIDIA")) q += 1;
       if ((r.method || "").includes("GEMINI")) q += 1;
+      if ((r.method || "").includes("URL_PRICE")) q -= 1;
       if ((r.method || "").includes("FETCH")) q -= 2;
       return q;
     };
@@ -524,9 +564,9 @@ function mergeResults(partials: ScrapeResult[]): ScrapeResult | null {
   const availableCandidates = priceCandidates.filter((r) => r.available !== false);
   const priceSrc = availableCandidates.length > 0 ? availableCandidates[0] : priceCandidates[0];
 
-  // MELHOR FOTO
+  // MELHOR FOTO — #50: também de partials sem preço (imagem já veio da página)
   let bestImage: string | undefined;
-  for (const r of all) {
+  for (const r of valid) {
     if (!r.imageUrl) continue;
     if (/^https?:\/\//i.test(r.imageUrl) && !/\.svg(\?|$)/i.test(r.imageUrl)) {
       bestImage = r.imageUrl;
@@ -644,13 +684,31 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
       { name: "PLAYWRIGHT_BASIC", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightBasic(url, options, signal) }
     );
 
+    // #50 — preço do próprio link AliExpress (pdp_npi) quando a página não
+    // renderiza valor: nome vem dos partials da página, preço vem da URL.
+    const urlPdpPrice = extractAliExpressPdpPrice(url);
+    if (urlPdpPrice && isValidPrice(urlPdpPrice)) {
+      strategies.push({
+        name: "URL_PRICE_FALLBACK",
+        fn: async () => ({
+          name: "",
+          price: urlPdpPrice,
+          currency: "BRL",
+          available: true,
+          priceConfirmed: false,
+          nameSource: "URL",
+        }),
+      });
+    }
+
     // 3b. #43 — SEARCH_VERIFY ANTES de NVIDIA/Vision: barato, resolve bot-wall
     // via Serper/Tavily + hint do slug da URL (sem depender do DOM).
     if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey)) {
       strategies.push({
         name: "SEARCH_VERIFY",
         fn: ({ signal }: { signal?: AbortSignal }) => {
-          const pageHint = mergeResults(partials)?.name || "";
+          // #50 — hint = nome real da página mesmo quando veio sem preço
+          const pageHint = bestPartialName(partials) || mergeResults(partials)?.name || "";
           const hint = pageHint && isProductNameValid(pageHint) ? pageHint : urlNameHint || pageHint;
           return scrapeWithSearchVerify(url, hint, options, signal);
         },
@@ -735,8 +793,11 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
       if (timeoutId) clearTimeout(timeoutId);
 
-      if (result && isValidPrice(result.price)) {
-        result.price = sanitizePrice(result.price);
+      // #50 — partials agora aceitam nome sem preço (a página deu o nome mas o
+      // valor não renderizou); o merge continua exigindo preço para devolver.
+      if (result && (isValidPrice(result.price) || (result.name && result.name.length >= 5 && isProductNameValid(result.name)))) {
+        if (isValidPrice(result.price)) result.price = sanitizePrice(result.price);
+        else result.price = 0;
         result.method = strategy.name;
         result.name = result.name || "";
         partials.push(result);
@@ -1217,7 +1278,9 @@ await page.waitForTimeout(2000);
       console.log("[Playwright] Handler returned:", JSON.stringify({ name: (result.name || "").substring(0, 50), price: result.price }));
       if (!result.name || !result.price || result.price <= 0) {
         console.log("[Playwright] Handler returned invalid data, falling back to generic");
-        result = {};
+        // #50 — nome do handler é mantido mesmo sem preço (vira partial p/ merge)
+        const keptName = result.name && result.name.length >= 5 ? result.name : "";
+        result = keptName ? { name: keptName } : {};
       }
     } catch (e: any) {
       console.log("[Playwright] Store handler error:", e.message || e);
@@ -1230,14 +1293,21 @@ await page.waitForTimeout(2000);
   // Generic extraction as fallback if handler didn't get results
   if (!result.name || !result.price || result.price <= 0) {
     console.log("[Playwright] Using generic extraction");
-    result = await genericPageExtraction(page);
+    const generic = await genericPageExtraction(page);
+    // #50 — genérico preenche preço/img; nome cai para o do handler se vier vazio
+    const keptName = result.name && result.name.length >= 5 ? result.name : "";
+    const gName = generic.name && generic.name.length >= 5 ? generic.name : "";
+    result = { ...generic, name: gName || keptName };
   }
 
-	if (!result.name || !result.price || result.price <= 0) {
+	const finalName = (result.name || "").trim();
+	if (!finalName || finalName.length < 5 || !isProductNameValid(finalName)) {
 		console.log("[Playwright] No valid data extracted");
 		await browser.close();
 		return null;
 	}
+	// #50 — nome sem preço também é devolvido (partial; o merge combina com outra fonte)
+	if (!result.price || result.price <= 0) result.price = 0;
 
     if (result.name && result.price) {
       try {
@@ -1906,6 +1976,20 @@ async function scrapeWithGeminiVision(url: string, apiKey: string, signal?: Abor
   }
 }
 
+// #43/#50 — nome só vira aceitável se tiver overlap com o hint (evita artigo
+// "Melhor X..." e resultado de busca de OUTRO produto, ex: "800 Robux")
+export function titleMatchesHint(title: string, hint: string): boolean {
+  if (!title || !hint) return false;
+  const stop = new Set(["de", "da", "do", "para", "com", "e", "o", "a", "os", "as", "em", "no", "na"]);
+  const words = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !stop.has(w)));
+  const tw = words(title);
+  const hw = words(hint);
+  if (tw.size === 0 || hw.size === 0) return false;
+  let common = 0;
+  for (const w of tw) if (hw.has(w)) common++;
+  return common >= 2 || common / Math.min(tw.size, hw.size) >= 0.34;
+}
+
 // FASE 14 — SEARCH_VERIFY: quando a página não renderiza, usa Serper/Tavily
 // + NVIDIA para extrair nome/preço a partir dos snippets de busca.
 async function scrapeWithSearchVerify(
@@ -1914,6 +1998,9 @@ async function scrapeWithSearchVerify(
   options: ScrapeOptions,
   signal?: AbortSignal
 ): Promise<ScrapeResult | null> {
+  // #50 — hint só-número é item ID (AliExpress/ML), não é nome: trata como ausente
+  nameHint = String(nameHint || "").trim();
+  if (/^\d{6,}$/.test(nameHint)) nameHint = "";
   // #43 — se o DOM não deu nome válido, usa o slug da URL (Shopee/ML)
   if (!nameHint || nameHint.length < 5 || !isProductNameValid(nameHint)) {
     nameHint = extractNameFromUrl(url) || nameHint;
@@ -1989,19 +2076,6 @@ async function scrapeWithSearchVerify(
 
   if (!snippet || snippet.length < 40) return null;
 
-  // #43 — título só vira nome se tiver overlap com o hint (evita artigo "Melhor X...")
-  const titleMatchesHint = (title: string, hint: string): boolean => {
-    if (!title || !hint) return false;
-    const stop = new Set(["de", "da", "do", "para", "com", "e", "o", "a", "os", "as", "em", "no", "na"]);
-    const words = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter((w) => w.length > 2 && !stop.has(w)));
-    const tw = words(title);
-    const hw = words(hint);
-    if (tw.size === 0 || hw.size === 0) return false;
-    let common = 0;
-    for (const w of tw) if (hw.has(w)) common++;
-    return common >= 2 || common / Math.min(tw.size, hw.size) >= 0.34;
-  };
-
   const pickName = (): string => {
     let name = searchTitle
       .replace(/\s*[|–—-]\s*(Mercado Livre|Mercado Libre|Amazon|Shopee|Kabum|Magazine Luiza).*$/i, "")
@@ -2039,7 +2113,11 @@ async function scrapeWithSearchVerify(
           if (jm) {
             const out = JSON.parse(jm[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
             const price = sanitizePrice(Number(out.price));
-            if (isValidPrice(price) && isPriceRealistic(price, nameHint || String(out.name)) && out.name && String(out.name).length > 5) {
+            // #50 — o nome do LLM precisa bater com o alvo da busca (rejeita
+            // "800 Robux" quando o alvo é a placa-mãe MACHINIST X99...)
+            const hintIsUsable = !!nameHint && nameHint.length >= 5 && !/^\d+$/.test(nameHint);
+            if (isValidPrice(price) && isPriceRealistic(price, nameHint || String(out.name)) && out.name && String(out.name).length > 5 &&
+                (!hintIsUsable || titleMatchesHint(String(out.name), nameHint))) {
               console.log(`[SEARCH_VERIFY] ✓ NVIDIA (model=${model}): "${String(out.name).substring(0, 40)}" R$ ${price}`);
               return {
                 name: cleanProductName(String(out.name)),

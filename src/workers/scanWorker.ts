@@ -92,6 +92,18 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
         }
         ProductRepository.save(product);
 
+        // #50 — resultado extraído só via busca (página não confirmou) → avisa
+        // na aba ALERTAS para o usuário conferir se é o produto certo
+        if (!info.priceConfirmed && /SEARCH/.test(info.method || "")) {
+          recordInAppAlert(
+            "scrape",
+            product.url || product.id,
+            "⚠️ SCRAPE NÃO CONFIRMADO PELA PÁGINA",
+            `Produto: ${info.name || "(sem nome)"}\nPreço: R$ ${info.price}\nURL: ${product.url}\n\nExtraído apenas via busca — confira se é o item correto.`,
+            1
+          );
+        }
+
         if (product.targetPrice && product.currentPrice <= product.targetPrice) {
           try {
             const alerted = await alertProductTargetReached(

@@ -2504,8 +2504,8 @@ const queued = await response.json();
               </motion.div>
             )}
 
-            {/* #49 — BOUGHT ARCHIVE: itens comprados, no fim da página da aba LISTS */}
-            {activeTab === "lists" && boughtProducts.length > 0 && (
+            {/* #49/#50 — BOUGHT ARCHIVE: sempre visível no fim da aba LISTS (estado vazio) */}
+            {activeTab === "lists" && (
               <motion.div
                 initial={{ opacity: 0, y: 20 }}
                 animate={{ opacity: 1, y: 0 }}
@@ -2517,6 +2517,11 @@ const queued = await response.json();
                   <h2 className="text-sm font-mono text-crimson/50 tracking-[0.3em]">BOUGHT ARCHIVE ({boughtProducts.length})</h2>
                   <span className="text-[10px] font-mono text-crimson/30">HISTÓRICO PRESERVADO • FORA DA LISTA ATIVA</span>
                 </div>
+                {boughtProducts.length === 0 ? (
+                  <div className="hud-border bg-black/40 px-4 py-3 text-[10px] font-mono text-crimson/30 tracking-widest uppercase">
+                    NENHUM ITEM COMPRADO AINDA — MARQUE PRODUTOS COM O ÍCONE DO CARRINHO NA LISTA
+                  </div>
+                ) : (
                 <div className="hud-border bg-black/40 divide-y divide-crimson/10">
                   {boughtProducts.map(p => {
                     const list = profileLists.find(l => l.id === p.listId);
@@ -2551,6 +2556,7 @@ const queued = await response.json();
                     );
                   })}
                 </div>
+                )}
               </motion.div>
             )}
 
