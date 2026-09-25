@@ -1611,9 +1611,17 @@ const queued = await response.json();
       if (!queued.jobId) throw new Error(queued.error || "Batch comparison queueing failed");
 
       // Poll do job com tratamento de progresso.
-      const deadline = Date.now() + 600_000;
+      // #51 — antes: deadline fixo de 600s derrubava lote saudável (~11 min p/
+      // 10 itens) e JOGAVA FORA o resultado. Agora: continua enquanto houver
+      // progresso novo; só falha se travar (8 min sem update — pior caso de 1
+      // item é search 40s + NVIDIA 120s + scrape 90s + LM Studio 120s) ou 45 min.
+      const STALL_MS = 8 * 60_000;
+      const ABSOLUTE_CAP_MS = 45 * 60_000; // 45 min — 10 itens ~30 min com NVIDIA lenta
+      const startedAt = Date.now();
+      let lastProgressAt = Date.now();
+      let lastProgressKey = "";
       let finalResult: any = null;
-      while (Date.now() < deadline) {
+      while (Date.now() - startedAt < ABSOLUTE_CAP_MS) {
         if (controller.signal.aborted) throw Object.assign(new Error("Aborted"), { name: "AbortError" });
         const res = await fetch(`/api/jobs/scan/${queued.jobId}`, { signal: controller.signal });
         if (!res.ok) throw new Error("Job status fetch failed");
@@ -1624,12 +1632,22 @@ const queued = await response.json();
         }
         if (job.state === "failed") throw new Error(job.failedReason || "Job failed");
         if (job.progress && typeof job.progress === "object") {
+          const key = `${job.progress.current}/${job.progress.total}/${job.progress.productName || ""}`;
+          if (key !== lastProgressKey) {
+            lastProgressKey = key;
+            lastProgressAt = Date.now();
+          }
           setCompareAllProgress(job.progress);
           setSystemMessage(`BATCH SCAN: ${job.progress.current}/${job.progress.total} — ${job.progress.productName}`);
         }
+        if (Date.now() - lastProgressAt > STALL_MS) {
+          throw new Error(
+            `Batch comparison travado${lastProgressKey ? ` em ${lastProgressKey}` : ""} — sem progresso há ${STALL_MS / 60_000} min`
+          );
+        }
         await new Promise((r) => setTimeout(r, 3000));
       }
-      if (!finalResult) throw new Error("Batch comparison timed out");
+      if (!finalResult) throw new Error("Batch comparison timed out (45 min)");
 
       // Salvar resultados em cada produto.
       const resultsMap = finalResult.results || {};

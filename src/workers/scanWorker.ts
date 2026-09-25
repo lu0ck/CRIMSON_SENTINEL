@@ -28,7 +28,7 @@ import { normalizeProductUrl } from "../lib/url";
 import { AI_MODELS } from "../lib/aiModels";
 
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
-const COMPARE_SCRAPE_TIMEOUT_MS = 30_000;
+const COMPARE_CONFIRM_TIMEOUT_MS = 90_000; // #51 — 30s matava antes de renderizar
 const COMPARE_NVIDIA_TIMEOUT_MS = 30_000;
 const NVIDIA_MAX_RETRIES = 2;
 const NVIDIA_RETRY_DELAY_MS = 2_000;
@@ -300,7 +300,7 @@ async function runComparison(
                   serperApiKey: profile?.serperApiKey,
                   tavilyApiKey: profile?.tavilyApiKey,
                 }),
-                15_000
+                COMPARE_CONFIRM_TIMEOUT_MS // #51 (era 15s)
               ).then((info: any) => {
                 if (!info || !info.price || info.available === false) return null;
                 return { url, title: info.name || productName, price: info.price };
@@ -403,20 +403,40 @@ async function runComparison(
     safeLog(`[compare] ${itemsBefore - items.length} snippets descartados por esgotamento`);
   }
 
-  // 3) SCRAPE PARALELO — máx 5 URLs, timeout de 45s por página.
-  const seenUrls = new Set<string>();
-  const urls = items
-    .map((i) => i.url)
-    .filter((u) => {
-      const key = normalizeProductUrl(u);
-      if (seenUrls.has(key)) return false;
-      seenUrls.add(key);
-      return true;
-    })
-    .slice(0, 5);
-  const scraped: CompareResult[] = [];
-  let rejectedSameProduct = 0, rejectedNoData = 0, rejectedLowPrice = 0, rejectedUnavailable = 0;
-  if (urls.length > 0) {
+  // #51 — confirmação por página: paralelo, 90s (antes 30s — morria antes de
+  // Playwright/AliExpress renderizar o preço → log "sem dados" na maioria).
+  const confirmByScrape = async (
+    candidates: Array<{ url: string }>,
+    limit = 3
+  ): Promise<CompareResult[]> => {
+    // Chave de OFERTA (#51): AliExpress /i/ vs /item/ + host pt/www/m são o
+    // MESMO produto — sem isso o mesmo item aparecia 2-3x nos resultados.
+    const offerKey = (u: string): string => {
+      try {
+        const p = new URL(u);
+        if (/aliexpress\.com$/.test(p.hostname.replace(/^(www|m|pt|es|fr|de)\./, ""))) {
+          const m = p.pathname.match(/\/(?:item|i|p)\/(?:[^/]*\/)?([0-9]{9,})/);
+          if (m) return `aliexpress:${m[1]}`;
+        }
+        return normalizeProductUrl(u);
+      } catch {
+        return u;
+      }
+    };
+    const seen = new Set<string>();
+    const urls = candidates
+      .map((c) => c.url)
+      .filter((u) => {
+        if (!u) return false;
+        const key = offerKey(u);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return isProductUrl(u);
+      })
+      .slice(0, limit);
+    const confirmed: CompareResult[] = [];
+    if (urls.length === 0) return confirmed;
+    let rejectedSameProduct = 0, rejectedNoData = 0, rejectedLowPrice = 0, rejectedUnavailable = 0;
     const settled = await Promise.allSettled(
       urls.map((url) =>
         withTimeout(
@@ -427,7 +447,7 @@ async function runComparison(
             serperApiKey: profile?.serperApiKey,
             tavilyApiKey: profile?.tavilyApiKey,
           }),
-          COMPARE_SCRAPE_TIMEOUT_MS
+          COMPARE_CONFIRM_TIMEOUT_MS
         ).then((info: any) => {
           if (!info || !info.price || !info.name) { rejectedNoData++; return null; }
           if (info.available === false) { rejectedUnavailable++; return null; }
@@ -438,13 +458,17 @@ async function runComparison(
       )
     );
     for (const s of settled) {
-      if (s.status === "fulfilled" && s.value) scraped.push(s.value);
+      if (s.status === "fulfilled" && s.value) confirmed.push(s.value);
     }
-    safeLog(`[compare] scrape: ${scraped.length}/${urls.length} ok (${rejectedSameProduct} outro produto, ${rejectedNoData} sem dados, ${rejectedLowPrice} preço baixo, ${rejectedUnavailable} esgotado)`);
-    if (scraped.length > 0) return scraped;
-  }
+    const rejectedSilent = settled.filter((s) => s.status === "rejected").length;
+    safeLog(`[compare] scrape: ${confirmed.length}/${urls.length} ok (${rejectedSameProduct} outro produto, ${rejectedNoData} sem dados, ${rejectedLowPrice} preço baixo, ${rejectedUnavailable} esgotado, ${rejectedSilent} timeout/erro)`);
+    return confirmed;
+  };
 
-  // 4) NVIDIA — extrai preços dos snippets.
+  // 3) NVIDIA (barato, ~10s) — extrai preços dos snippets ANTES do scrape (#51):
+  // com Gemini em 429, NVIDIA virou o motor principal (lê snippets sem browser)
+  // e a confirmação por página acontece em seguida.
+  let nvidiaResults: CompareResult[] = [];
   if (profile?.nvidiaApiKey && items.length > 0) {
     const OpenAI = (await import("openai")).default;
     const client = new OpenAI({
@@ -460,7 +484,7 @@ async function runComparison(
             client.chat.completions.create({
               model,
               messages: [
-                { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string","title":"string"}]. Só o mesmo modelo/SKU. Preço à vista BRL. A url deve ser a PÁGINA DIRETA do produto (AliExpress: precisa conter /item/; Amazon: /dp/ ou /gp/product/; Shopee: -i.<seller>.<item> ou /product/; Mercado Livre: MLB-<número>) — NUNCA URL de catálogo, busca ou loja.' },
+                { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string","title":"string"}]. Só o mesmo modelo/SKU. Preço à vista BRL. A url deve ser a PÁGINA DIRETA do produto (AliExpress: precisa conter /item/; Amazon: precisa conter /dp/ ou /gp/product/; Shopee: precisa conter -i.<seller>.<item> ou /product/; Mercado Livre: precisa conter MLB-<número>) — NUNCA URL de catálogo, busca ou loja.' },
                 { role: "user", content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:` },
               ],
               max_tokens: 600,
@@ -472,19 +496,51 @@ async function runComparison(
           const jm = rawText.match(/\[[\s\S]*\]/);
           if (jm) {
             const parsed = JSON.parse(jm[0]);
+            const arr = Array.isArray(parsed) ? parsed : [];
             const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
-            const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
+            const rawResults = arr.map((r: any) => ({
               ...r, title: r.title || r.site || snippetMap.get(r.url) || productName,
             })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000 && isProductUrl(r.url)); // #46
             const results = await filterAndDedupe(rawResults, productName);
-            if (results.length > 0) return results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
+            safeLog(`[compare] NVIDIA ${model}: parsed=${arr.length} url+preço+domínio=${rawResults.length} após dedupe=${results.length}`);
+            if (results.length > 0) {
+              nvidiaResults = results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
+            }
+          } else {
+            safeLog(`[compare] NVIDIA ${model}: sem array JSON na resposta — "${rawText.slice(0, 160)}"`);
           }
           break;
         } catch (err: any) {
+          const isTimeout = String(err?.message || "").includes("TIMEOUT");
+          safeLog(`[compare] NVIDIA ${model} attempt ${attempt} falhou: ${err?.message || err}`);
+          if (isTimeout) break; // #51 — retry em API lenta só piora (30s×4 = 2 min)
           if (attempt < NVIDIA_MAX_RETRIES) await new Promise((r) => setTimeout(r, NVIDIA_RETRY_DELAY_MS));
         }
       }
+      if (nvidiaResults.length > 0) break;
     }
+    if (nvidiaResults.length === 0) safeLog(`[compare] NVIDIA: 0 resultados para "${productName.slice(0, 60)}" — indo para scrape de busca`);
+  } else {
+    safeLog(`[compare] NVIDIA pulado (chave=${profile?.nvidiaApiKey ? "sim" : "não"}, itens=${items.length})`);
+  }
+
+  // 3b) Confirmação por página do NVIDIA (top 3, 90s, paralelo). Confirmou →
+  // preço da página; não confirmou → aceita o resultado já filtrado
+  // (isProductUrl + sameProduct) em vez de voltar vazio.
+  if (nvidiaResults.length > 0) {
+    const confirmed = await confirmByScrape(nvidiaResults);
+    if (confirmed.length > 0) {
+      safeLog(`[compare] NVIDIA+scrape: ${confirmed.length}/${nvidiaResults.length} confirmados para "${productName}"`);
+      return confirmed;
+    }
+    safeLog(`[compare] NVIDIA: ${nvidiaResults.length} resultados sem confirmação da página — aceitando filtrados`);
+    return nvidiaResults;
+  }
+
+  // 4) SCRAPE DIRETO DAS BUSCAS — fallback quando NVIDIA não devolveu nada (#51).
+  if (items.length > 0) {
+    const scraped = await confirmByScrape(items.map((i) => ({ url: i.url })), 5);
+    if (scraped.length > 0) return scraped;
   }
 
   // 5) LM STUDIO — fallback local.

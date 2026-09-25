@@ -1263,3 +1263,30 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Smoke #50 (job 547, force):** mesma URL → **`name="MACHINIST X99 MD8 Placa-mãe LGA 2011-3 Suporte Dual Xeon..."`, `price=665.99`**, method `MERGED_PLAYWRIGHT_BASIC+OG`, strategies `PLAYWRIGHT_STEALTH → PLAYWRIGHT_BASIC → URL_PRICE_FALLBACK → ...` (**SEARCH_VERIFY não precisou rodar**); **sem** log `URL name hint: 1005007300070052` (A) e zero caches com "800 Robux" (o cache desta URL, `d6p9bq.json`, agora guarda o resultado correto); 19 produtos intactos, nenhum alerta indevido; resultado sem `SEARCH` no method → E corretamente não disparou.
 
 **Arquivos:** `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, `src/App.tsx`, docs.
+
+## 6.36 bug: "Batch comparison timed out" + lista toda sem resultados no ESCANEAR MERCADO (#51)
+
+**Sintoma:** ao clicar ESCANEAR MERCADO na lista WORKSTATION4 (10 itens), o frontend abortava com `Batch comparison timed out` após 10 min e **jogava fora o resultado** — mesmo o job terminando depois (worker registrava `4/10 produtos com dados`). Além disso 6/10 produtos ficavam sem nenhum preço de mercado.
+
+**Causa raiz (jobs 556/564):** (1) `App.tsx` usava deadline **fixo de 600s** no poll — o lote real leva ~11-30 min (search + NVIDIA + scrape por item) e, ao estourar, o `throw` descartava o `returnvalue` já completo; (2) `runComparison` fazia **scrape de 5 URLs ANTES do NVIDIA** com timeout de 30s — Playwright/AliExpress não renderizava preço em 30s e as rejeições eram **silenciosas** (log "0/5 sem dados" escondia timeouts); (3) com Gemini em 429, quem sobrava era NVIDIA — que rodava DEPOIS do scrape — e LM Studio; (4) `buildSearchQuery` ordenava as palavras por **tamanho** → sopa ("Térmica Console Pasta Cinza Cpu Gd900").
+
+**Mudanças:**
+
+| # | Mudança | Arquivo | Detalhe |
+|---|---|---|---|
+| A | Poll sem deadline fixo | `App.tsx` `compareAllProducts` | detecção de travamento: **8 min sem progresso novo** → erro com a posição (`travado em 7/10 — ...`; pior caso de 1 item = search 40s + NVIDIA 120s + scrape 90s + LM 120s), cap absoluto **45 min**, `returnvalue` salvo ao concluir (nada é descartado) |
+| B | NVIDIA antes do scrape + confirmação 90s | `scanWorker.ts` `runComparison` | nova ordem: Gemini → busca → **NVIDIA nos snippets (~10s)** → `confirmByScrape` top 3 (**90s**, paralelo): confirmou = preço da página; não confirmou = aceita NVIDIA já filtrado (`isProductUrl`+`sameProduct`+`filterAndDedupe`) → fallback scrape top 5 (só se NVIDIA vazio) → LM Studio; `COMPARE_CONFIRM_TIMEOUT_MS=90_000` (era 30s) também no confirm do Gemini (era 15s); **timeout NVIDIA não repete** (API lenta: 4×30s = 2 min perdidos) |
+| C | Busca na ordem natural | `compare.ts` `buildSearchQuery` | remove stopwords **mantendo a ordem do nome**; SKUs/códigos que caem fora do corte de 7 palavras entram no fim (até 10 tokens); fim da sopa por tamanho de palavra |
+| D | Dedup de oferta AliExpress | `scanWorker.ts` `confirmByScrape` | chave `aliexpress:<id>` (colapsa `/i/` vs `/item/` e host pt/www/m) + `normalizeProductUrl`; log ganhou contador **`timeout/erro`** (rejeições silenciosas agora visíveis) |
+| E | Log do passo NVIDIA | `scanWorker.ts` | `parsed=N url+preço=M após dedupe=K`, respostas sem array JSON, erros por modelo, `NVIDIA: 0 resultados → indo para scrape` |
+
+**Validação #51:** `npm run lint` → 0; unitário **10/10** (`/tmp/opencode/test51.ts`: ordem natural preservada, SKU final `1000G` e `SNV3S` mantidos, stopwords removidas, ≤120 chars).
+
+**Smoke #51 (jobs 556/564, profile `3g5znt9hm`, 10 itens WORKSTATION4):**
+- **job 556** (primeira versão, ainda sem skip-retry/dedup): completou em **29 min SEM timeout** — antes o front abortava em 600s e mostrava erro; 4/10 entregues.
+- **job 564** (versão final): **19 min, 4/10 com dados**, caminho novo funcionando — item 1 (SSD) `NVIDIA parsed=1 → confirm 1/1` em **25s**; dedup removeu 4 entradas duplicadas do cooler AliExpress (`/i/` + `/item/` + pt/www → 1).
+- contagem: 4 com dados (SSD, Gabinete, Cooler, Monitor), 6 vazios por causas **externas**: **Gemini 429 pulou em todos**, **NVIDIA NIM com TIMEOUT 30s/resposta vazia na maioria das chamadas**, Tavily+Serper retornaram **0** no Xeon e na MACHINIST, páginas que estouraram os 90s de scrape (contador `timeout/erro`: 3+2+4).
+
+**Limitações / próximos passos:** renovar a quota do **Gemini** (chave em 429 — é a maior alavanca: com quota, o caminho Gemini+confirm é o melhor); NVIDIA NIM lento hoje (o caminho novo já aproveita quando responde rápido); retry com query reduzida quando Tavily+Serper retornam 0 seria o próximo passo.
+
+**Arquivos:** `src/App.tsx`, `src/workers/scanWorker.ts`, `src/lib/compare.ts`, docs.

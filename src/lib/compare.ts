@@ -31,20 +31,16 @@ export function buildSearchQuery(productName: string): string {
 
   const tokens = cleaned.split(" ").filter((t) => t.length >= 3);
 
-  const skus = tokens
-    .filter(
-      (t) => /\d/.test(t) && t.length >= 4 && !/^\d+[a-z]+$/i.test(t)
-    )
-    .sort((a, b) => b.length - a.length);
+  // #51 — antes: ordenava por TAMANHO de palavra → sopa
+  // ("Térmica Console Pasta Cinza Cpu Gd900 preço brasil").
+  // Agora: ordem natural do nome, mantendo SKUs/códigos de modelo mesmo que
+  // fiquem fora do corte das 7 primeiras palavras significativas.
+  const meaningful = tokens.filter((t) => !QUERY_STOPWORDS.has(t.toLowerCase()));
+  const isSku = (t: string) => /\d/.test(t) && /[a-z]/i.test(t) && t.length >= 4;
 
-  const distinctive = tokens
-    .filter((t) => !QUERY_STOPWORDS.has(t.toLowerCase()) && !/\d/.test(t))
-    .sort((a, b) => b.length - a.length);
-
-  let parts: string[] = [];
-  parts.push(...distinctive.slice(0, 5));
-  parts.push(...skus.slice(0, 3));
-  parts = parts.slice(0, 8);
+  let parts = meaningful.slice(0, 7);
+  const extraSkus = meaningful.filter((t) => isSku(t) && !parts.includes(t)).slice(0, 3);
+  parts = [...parts, ...extraSkus].slice(0, 10);
 
   if (parts.length === 0) {
     parts = tokens.slice(0, 8);
