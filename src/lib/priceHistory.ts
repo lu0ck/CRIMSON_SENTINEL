@@ -52,6 +52,18 @@ export function sortPointsByDate(points: PricePoint[]): PricePoint[] {
   return [...points].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 }
 
+/** #47 — chave de dia LOCAL (YYYY-MM-DD): agrupa pontos do mesmo dia (evita labels duplicados). */
+export function dayKey(iso: string): string {
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return "";
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** Rótulo local de um dia YYYY-MM-DD (meio-dia evita deslocamento de fuso na conversão). */
+export function dayLabel(day: string): string {
+  return new Date(`${day}T12:00:00`).toLocaleDateString();
+}
+
 export function buildEcommerceEntities(products: Product[]): PriceHistoryEntity[] {
   const entities: PriceHistoryEntity[] = [];
   for (const product of products) {

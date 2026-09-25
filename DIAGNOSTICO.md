@@ -1162,3 +1162,26 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Arquivos:** `src/lib/compare.ts`, `src/workers/scanWorker.ts`, `src/lib/store-handlers.ts`, `server.ts`, docs.
 
 **Smoke #46 (end-to-end):** job 519 "Mouse Gamer Logitech G502" → `https://www.kabum.com.br/produto/388055/mouse-gamer-logitech-g502-x-rgb-25600-dpi-...` (URL direta); job 518 MACHINIST X99 → Tavily 20 brutos, 19 rejeitados (busca/loja) + 1 legítimo ML admitido (correção `03ec76a` de `MLB` sem hífen em `/slug/p/MLB...`); scrape ML estourou timeout 30s → sem resultado (comportamento esperado, sem URL catálogo). **Side findings:** Gemini 429 (cota) e Serper 403 (chave) neste dia — pré-existentes, fora do escopo do #46.
+
+## 6.32 fix: telemetria de preços — ressurreição de deletados + gráficos errados (#47)
+
+**Problemas:**
+1. **Produto deletado voltava**: `compareProduct`/`compareAll` gravavam um snapshot `data` de render antigo (poll de até 590s!) via `saveData`; `handleScanAll` fazia `save()` (upsert) de snapshot do início do scan (5s/produto). 2. **Gráficos errados**: datas brutas (labels duplicados por dia), eixo incluía órfãos (`listId=""`), série por `list.name` (colisão de nomes), último ponto não era o preço atual, "ATIVIDADE RECENTE" em ordem de inserção, aba HISTÓRICO não refazia fetch.
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| `dataRef` + `mutateData(updater)` | `App.tsx` | updater roda no estado **mais recente** (produto deletado não existe → não ressuscita); POST + **rollback** se falhar (guard: só se ninguém sobrescreveu) |
+| Escritores migrados | `App.tsx` | `compareProduct`, `compareAllProducts`, `deleteProduct`, seed/move do #45 → `mutateData`; `saveData` rastreia `dataRef` + rollback; `saveDataSilent` sincroniza espelho |
+| Worker scan-all | `scanWorker.ts` `handleScanAll` | `getById` **antes de cada iteração** → deletado = pula (log); campos alterados no meio não são sobrescritos; `catch` usa snapshot |
+| `handleScrape` | `scanWorker.ts` | já seguro (getById pós-scrape) — sem mudança |
+| Agregação dos gráficos | `App.tsx` `listHistoryData`/`selectedListHistoryData` | `dayKey()` 1 ponto/dia (dia local, cutoff `T23:59:59.999`), eixo só de produtos em listas reais (exclui órfãos), último ponto/today = **soma de `currentPrice`**, série por **`list.id`** (`name={list.name}` no tooltip/legenda) |
+| Modal do produto | `App.tsx` `chartData` | agrupado por dia + ponto de hoje = `currentPrice` |
+| ATIVIDADE RECENTE | `App.tsx` | `recentProducts` = `lastUpdated` desc (top 5) |
+| Aba HISTÓRICO | `PriceHistoryTab.tsx` | prop `refreshKey` (fingerprint `length:max(lastUpdated)`) no deps do fetch + agrupamento 1 ponto/dia |
+| Helpers | `lib/priceHistory.ts` | `dayKey(iso)`, `dayLabel(day)` exportados |
+
+**Validação #47:** `npm run lint` → 0.
+
+**Arquivos:** `src/App.tsx`, `src/workers/scanWorker.ts`, `src/components/PriceHistoryTab.tsx`, `src/lib/priceHistory.ts`, docs.

@@ -156,6 +156,7 @@ Fases **1–15 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**Alerta falso no Telegram (R$ 7,18 ≤ alvo R$ 20 — frete/parcela)**~~ — **RESOLVIDO (#44)**: `isPriceRealistic` trava fallback do scraper, persistência e alerta no worker; prompt NVIDIA ignora frete/parcela. §6.29.
 - ~~**Ordenação dos produtos na aba LIST**~~ — **RESOLVIDO (#45)**: seletor Padrão / Menor preço / Maior preço / A–Z / Z–A / **Ordem de compra** (botões ↑↓, `products.sort_order`, persiste no localStorage); export acompanha a ordem. §6.30.
 - ~~**Comparação retornava catálogo/busca em vez de página do produto**~~ — **RESOLVIDO (#46)**: `isProductUrl` path-aware (AliExpress exige `/item/`, Amazon `/dp/`, Shopee `-i.<s>.<i>`, ML `MLB-<n>`); filtro em Gemini/NVIDIA/LM/Tavily/Serper + fallback do server; guard do handler AliExpress; `title` no schema Gemini habilita `sameProduct`. §6.31.
+- ~~**Telemetria: deletados ressuscitavam + gráficos errados**~~ — **RESOLVIDO (#47)**: `mutateData`/`dataRef` com rollback (comparações longas e deletes não re-inserem), worker scan-all re-lê do banco antes de cada save, gráficos 1 ponto/dia sem órfãos + último ponto = `currentPrice` + série por `list.id`, ATIVIDADE RECENTE por `lastUpdated`, aba HISTÓRICO refetcha quando os produtos mudam. §6.32.
 
 ---
 

@@ -18,6 +18,7 @@ import {
   ResponsiveContainer,
   Legend,
 } from "recharts";
+import { dayKey } from "../lib/priceHistory";
 
 interface PricePoint {
   date: string;
@@ -57,6 +58,8 @@ interface PriceHistoryPayload {
 interface PriceHistoryTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
   playSound: (type: "click" | "success" | "error" | "scan" | "notify") => void;
+  /** #47 — muda quando os produtos mudam (refetch automático do histórico) */
+  refreshKey?: string | number;
 }
 
 const fmtBRL = (v: number) =>
@@ -93,7 +96,7 @@ function StatCard({
   );
 }
 
-export function PriceHistoryTab({ addToast, playSound }: PriceHistoryTabProps) {
+export function PriceHistoryTab({ addToast, playSound, refreshKey }: PriceHistoryTabProps) {
   const [data, setData] = useState<PriceHistoryPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [scope, setScope] = useState<"ecommerce" | "local">("ecommerce");
@@ -124,7 +127,7 @@ export function PriceHistoryTab({ addToast, playSound }: PriceHistoryTabProps) {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [scope, rangeDays]);
+  }, [scope, rangeDays, refreshKey]);
 
   const entities = data ? (scope === "ecommerce" ? data.ecommerce : data.local) : [];
   const entity = entities.find((e) => e.id === entityId) ?? entities[0];
@@ -135,9 +138,12 @@ export function PriceHistoryTab({ addToast, playSound }: PriceHistoryTabProps) {
     const merged = new Map<string, Record<string, unknown>>();
     for (const series of entity.series) {
       for (const p of series.points) {
-        const bucket = merged.get(p.date) ?? { date: p.date };
+        // #47 — agrupa por dia local (1 ponto/dia; última leitura do dia vence)
+        const day = dayKey(p.date);
+        if (!day) continue;
+        const bucket = merged.get(day) ?? { date: `${day}T12:00:00` };
         bucket[series.label] = p.price;
-        merged.set(p.date, bucket);
+        merged.set(day, bucket);
       }
     }
     const rows = [...merged.values()].sort(

@@ -138,8 +138,15 @@ async function handleScanAll() {
   let updated = 0;
   let errors = 0;
 
-  for (const product of data.products) {
+  for (const snap of data.products) {
     try {
+      // #47 — re-lê do banco ANTES de cada iteração: produto deletado durante o scan
+      // NÃO é re-inserido (save() é upsert) e campos alterados no meio não são sobrescritos
+      const product = ProductRepository.getById(snap.id);
+      if (!product) {
+        safeLog(`[scan-worker] produto removido durante o scan, pulando: ${snap.name || snap.id}`);
+        continue;
+      }
       const profile = data.profiles.find((p) => p.id === product.profileId);
       const info = await advancedScrape(product.url, {
         lmStudioUrl: profile?.lmStudioUrl,
@@ -183,9 +190,9 @@ async function handleScanAll() {
       await new Promise((r) => setTimeout(r, 5_000));
     } catch (err) {
       errors++;
-      safeLog(`[scan-worker] erro ${product.name}: ${err}`);
-      if (product.url) {
-        recordInAppAlert("scrape", product.url, `✗ FALHA NO RASTREIO: ${product.name}`, `${product.url}\n\n${err}`, 1);
+      safeLog(`[scan-worker] erro ${snap.name}: ${err}`);
+      if (snap.url) {
+        recordInAppAlert("scrape", snap.url, `✗ FALHA NO RASTREIO: ${snap.name}`, `${snap.url}\n\n${err}`, 1);
       }
     }
   }

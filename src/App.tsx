@@ -51,6 +51,7 @@ import {
 } from "lucide-react";
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId, isSearchUrl } from "./lib/url";
+import { dayKey, dayLabel } from "./lib/priceHistory";
 import { LocalTab } from "./components/LocalTab";
 import { MercadoTab } from "./components/MercadoTab";
 import { BackupPanel } from "./components/BackupPanel";
@@ -369,7 +370,43 @@ export default function App() {
 
   const isElectron = navigator.userAgent.toLowerCase().includes('electron');
 
+  // #47 — espelho do estado para escritas concorrentes (comparações longas vs deletes)
+  const dataRef = useRef<AppData>(data);
+  useEffect(() => { dataRef.current = data; }, [data]);
+
+  // #47 — mutação anti-resurrection: aplica o updater no estado MAIS RECENTE (não no
+  // snapshot do render), persiste via POST /api/data e faz rollback se falhar
+  // (só se ninguém tiver escrito por cima nesse meio-tempo).
+  const mutateData = async (updater: (prev: AppData) => AppData): Promise<boolean> => {
+    const snapshot = dataRef.current;
+    const next = updater(snapshot);
+    if (next === snapshot) return true;
+    dataRef.current = next;
+    setData(next);
+    try {
+      const response = await fetch("/api/data", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(next),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return true;
+    } catch (error) {
+      console.error("Failed to save data", error);
+      if (dataRef.current === next) {
+        dataRef.current = snapshot;
+        setData(snapshot);
+      }
+      addToast("SYNC FAILURE: DATA NOT PERSISTED", "error");
+      return false;
+    }
+  };
+
   const saveData = async (newData: AppData) => {
+    // #47 — escrita passa a ser mutação sobre o dataRef: rastreia o estado mais
+    // recente e faz ROLLBACK se o POST falhar (nada fica "fantasma" só na UI).
+    const snapshot = dataRef.current;
+    dataRef.current = newData;
     setData(newData);
     try {
       const response = await fetch("/api/data", {
@@ -380,6 +417,10 @@ export default function App() {
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
     } catch (error) {
       console.error("Failed to save data", error);
+      if (dataRef.current === newData) {
+        dataRef.current = snapshot;
+        setData(snapshot);
+      }
       addToast("SYNC FAILURE: DATA NOT PERSISTED", "error");
     }
   };
@@ -392,6 +433,7 @@ export default function App() {
         body: JSON.stringify(newData)
       });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      dataRef.current = newData; // #47 — mantém o espelho em sincronia com o estado
       setData(newData);
     } catch (error) {
       console.error("Failed to save data", error);
@@ -539,44 +581,90 @@ export default function App() {
     }
   }, [profileProducts, selectedListId, productSortMode]);
 
+  // #47 — telemetria: 1 ponto por dia (dia LOCAL), eixo só de produtos em listas reais
+  // (exclui órfãos com listId ""/null), último ponto = preço ATUAL, séries por list.id.
   const listHistoryData = React.useMemo(() => {
-    const allDates = Array.from(new Set(
-      profileProducts.flatMap(p => p.priceHistory.map(h => h.date))
+    const listIds = new Set(profileLists.map(l => l.id));
+    const listedProducts = profileProducts.filter(p => p.listId && listIds.has(p.listId));
+    const days = Array.from(new Set(
+      listedProducts.flatMap(p => p.priceHistory.map(h => dayKey(h.date)).filter(Boolean))
     )).sort();
+    if (days.length === 0) return [];
 
-    return allDates.map(date => {
-      const entry: any = { date: new Date(date).toLocaleDateString(), rawDate: date };
+    const rowFor = (day: string, useCurrent: boolean) => {
+      const cutoff = new Date(`${day}T23:59:59.999`).getTime();
+      const row: Record<string, any> = { date: dayLabel(day), day };
       profileLists.forEach(list => {
-        const listProducts = profileProducts.filter(p => p.listId === list.id);
-        const totalValue = listProducts.reduce((sum, product) => {
-          const historyEntry = [...product.priceHistory]
+        const listProducts = listedProducts.filter(p => p.listId === list.id);
+        row[list.id] = listProducts.reduce((sum, product) => {
+          if (useCurrent) return sum + (product.currentPrice > 0 ? product.currentPrice : 0);
+          const entry = [...product.priceHistory]
             .reverse()
-            .find(h => h.date <= date);
-          return sum + (historyEntry ? historyEntry.price : 0);
+            .find(h => new Date(h.date).getTime() <= cutoff);
+          return sum + (entry ? entry.price : 0);
         }, 0);
-        entry[list.name] = totalValue;
       });
-      return entry;
-    });
+      return row;
+    };
+
+    const rows = days.map(day => rowFor(day, false));
+    const today = dayKey(new Date().toISOString());
+    if (days[days.length - 1] === today) {
+      rows[rows.length - 1] = rowFor(today, true);
+    } else {
+      rows.push(rowFor(today, true));
+    }
+    return rows;
   }, [profileProducts, profileLists]);
 
   const selectedListHistoryData = React.useMemo(() => {
     if (!selectedListId) return [];
     const listProducts = profileProducts.filter(p => p.listId === selectedListId);
     if (listProducts.length === 0) return [];
-    const allDates = Array.from(new Set(
-      listProducts.flatMap(p => p.priceHistory.map(h => h.date))
+    const days = Array.from(new Set(
+      listProducts.flatMap(p => p.priceHistory.map(h => dayKey(h.date)).filter(Boolean))
     )).sort();
-    return allDates.map(date => {
-      const totalValue = listProducts.reduce((sum, product) => {
-        const historyEntry = [...product.priceHistory]
+    if (days.length === 0) return [];
+
+    const rowFor = (day: string, useCurrent: boolean) => {
+      const cutoff = new Date(`${day}T23:59:59.999`).getTime();
+      const total = listProducts.reduce((sum, product) => {
+        if (useCurrent) return sum + (product.currentPrice > 0 ? product.currentPrice : 0);
+        const entry = [...product.priceHistory]
           .reverse()
-          .find(h => h.date <= date);
-        return sum + (historyEntry ? historyEntry.price : 0);
+          .find(h => new Date(h.date).getTime() <= cutoff);
+        return sum + (entry ? entry.price : 0);
       }, 0);
-      return { date: new Date(date).toLocaleDateString(), value: totalValue };
-    });
+      return { date: dayLabel(day), value: total };
+    };
+
+    const rows = days.map(day => rowFor(day, false));
+    const today = dayKey(new Date().toISOString());
+    if (days[days.length - 1] === today) {
+      rows[rows.length - 1] = rowFor(today, true);
+    } else {
+      rows.push(rowFor(today, true));
+    }
+    return rows;
   }, [profileProducts, selectedListId]);
+
+  // #47 — ATIVIDADE RECENTE: ordena por lastUpdated desc (antes era ordem de inserção)
+  const recentProducts = React.useMemo(
+    () => [...profileProducts]
+      .sort((a, b) => (new Date(b.lastUpdated).getTime() || 0) - (new Date(a.lastUpdated).getTime() || 0))
+      .slice(0, 5),
+    [profileProducts]
+  );
+
+  // #47 — fingerprint dos produtos: muda → aba HISTÓRICO refaz o fetch
+  const productsFingerprint = React.useMemo(
+    () =>
+      `${profileProducts.length}:${profileProducts.reduce(
+        (m, p) => Math.max(m, new Date(p.lastUpdated).getTime() || 0),
+        0
+      )}`,
+    [profileProducts]
+  );
 
   const closeApp = () => {
     if (isElectron) {
@@ -609,8 +697,8 @@ export default function App() {
   };
 
   const deleteProduct = (id: string) => {
-    const newData = { ...data, products: data.products.filter(p => p.id !== id) };
-    saveData(newData);
+    // #47 — updater no estado mais recente (não ressuscita produtos de renders velhos)
+    void mutateData(prev => ({ ...prev, products: prev.products.filter(p => p.id !== id) }));
     setSystemMessage("PRODUCT REMOVED FROM DATABASE");
   };
 
@@ -627,12 +715,12 @@ export default function App() {
       const needsSeed = sortedListProducts.some((p) => p.sortOrder == null);
       if (needsSeed) {
         const seed = new Map(sortedListProducts.map((p, i) => [p.id, i]));
-        saveData({
-          ...data,
-          products: data.products.map((p) =>
+        void mutateData(prev => ({
+          ...prev,
+          products: prev.products.map(p =>
             seed.has(p.id) ? { ...p, sortOrder: seed.get(p.id)! } : p
           ),
-        });
+        }));
       }
     }
   };
@@ -645,12 +733,12 @@ export default function App() {
     const next = [...sortedListProducts];
     [next[idx], next[target]] = [next[target], next[idx]];
     const orderMap = new Map(next.map((p, i) => [p.id, i]));
-    saveData({
-      ...data,
-      products: data.products.map((p) =>
+    void mutateData(prev => ({
+      ...prev,
+      products: prev.products.map(p =>
         orderMap.has(p.id) ? { ...p, sortOrder: orderMap.get(p.id)! } : p
       ),
-    });
+    }));
   };
 
   const updateProductTargetPrice = (id: string, targetPrice: number | undefined) => {
@@ -1355,28 +1443,31 @@ const queued = await response.json();
         return currentId;
       });
 
-      const bestPrice = results.length > 0 ? Math.min(...results.map((r: any) => r.price)) : product.currentPrice;
-      const priceChanged = bestPrice !== product.currentPrice;
       const nowIso = new Date().toISOString();
 
-      const newProducts = data.products.map(p => {
-        if (p.id === product.id) {
-          return {
-            ...p,
-            previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
-            currentPrice: bestPrice,
-            lastUpdated: nowIso,
-            priceHistory: priceChanged ? [...p.priceHistory, { date: nowIso, price: bestPrice }] : p.priceHistory,
-            comparisonResults: results
-          };
-        }
-        return p;
+      // #47 — updater no estado mais recente: produto deletado durante o poll NÃO volta
+      await mutateData((prev) => {
+        if (!prev.products.some((p) => p.id === product.id)) return prev;
+        return {
+          ...prev,
+          products: prev.products.map((p) => {
+            if (p.id !== product.id) return p;
+            const best = results.length > 0 ? Math.min(...results.map((r: any) => r.price)) : p.currentPrice;
+            const changed = best !== p.currentPrice;
+            return {
+              ...p,
+              previousPrice: changed ? p.currentPrice : p.previousPrice,
+              currentPrice: best,
+              lastUpdated: nowIso,
+              priceHistory: changed ? [...p.priceHistory, { date: nowIso, price: best }] : p.priceHistory,
+              comparisonResults: results
+            };
+          }),
+        };
       });
 
-      const newData = { ...data, products: newProducts };
-      saveData(newData);
-
       if (results.length > 0) {
+        const bestPrice = Math.min(...results.map((r: any) => r.price));
         if (bestPrice < product.currentPrice) {
           addToast("BEST MARKET PRICE APPLIED TO TRACKER", "success");
         } else if (bestPrice > product.currentPrice) {
@@ -1464,23 +1555,26 @@ const queued = await response.json();
       // Salvar resultados em cada produto.
       const resultsMap = finalResult.results || {};
       const nowIso = new Date().toISOString();
-      const newProducts = data.products.map((p) => {
-        const productResults = resultsMap[p.id];
-        if (!productResults || !Array.isArray(productResults)) return p;
-        if (productResults.length === 0) return p;
-        const bestPrice = Math.min(...productResults.map((r: any) => r.price));
-        const priceChanged = bestPrice !== p.currentPrice;
-        return {
-          ...p,
-          previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
-          currentPrice: bestPrice,
-          lastUpdated: nowIso,
-          priceHistory: priceChanged ? [...p.priceHistory, { date: nowIso, price: bestPrice }] : p.priceHistory,
-          comparisonResults: productResults,
-        };
-      });
 
-      saveData({ ...data, products: newProducts });
+      // #47 — updater no estado mais recente: produtos deletados durante o lote NÃO voltam
+      await mutateData((prev) => ({
+        ...prev,
+        products: prev.products.map((p) => {
+          const productResults = resultsMap[p.id];
+          if (!productResults || !Array.isArray(productResults)) return p;
+          if (productResults.length === 0) return p;
+          const bestPrice = Math.min(...productResults.map((r: any) => r.price));
+          const priceChanged = bestPrice !== p.currentPrice;
+          return {
+            ...p,
+            previousPrice: priceChanged ? p.currentPrice : p.previousPrice,
+            currentPrice: bestPrice,
+            lastUpdated: nowIso,
+            priceHistory: priceChanged ? [...p.priceHistory, { date: nowIso, price: bestPrice }] : p.priceHistory,
+            comparisonResults: productResults,
+          };
+        }),
+      }));
 
       const withResults = Object.values(resultsMap).filter((r: any) => Array.isArray(r) && r.length > 0).length;
       setSystemMessage(`BATCH SCAN COMPLETE: ${withResults}/${products.length} products with market data`);
@@ -1939,7 +2033,7 @@ const queued = await response.json();
                 >
                   <h2 className="text-sm font-mono text-crimson/50 mb-4 tracking-[0.3em]">ATIVIDADE RECENTE</h2>
                   <div className="hud-border bg-black/40 p-6 flex flex-col gap-4">
-                    {profileProducts.slice(0, 5).map((product, idx) => (
+                    {recentProducts.map((product, idx) => (
                       <motion.div 
                         key={product.id} 
                         initial={{ opacity: 0, x: -10 }}
@@ -1997,7 +2091,8 @@ const queued = await response.json();
                           <Line 
                             key={list.id}
                             type="monotone" 
-                            dataKey={list.name} 
+                            dataKey={list.id} 
+                            name={list.name}
                             stroke={idx % 2 === 0 ? "#f00" : "#900"} 
                             strokeWidth={2} 
                             dot={{ r: 4, fill: idx % 2 === 0 ? "#f00" : "#900", strokeWidth: 0 }}
@@ -2586,6 +2681,7 @@ const queued = await response.json();
                   <PriceHistoryTab
                     addToast={addToast}
                     playSound={playSound}
+                    refreshKey={productsFingerprint}
                   />
                 </ErrorBoundary>
               </motion.div>
@@ -3207,10 +3303,20 @@ function ProductDetailModal({
   const [editValue, setEditValue] = useState<{ site: string, price: string, url: string }>({ site: "", price: "", url: "" });
   const [isAddingManual, setIsAddingManual] = useState(false);
 
-  const chartData = product.priceHistory.map(h => ({
-    date: new Date(h.date).toLocaleDateString(),
-    price: h.price
-  }));
+  // #47 — 1 ponto por dia + último ponto = preço atual
+  const chartData = (() => {
+    const byDay = new Map<string, { date: string; price: number }>();
+    for (const h of product.priceHistory) {
+      const k = dayKey(h.date);
+      if (!k) continue;
+      byDay.set(k, { date: dayLabel(k), price: h.price });
+    }
+    const today = dayKey(new Date().toISOString());
+    if (today) byDay.set(today, { date: dayLabel(today), price: product.currentPrice });
+    return Array.from(byDay.entries())
+      .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+      .map(([, v]) => v);
+  })();
 
   const displayResults = comparisonResults.length > 0 ? comparisonResults : (product.comparisonResults || []);
   
