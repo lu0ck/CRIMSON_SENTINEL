@@ -154,6 +154,7 @@ Fases **1–15 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**timeout 600s ainda estourava / metade dos targets**~~ — **RESOLVIDO (#42)**: orçamento 180s/tentativa no scraper, scrape `attempts:2`, poll de graça, dica retry N/2. §6.27.
 - ~~**Shopee/ML: todas estratégias falham (NVIDIA 410 + Gemini 429)**~~ — **RESOLVIDO (#43)**: NVIDIA fail-fast + timeout 30s/modelo, Gemini circuit 1h, hint do slug da URL, SEARCH_VERIFY antes de LLM caro (NVIDIA → regex → Gemini). §6.28.
 - ~~**Alerta falso no Telegram (R$ 7,18 ≤ alvo R$ 20 — frete/parcela)**~~ — **RESOLVIDO (#44)**: `isPriceRealistic` trava fallback do scraper, persistência e alerta no worker; prompt NVIDIA ignora frete/parcela. §6.29.
+- **Ordenação da LISTA DE COMPRAS** — **#45**: seletor Prioridade / Menor preço / Maior preço / A–Z / Z–A / **Ordem de compra** (botões ↑↓, `sort_order` no banco, persiste no localStorage). §6.30.
 
 ---
 

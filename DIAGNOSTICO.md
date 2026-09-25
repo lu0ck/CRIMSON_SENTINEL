@@ -1121,3 +1121,28 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 ---
 
+
+## 6.30 feature: ordenação da LISTA DE COMPRAS — preço, A–Z, ordem manual ↑↓ (#45)
+
+**Pedido:** opções de ordenação na seção LISTA DE COMPRAS (aba Mercado): menor→maior preço, maior→menor, alfabética, e **ordem de compra manual** definida pelo usuário.
+
+**Estado anterior:** ordem fixa server-side `priority → name` (#40), sem escolha, sem coluna de posição.
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| Coluna `sort_order INTEGER` | `schema.sql`, `db.ts` (`ensureColumn`) | posição manual; item novo entra no fim da própria lista (`MAX+1`); edição não reseta posição (`COALESCE`) |
+| `getAll(listId?, sortBy?)` | `shoppingListRepository.ts` | 6 modos: `prioridade` (default), `preco_asc`/`preco_desc` (MIN de `price_observations` via subquery; **sem observação → fim**), `az`, `za`, `manual` (`sort_order IS NULL, sort_order, name`) |
+| `reorder(listId, ids[])` | `shoppingListRepository.ts` | transação: `sort_order = índice` |
+| `GET ...?sortBy=` + `POST /api/shopping-list-items/reorder` | `server.ts` | param normalizado (`normalizeSortBy`); reorder valida `ids: string[]` |
+| Seletor de ordem | `MercadoTab.tsx` | select no topo da lista (PRIORIDADE / MENOR PREÇO / MAIOR PREÇO / A→Z / Z→A / ORDEM DE COMPRA); persiste em `localStorage` (`sentinela_shopping_sort`) |
+| Botões ↑↓ | `MercadoTab.tsx` | só no modo "ORDEM DE COMPRA"; swap com vizinho + POST reorder (otimista; falha → reload de `manual`) |
+| 1ª ativação do manual | `MercadoTab.tsx` (`changeSort`) | se nenhum `sort_order` existe, semeia com a ordem atualmente exibida (não perde o que o usuário vê) |
+| Tipo | `types.ts`, `repositories/types.ts` | `sortOrder?: number` |
+
+**Fora de escopo:** LocalTab (chips da rota), export CSV/TXT (mantêm ordem padrão), produtos rastreados, drag-and-drop.
+
+**Validação #45:** `npm run lint` (tsc) → 0; smoke curl nos 6 `sortBy` + `POST reorder`; UI: seletor troca ordem, ↑↓ move e persiste (reload mantém).
+
+**Arquivos:** `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/shoppingListRepository.ts`, `src/repositories/types.ts`, `src/types.ts`, `server.ts`, `src/components/MercadoTab.tsx`, docs.
