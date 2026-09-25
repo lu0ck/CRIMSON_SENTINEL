@@ -1185,3 +1185,5 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Validação #47:** `npm run lint` → 0.
 
 **Arquivos:** `src/App.tsx`, `src/workers/scanWorker.ts`, `src/components/PriceHistoryTab.tsx`, `src/lib/priceHistory.ts`, docs.
+
+**Smoke #47 (end-to-end):** job 523 `scrape` com `productId` de produto **deletado** → scrape OK (R$ 369,99) e produto NÃO ressuscitou (API + DB count 0); teste de mecanismo no DB real (`tsx`): save → delete → `getById` guard = SKIP, e save cego = **RESSUSCITOU** (prova do bug antigo); stack reiniciada com o código final (api + 4 workers online); `GET /api/data` 200.
