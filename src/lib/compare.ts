@@ -246,9 +246,9 @@ export function isProductUrl(url: string): boolean {
       return /\/(item|i|p)(\/|$)/.test(path);
     }
 
-    // Amazon: exige /dp/ ou /gp/product/ (rejeita /s, /b, home)
+    // Amazon: exige /dp/, /gp/product/ ou /gp/aw/d/ (rejeita /s, /b, home)
     if (/(^|\.)amazon\./.test(host)) {
-      return /\/(dp|gp\/product)(\/|$)/.test(path);
+      return /\/(dp|gp\/product|gp\/aw\/d)(\/|$)/.test(path);
     }
 
     // Shopee: slug-i.sellerid.itemid ou /product/<id>/<id>
@@ -256,9 +256,9 @@ export function isProductUrl(url: string): boolean {
       return /-i\.\d+\.\d+/.test(path) || /\/product\/\d+(\/\d+)?/.test(path);
     }
 
-    // Mercado Livre: MLB-123456... (ou /p/) — lista.mercadolivre.com.br/... rejeitado
+    // Mercado Livre: MLB-123456, MLB123456, /slug/p/MLB... ou /p/ — lista.* rejeitado
     if (/(^|\.)mercadolivre\./.test(host)) {
-      return /\/(mlb|mpe|mco|mla|mlc|mlu)-\d+/.test(path) || path.startsWith("/p/");
+      return /\/(mlb|mpe|mco|mla|mlc|mlu)-?\d+/.test(path) || path.includes("/p/");
     }
 
     return true;
