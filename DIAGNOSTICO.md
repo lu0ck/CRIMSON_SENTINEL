@@ -1160,3 +1160,5 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Validação #46:** `npm run lint` → 0; teste unitário 28/28 URLs (item/home/busca/dp/s/MLB/lista/shopee-i/kabum-produto...) via `tsx`.
 
 **Arquivos:** `src/lib/compare.ts`, `src/workers/scanWorker.ts`, `src/lib/store-handlers.ts`, `server.ts`, docs.
+
+**Smoke #46 (end-to-end):** job 519 "Mouse Gamer Logitech G502" → `https://www.kabum.com.br/produto/388055/mouse-gamer-logitech-g502-x-rgb-25600-dpi-...` (URL direta); job 518 MACHINIST X99 → Tavily 20 brutos, 19 rejeitados (busca/loja) + 1 legítimo ML admitido (correção `03ec76a` de `MLB` sem hífen em `/slug/p/MLB...`); scrape ML estourou timeout 30s → sem resultado (comportamento esperado, sem URL catálogo). **Side findings:** Gemini 429 (cota) e Serper 403 (chave) neste dia — pré-existentes, fora do escopo do #46.
