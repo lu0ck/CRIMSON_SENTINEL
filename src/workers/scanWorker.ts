@@ -23,7 +23,6 @@ import { resolveMarketHandler } from "../lib/market-handlers";
 import { overpassDiscoverEstablishments, haversineKm, type GeoPoint } from "../lib/geo";
 import { isFlashPrice, createFlashPromotion } from "../lib/flashDetect";
 import { alertFlashPromotion, recordInAppAlert } from "../lib/notify";
-import { TRUSTED_DOMAINS, isTrustedHost } from "../lib/trustedDomains";
 import { filterAndDedupe, isProductUrl, buildSearchQuery, sameProduct } from "../lib/compare";
 import { normalizeProductUrl } from "../lib/url";
 import { AI_MODELS } from "../lib/aiModels";
@@ -213,12 +212,13 @@ async function runComparison(
   const systemInstruction = `Você é o SENTINELA, um agente de inteligência de mercado de elite.
   Sua missão é extrair preços REAIS e ATUAIS de produtos no mercado brasileiro com precisão cirúrgica.
   FONTES CONFIÁVEIS: Mercado Livre, Amazon.com.br, Magalu, Casas Bahia, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (preços em BRL no site Brasil).
-  A URL DEVE ser a página EXATA do produto (NUNCA catálogo, busca, categoria ou produtos relacionados).
+  A URL DEVE ser a página EXATA do produto (NUNCA catálogo, busca, categoria, loja ou produtos relacionados).
+  URL DIRETA: AliExpress precisa conter /item/ (ou /i/); Amazon precisa conter /dp/ ou /gp/product/; Shopee precisa conter -i.<seller>.<item> ou /product/; Mercado Livre precisa conter MLB-<número>.
   O produto encontrado DEVE ser o MESMO modelo/SKU do usuário (conferir código do modelo, ex: KLK00094, KYBER850G-BKCBR). NUNCA um modelo parecido da mesma marca.
   PREÇO À VISTA: Extraia o MENOR PREÇO PARA PAGAMENTO IMEDIATO (Pix ou Boleto).
   PARCELAMENTO: IGNORE o valor total parcelado se houver um preço à vista menor.
   PREÇOS ANTIGOS: Ignore preços riscados. Foque no "Por: R$ ...".
-  Retorne um array JSON de objetos: {"site": string, "price": number, "url": string}.
+  Retorne um array JSON de objetos: {"site": string, "price": number, "url": string, "title": string} (title = título do anúncio/página).
   Se não houver resultados válidos, retorne [].`;
 
   const prompt = `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras confiáveis.`;
@@ -245,6 +245,7 @@ async function runComparison(
                   site: { type: Type.STRING },
                   price: { type: Type.NUMBER },
                   url: { type: Type.STRING },
+                  title: { type: Type.STRING },
                 },
                 required: ["site", "price", "url"],
               },
@@ -256,17 +257,11 @@ async function runComparison(
       const parsed = JSON.parse(response.text || "[]");
       const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
         if (!r || !r.url || !r.price || r.price < 30 || r.price > 5000000) return false;
-        try {
-          return isTrustedHost(new URL(r.url).hostname);
-        } catch {
-          return false;
-        }
-      });
+        return isProductUrl(r.url); // #46 — só páginas diretas de produto
+      }).map((r: any) => ({ ...r, title: r.title || productName }));
       const results = await filterAndDedupe(rawResults, productName);
       if (results.length > 0) {
-        const geminiUrls = results.map((r) => r.url).filter((u) => {
-          try { return isTrustedHost(new URL(u).hostname); } catch { return false; }
-        }).slice(0, 3);
+        const geminiUrls = results.map((r) => r.url).filter((u) => isProductUrl(u)).slice(0, 3);
         const confirmed: Array<{ url: string; title: string; price: number }> = [];
         if (geminiUrls.length > 0) {
           const gemSettled = await Promise.allSettled(
@@ -439,7 +434,7 @@ async function runComparison(
             client.chat.completions.create({
               model,
               messages: [
-                { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string","title":"string"}]. Só o mesmo modelo/SKU. Preço à vista BRL.' },
+                { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string","title":"string"}]. Só o mesmo modelo/SKU. Preço à vista BRL. A url deve ser a PÁGINA DIRETA do produto (AliExpress: precisa conter /item/; Amazon: /dp/ ou /gp/product/; Shopee: -i.<seller>.<item> ou /product/; Mercado Livre: MLB-<número>) — NUNCA URL de catálogo, busca ou loja.' },
                 { role: "user", content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:` },
               ],
               max_tokens: 600,
@@ -454,7 +449,7 @@ async function runComparison(
             const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
             const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
               ...r, title: r.title || r.site || snippetMap.get(r.url) || productName,
-            })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000);
+            })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000 && isProductUrl(r.url)); // #46
             const results = await filterAndDedupe(rawResults, productName);
             if (results.length > 0) return results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
           }
@@ -499,7 +494,7 @@ async function runComparison(
           client.chat.completions.create({
             model: detectedModel,
             messages: [
-              { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string"}]. Só o mesmo modelo. Preço à vista BRL. Se nada, retorne [].' },
+              { role: "system", content: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string"}]. Só o mesmo modelo. Preço à vista BRL. Se nada, retorne []. A url deve ser a PÁGINA DIRETA do produto (AliExpress: precisa conter /item/; Amazon: /dp/ ou /gp/product/; Shopee: -i.<seller>.<item> ou /product/; Mercado Livre: MLB-<número>) — NUNCA URL de catálogo, busca ou loja.' },
               { role: "user", content: `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:` },
             ],
             max_tokens: 2048,
@@ -515,7 +510,7 @@ async function runComparison(
           const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
           const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
             ...r, title: r.title || r.site || snippetMap.get(r.url) || productName,
-          })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000);
+          })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000 && isProductUrl(r.url)); // #46
           const results = await filterAndDedupe(rawResults, productName);
           if (results.length > 0) return results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
         }

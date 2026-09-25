@@ -154,7 +154,8 @@ Fases **1–15 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**timeout 600s ainda estourava / metade dos targets**~~ — **RESOLVIDO (#42)**: orçamento 180s/tentativa no scraper, scrape `attempts:2`, poll de graça, dica retry N/2. §6.27.
 - ~~**Shopee/ML: todas estratégias falham (NVIDIA 410 + Gemini 429)**~~ — **RESOLVIDO (#43)**: NVIDIA fail-fast + timeout 30s/modelo, Gemini circuit 1h, hint do slug da URL, SEARCH_VERIFY antes de LLM caro (NVIDIA → regex → Gemini). §6.28.
 - ~~**Alerta falso no Telegram (R$ 7,18 ≤ alvo R$ 20 — frete/parcela)**~~ — **RESOLVIDO (#44)**: `isPriceRealistic` trava fallback do scraper, persistência e alerta no worker; prompt NVIDIA ignora frete/parcela. §6.29.
-- **Ordenação dos produtos na aba LIST** — **#45**: seletor Padrão / Menor preço / Maior preço / A–Z / Z–A / **Ordem de compra** (botões ↑↓, `products.sort_order`, persiste no localStorage); export acompanha a ordem. §6.30.
+- ~~**Ordenação dos produtos na aba LIST**~~ — **RESOLVIDO (#45)**: seletor Padrão / Menor preço / Maior preço / A–Z / Z–A / **Ordem de compra** (botões ↑↓, `products.sort_order`, persiste no localStorage); export acompanha a ordem. §6.30.
+- ~~**Comparação retornava catálogo/busca em vez de página do produto**~~ — **RESOLVIDO (#46)**: `isProductUrl` path-aware (AliExpress exige `/item/`, Amazon `/dp/`, Shopee `-i.<s>.<i>`, ML `MLB-<n>`); filtro em Gemini/NVIDIA/LM/Tavily/Serper + fallback do server; guard do handler AliExpress; `title` no schema Gemini habilita `sameProduct`. §6.31.
 
 ---
 

@@ -1142,3 +1142,21 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Validação #45:** `npm run lint` → 0; select troca a ordem; ↑↓ persistem após reload (`sort_order` no banco); export usa a mesma ordem.
 
 **Arquivos:** `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/productRepository.ts`, `src/repositories/types.ts`, `src/types.ts`, `src/App.tsx`, docs.
+
+## 6.31 fix: comparação retorna URLs DIRETAS de produto (nunca catálogo/busca) (#46)
+
+**Problema:** a comparação aceitava qualquer URL em domínio confiável — Gemini/NVIDIA/IA devolviam páginas de catálogo, busca ou home (`aliexpress.com/`, `amazon.com.br/s?k=`, `lista.mercadolivre.com.br/...`), quebrando "abrir preço" e, no AliExpress, scraping de home (extraía preço errado).
+
+**Mudanças:**
+
+| Change | Arquivo | Detalhe |
+|---|---|---|
+| `isProductUrl` path-aware | `compare.ts:219` | rejeita `q=`, `search=`, `k=`, `s=`; rejeita paths `/busca/ /search/ /categoria/ /collections/ /ofertas/ /store/ /wholesale/ /lista/...`; **AliExpress exige `/item/`/`/i/`/`/p/`**, **Amazon exige `/dp/`/`/gp/product/`**, **Shopee exige `-i.<seller>.<item>` ou `/product/<id>`**, **ML exige `MLB-<n>` (ou `/p/`)**; home (`/`) rejeitada |
+| Filtros aplicados | `scanWorker.ts` | Gemini (filtro + `geminiUrls`), NVIDIA e LM Studio (agora filtram — antes não filtravam host nenhum); Tavily/Serper já usavam `isProductUrl` e herdaram a regra nova; fallback síncrono do `server.ts` (Gemini + NVIDIA) idem |
+| `title` no schema Gemini | `scanWorker.ts` responseSchema | `title` (opcional) + instrução no prompt → `filterAndDedupe` finalmente consegue aplicar `sameProduct` no caminho Gemini (antes `title` undefined = sem checagem) |
+| Prompts "URL direta" | `scanWorker.ts` (Gemini/NVIDIA/LM), `server.ts` (NVIDIA) | "AliExpress precisa conter /item/; Amazon /dp/ ou /gp/product/; Shopee -i.s.item; MLB-<n> — NUNCA catálogo/busca/loja" |
+| Guard do handler AliExpress | `store-handlers.ts` | `page.url()` sem `/item/` → descarta (`available:false`) em vez de extrair preço da home/catálogo |
+
+**Validação #46:** `npm run lint` → 0; teste unitário 28/28 URLs (item/home/busca/dp/s/MLB/lista/shopee-i/kabum-produto...) via `tsx`.
+
+**Arquivos:** `src/lib/compare.ts`, `src/workers/scanWorker.ts`, `src/lib/store-handlers.ts`, `server.ts`, docs.

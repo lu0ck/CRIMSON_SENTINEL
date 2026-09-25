@@ -216,10 +216,52 @@ export function sameProduct(productName: string, pageTitle: string): boolean {
   return titleSimilarity(productName, pageTitle) >= threshold;
 }
 
+// #46 — URL precisa ser a PÁGINA DIRETA do produto, não catálogo/busca/loja.
+// Host confiável não basta (ex.: aliexpress.com/ , amazon.com.br/s?).
 export function isProductUrl(url: string): boolean {
   try {
     const u = new URL(url);
-    return isTrustedHost(u.hostname);
+    if (!isTrustedHost(u.hostname)) return false;
+    const host = u.hostname.toLowerCase();
+    const path = u.pathname.toLowerCase();
+    const qs = u.search.toLowerCase();
+
+    // Home / raiz nunca é produto
+    if (path === "/" || path === "") return false;
+
+    // Parâmetros clássicos de busca → nunca produto
+    if (/[?&](q|query|search|searchtext|keyword|field-keywords|k|s)=/.test(qs)) {
+      return false;
+    }
+
+    // Caminhos de busca/catálogo/loja/oferta → nunca produto
+    if (
+      /\/(busca|search|categoria|category|collections?|ofertas|promocoes|wholesale|store|loja|lista|best-sellers|deal)(\/|$)/.test(path)
+    ) {
+      return false;
+    }
+
+    // AliExpress: exige /item/, /i/ ou /p/ (URLs diretas)
+    if (/(^|\.)aliexpress\.com$/.test(host)) {
+      return /\/(item|i|p)(\/|$)/.test(path);
+    }
+
+    // Amazon: exige /dp/ ou /gp/product/ (rejeita /s, /b, home)
+    if (/(^|\.)amazon\./.test(host)) {
+      return /\/(dp|gp\/product)(\/|$)/.test(path);
+    }
+
+    // Shopee: slug-i.sellerid.itemid ou /product/<id>/<id>
+    if (/(^|\.)shopee\./.test(host)) {
+      return /-i\.\d+\.\d+/.test(path) || /\/product\/\d+(\/\d+)?/.test(path);
+    }
+
+    // Mercado Livre: MLB-123456... (ou /p/) — lista.mercadolivre.com.br/... rejeitado
+    if (/(^|\.)mercadolivre\./.test(host)) {
+      return /\/(mlb|mpe|mco|mla|mlc|mlu)-\d+/.test(path) || path.startsWith("/p/");
+    }
+
+    return true;
   } catch {
     return false;
   }

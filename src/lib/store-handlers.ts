@@ -901,6 +901,17 @@ const data = await page.evaluate(kabumCode) as ScrapeResult;
   "aliexpress.com": async (page: Page) => {
     console.log("[Handler] Using AliExpress handler");
 
+    // #46 — só páginas de produto: /item/, /i/ ou /p/ (rejeita busca/catálogo/loja)
+    try {
+      const pageUrl = new URL(page.url());
+      if (!/\/(item|i|p)(\/|$)/.test(pageUrl.pathname.toLowerCase())) {
+        console.log(`[Handler] AliExpress: URL não é produto (sem /item/): ${page.url()} — descartando`);
+        return { name: undefined, price: 0, available: false };
+      }
+    } catch {
+      // URL inválida → deixa o fluxo normal tentar
+    }
+
     await page.waitForSelector("h1, meta[property='og:title']", { timeout: 15000 }).catch(function() {});
     await page.waitForTimeout(5000);
     await page.evaluate(`window.scrollTo(0, 400)`);

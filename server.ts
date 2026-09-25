@@ -33,8 +33,7 @@ import {
   recordInAppAlert,
 } from "./src/lib/notify.ts";
 import { buildLocalInsights, summarizeInsights } from "./src/lib/localInsights.ts";
-import { isTrustedHost } from "./src/lib/trustedDomains.ts";
-import { filterAndDedupe } from "./src/lib/compare.ts";
+import { filterAndDedupe, isProductUrl } from "./src/lib/compare.ts";
 import { AI_MODELS } from "./src/lib/aiModels.ts";
 import { isInstagramEnabled } from "./src/lib/instagramEnabled.ts";
 import { normalizeUnit } from "./src/lib/units.ts";
@@ -401,13 +400,8 @@ app.post("/api/compare", async (req, res) => {
           const parsed = JSON.parse(text);
           const rawResults = (Array.isArray(parsed) ? parsed : []).filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
-            try {
-              const host = new URL(r.url).hostname.toLowerCase();
-              return isTrustedHost(host);
-            } catch {
-              return false;
-            }
-          });
+            return isProductUrl(r.url); // #46 — só páginas diretas de produto
+          }).map((r: any) => ({ ...r, title: r.title || productName }));
           results = await filterAndDedupe(rawResults, productName);
           if (rawResults.length < parsed.length) {
             safeLog(`[compare] Gemini: ${rawResults.length}/${parsed.length} resultados em domínios confiáveis, ${results.length} páginas do MESMO produto`);
@@ -440,7 +434,7 @@ app.post("/api/compare", async (req, res) => {
         const response = await client.chat.completions.create({
           model: "mistralai/mistral-nemotron",
           messages: [
-            { role: "system", content: "Você é o SENTINELA, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
+            { role: "system", content: "Você é o SENTINELA, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. URL DIRETA: AliExpress precisa conter /item/ (ou /i/); Amazon precisa conter /dp/ ou /gp/product/; Shopee precisa conter -i.<seller>.<item> ou /product/; Mercado Livre precisa conter MLB-<número> — NUNCA URL de catálogo, busca ou loja. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]" },
             { role: "user", content: `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras. JSON:` },
           ],
           max_tokens: 800,
@@ -456,12 +450,7 @@ app.post("/api/compare", async (req, res) => {
             title: r.title || r.site || "",
           })).filter((r: any) => {
             if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
-            try {
-              const host = new URL(r.url).hostname.toLowerCase();
-              return isTrustedHost(host);
-            } catch {
-              return false;
-            }
+            return isProductUrl(r.url); // #46 — só páginas diretas de produto
           });
           results = await filterAndDedupe(rawResults, productName);
           safeLog(`[compare] NVIDIA fallback: ${rawResults.length}/${parsed.length} domínios confiáveis, ${results.length} páginas do MESMO produto`);
