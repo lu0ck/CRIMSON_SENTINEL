@@ -32,7 +32,7 @@
 
 - **Fila única de scan** com 4 instâncias PM2 em cluster (`concurrency: 5` cada) → até **20 jobs simultâneos** sem OOM.
 - **Lock anti-travamento**: `lockDuration: 120s`, `stalledInterval: 60s`, `maxStalledCount: 1` (cobre timeout de 90s por estratégia de scrape — #30).
-- **Toda IA roda em worker** (nunca no handler HTTP): LM Studio → NVIDIA → Gemini, em cascata.
+- **Toda IA roda em worker** (nunca no handler HTTP): DeepSeek → Gemini → NVIDIA → LM Studio, em cascata (#54).
 - **Persistência** em SQLite (`crimson.db` na raiz do projeto; `USER_DATA_PATH` sobrescreve o caminho em produção), acessada via repositórios em `src/repositories/`.
 
 ---
@@ -53,7 +53,7 @@ docker compose up -d        # redis:7-alpine na porta 6379 (persistente)
 ### 3. Instale e configure
 ```bash
 npm install
-cp .env.example .env        # preencha GEMINI_API_KEY e canais de notificação
+cp .env.example .env        # preencha DEEPSEEK_API_KEY (principal), GEMINI_API_KEY e canais de notificação
 ```
 
 ### 4. Suba tudo com PM2
@@ -97,7 +97,7 @@ A UI fica em **http://localhost:3001**.
 
 ### Análise com IA
 - `POST /api/analyze` e `POST /api/local-insights/analyze` **enfileiram** jobs e respondem `{ jobId }`; a UI faz *poll* via `GET /api/jobs/:queue/:id`.
-- Cadeia de provedores: **LM Studio → NVIDIA → Gemini** (a primeira disponível vence).
+- Cadeia de provedores: **DeepSeek → Gemini → NVIDIA → LM Studio** (#54; DeepSeek é o principal — texto e imagem —, chave em AI CORE PARAMETERS ou `DEEPSEEK_API_KEY`; sem chave a cascata antiga continua igual).
 
 ---
 
@@ -119,7 +119,7 @@ Em **VPS** (stack completa headless): ver [`GUIA_VPS.md`](GUIA_VPS.md) — boots
 
 ## 🔑 Variáveis de ambiente
 
-Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `BIND_HOST=127.0.0.1` (restrito a localhost; use `0.0.0.0` deliberadamente para expor à LAN), `GEMINI_API_KEY`, `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `REDIS_URL`, `SERPAPI_KEY` (Popular Times best-effort), `SOCIAL_MONITORING_ENABLED`, `INSTAGRAM_SERVICE_PORT=8721`. `INSTAGRAM_ENABLED` é apenas **fallback legado** do toggle do Instagram (hoje controlado pela UI).
+Ver `.env.example`. Destaques: `PORT=3001` (a 3000 pertence a outro serviço), `BIND_HOST=127.0.0.1` (restrito a localhost; use `0.0.0.0` deliberadamente para expor à LAN), `DEEPSEEK_API_KEY` (principal da cadeia de IA — texto/imagem), `GEMINI_API_KEY`, `DISCORD_WEBHOOK_URL`, `TELEGRAM_BOT_TOKEN`/`TELEGRAM_CHAT_ID`, `REDIS_URL`, `SERPAPI_KEY` (Popular Times best-effort), `SOCIAL_MONITORING_ENABLED`, `INSTAGRAM_SERVICE_PORT=8721`. `INSTAGRAM_ENABLED` é apenas **fallback legado** do toggle do Instagram (hoje controlado pela UI).
 
 ---
 
@@ -163,6 +163,7 @@ Fases **1–15 concluídas**: filas BullMQ + workers PM2, SQLite, monitoramento 
 - ~~**ESCANEAR MERCADO em lote: "Batch comparison timed out" e lista toda sem resultados**~~ — **RESOLVIDO (#51)**: poll do `compare-all` sem deadline fixo (detecção de travamento 8 min + cap 45 min, resultado nunca é descartado), `runComparison` com **NVIDIA antes do scrape** + confirmação por página top 3 a **90s** (sem confirmação = aceita NVIDIA filtrado), `buildSearchQuery` na ordem natural do nome (fim da sopa por tamanho), dedup de oferta AliExpress (`/i/` vs `/item/`, pt/www) e logs com contador `timeout/erro`. §6.36.
 - ~~**SCAN PREÇOS da aba MERCADO invisível (só spinner, sem resultado, sem alerta) / ALERTAS sem limpar**~~ — **RESOLVIDO (#52)**: progresso real no job (`updateProgress` por item e por estratégia) com painel **dentro do card do estabelecimento** (barra %, item/estratégia, contadores vivos ✅/DUP/⚠, etapa n/total), card **ÚLTIMO SCAN** persistente com status por item (preço/método/URL), resumo do scan em ALERTAS (`🛒`/`⚠️ SCAN DE PREÇOS`, manual sempre, cron só com erros) + ícone `SCAN LOCAL`, e botão **LIMPAR TUDO** na Central de Alertas (`DELETE /api/notifications`). §6.37.
 - ~~**Links que o ADD não encontrou se perdiam (14 colados, 7 entraram, sem retorno para copiar)**~~ — **RESOLVIDO (#53)**: ao terminar o lote o modal **fica aberto** com banner `X ENCONTRADOS • Y FALHARAM` e **BLOCO `LINKS NÃO ENCONTRADOS (n)`** com URL+erro por linha e botões **COPIAR** (só as URLs, 1 por linha), **RECOLHER NOS CAMPOS** (retry em 1 clique) e **LIMPAR**; falhas persistem no `localStorage` (reaparecem ao reabrir o modal/reload, inclui cancelamentos), mais **COPIAR FALHOS** no SCRAPE LOG. §6.38.
+- ~~**IA sem provedor principal (Gemini 429 + NVIDIA lenta travando compare/scan/social)**~~ — **RESOLVIDO (#54)**: cadeia única **DeepSeek → Gemini → NVIDIA → LM Studio** para TUDO (texto, visão e social): chave `DEEPSEEK API KEY (PRINCIPAL)` nas settings (coluna `deepseek_api_key`, `deepseek.available` no `/api/status`, indicador no header), `src/lib/aiProviders.ts` (`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`, timeout 30s, log `[aiChain]`), estratégia `DEEPSEEK_VISION` primeira na cascata do scraper e LM Studio por último, compare/analyze/market-search/social todos com DeepSeek primeiro; sem chave = comportamento anterior intacto. §6.39.
 
 ---
 

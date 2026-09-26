@@ -1340,3 +1340,26 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 - Poluição de teste removida: produtos `ihkt7k`/`iww3vb` + `price_history` + alertas #135–137 (0 restos).
 
 **Arquivos:** `src/App.tsx` (estado/helpers, `finishFailures`, bloco no modal, COPIAR FALHOS no SCRAPE LOG), docs. Sem mudança de API/worker.
+
+## 6.39 feature: cadeia de IA única DeepSeek → Gemini → NVIDIA → LM Studio (#54)
+
+**Contexto:** quota Gemini 429 crônica + NVIDIA lenta gargalhavam compare/scan/scrape/social. Novo provedor PRINCIPAL: **DeepSeek** (API OpenAI-compatible; modelos `deepseek-v4-flash` texto e `deepseek-v4-flash-vision-exp` imagem, trocáveis via env). A ordem pedida pelo operador — **DeepSeek → Gemini → NVIDIA → LM Studio** — vale para **tudo**, inclusive social (flyers/stories).
+
+**Decisão de arquitetura:** a ferramenta `googleSearch` do Gemini é **BUSCA**, não interpretação — os passos com `googleSearch` (busca do compare, grounding) continuam como fonte de dados; a **interpretação** (snippets, HTML, screenshot, análise, flyers) tenta DeepSeek primeiro e cai na cadeia antiga se falhar. Sem chave DeepSeek = comportamento idêntico ao anterior (passo simplesmente ignorado).
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Chave DeepSeek | `profiles.deepseek_api_key` (schema + `ensureColumn` no boot), tipo `Profile`, `profileRowToProfile`, `saveAll` | migração automática, 1 coluna |
+| B | UI/status | `App.tsx`: campo `DEEPSEEK API KEY (PRINCIPAL)` em AI CORE PARAMETERS **antes** do Gemini, indicador `DEEPSEEK` no header APIS; `server.ts /api/status` → `deepseek.available`; `.env.example` | autosave 1s igual os demais |
+| C | `src/lib/aiProviders.ts` (novo) | núcleo da cadeia | `deepseekText`/`deepseekVision` (cliente OpenAI, `baseURL https://api.deepseek.com`, timeout 30s/`DEEPSEEK_TIMEOUT_MS`, `maxRetries 1`), `resolveDeepSeekKey` (perfil → env), `extractJsonObject`, log `[aiChain] provider OK/falhou` |
+| D | Cascata do scraper | `scraper.ts` | estratégia nova `DEEPSEEK_VISION` (screenshot + texto da página na **mesma** janela: vision → texto), `GEMINI_VISION` **antes** da `NVIDIA_NIM`, `PLAYWRIGHT_LM_STUDIO_*` movido para o **fim** (depois de FETCH/GEMINI_FALLBACK); `SEARCH_VERIFY` interno: DeepSeek → regex → Gemini → NVIDIA; gate do SEARCH_VERIFY aceita só-DeepSeek |
+| E | Workers | `scanWorker.ts` | `runComparison` ganha passo **DeepSeek** (snippets → array JSON → `isProductUrl` → dedupe → confirm top 3 90s) antes do NVIDIA; `handleAnalyze` reordenado DeepSeek → Gemini → NVIDIA → LM; `local-insight` DeepSeek → Gemini → determinístico; `deepseekApiKey` nos 4 `advancedScrape` + `apiKeys` do scan local |
+| F | Preço por item | `market-handlers.ts`, `localPriceScrape.ts` | `searchMarketPrice`: **DeepSeek → Gemini → NVIDIA**; gates `canSearch`/`canMarketSearch` aceitam só-DeepSeek |
+| G | Rotas Express | `server.ts` | `/api/scrape` repassa a chave; `/api/compare` (sem Redis): busca Gemini → **DeepSeek** → NVIDIA; `/api/analyze` (sem Redis): DeepSeek → Gemini → NVIDIA → local; guard 400 atualizado |
+| H | Social | `socialWorker.ts`, `socialParse.ts` | encarte e stories: `deepseekVision` primeiro, Gemini Vision só como fallback; `parsePromosFromTextWithAI(text, apiKey, hint, deepseekApiKey)` → DeepSeek → Gemini → determinístico; `download` da story liga com qualquer chave de visão |
+
+**Validação #54:** `npm run lint` → 0. Teste offline da cadeia (`/tmp/opencode/test54.mjs`, mock HTTP OpenAI-compatible): **18/18** — modelos corretos (`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`), `temperature: 0`, system+user, data-URL da imagem, 500 → `null` (fallback), sem chave → `null`, helpers (`resolveDeepSeekKey`, `extractJsonObject` com fence/ao redor). Smoke Playwright: **8/8** — header `DEEPSEEK`, campo nas settings, roundtrip salvar → reload → `available: true` → limpar → `false`, estado do DB restaurado (`NULL`). Restart PM2 (7 processos online), coluna `deepseek_api_key` criada, `/api/status` devolve `deepseek.available`.
+
+**Para ativar:** SETTINGS → `DEEPSEEK API KEY (PRINCIPAL)` (platform.deepseek.com) ou `DEEPSEEK_API_KEY` no `.env`. LM Studio segue offline — para o último elo (imagem local) carregar `qwen2.5-vl-7b-instruct`.
+
+**Arquivos:** `src/lib/aiProviders.ts` (novo), `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, `src/workers/socialWorker.ts`, `src/lib/market-handlers.ts`, `src/lib/localPriceScrape.ts`, `src/lib/socialParse.ts`, `server.ts`, `src/App.tsx`, `src/types.ts`, `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/types.ts`, `src/repositories/profileRepository.ts`, `.env.example`.
