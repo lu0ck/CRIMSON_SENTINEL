@@ -27,6 +27,7 @@ import type {
 import { MapPicker } from "./MapPicker";
 import { ITEM_UNITS, type ItemUnit } from "../lib/units";
 import { cleanCep, isValidCep } from "../lib/cep";
+import { normalizeText } from "../lib/text";
 
 interface MercadoTabProps {
   addToast: (message: string, type?: "success" | "error" | "info", details?: string) => void;
@@ -366,6 +367,39 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
       toast("FALHA AO SALVAR AGENDAMENTO", "error", String(err?.message || err));
     } finally {
       setSavingLocalInterval(false);
+    }
+  };
+
+  // #59 — ADD LISTA: promoção → item da lista ativa em 1 clique
+  // (targetPrice = preço da promo; nome repetido só avisa, não duplica)
+  const addPromotionToList = async (promo: Promotion) => {
+    const key = normalizeText(promo.productName);
+    const dup = items.find((i) => normalizeText(i.name) === key);
+    if (dup) {
+      toast(`JÁ ESTÁ NA LISTA: ${dup.name.toUpperCase()}`, "info");
+      return;
+    }
+    try {
+      const item: ShoppingListItem = {
+        id: newId("item"),
+        name: promo.productName,
+        quantity: 1,
+        unit: "UN",
+        targetPrice: promo.promoPrice,
+        checked: false,
+        listId: activeListId,
+      };
+      await apiJson("/api/shopping-list-items", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(item),
+      });
+      playSound("click");
+      const listName = shoppingLists.find((l) => l.id === activeListId)?.name || "LISTA GERAL";
+      toast(`ADICIONADO À LISTA ${listName}: ${item.name.toUpperCase()}`, "success");
+      loadAll();
+    } catch (err: any) {
+      toast("FALHA AO ADICIONAR À LISTA", "error", String(err?.message || err));
     }
   };
 
@@ -1490,6 +1524,13 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                     </span>
                   )}
                 </div>
+                <button
+                  onClick={() => { playSound("click"); addPromotionToList(promo); }}
+                  className="text-crimson/40 hover:text-green-400 shrink-0"
+                  title="ADICIONAR ESTE ITEM À LISTA DE COMPRAS"
+                >
+                  <ShoppingCart size={14} />
+                </button>
                 <button onClick={() => deletePromotion(promo.id)} className="text-crimson/30 hover:text-crimson shrink-0">
                   <Trash2 size={14} />
                 </button>
