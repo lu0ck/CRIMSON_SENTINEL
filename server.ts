@@ -17,7 +17,7 @@ import { SettingsRepository } from "./src/repositories/settingsRepository.ts";
 import { safeLog } from "./src/lib/safeLog.ts";
 import { generateProductId, ensureHttps, canonicalOfferUrl, hashOfferSuffix } from "./src/lib/url.ts";
 import { getScanQueue, getRouteQueue, getSocialQueue } from "./src/queue/queues.ts";
-import { registerSchedulers, registerSocialScheduler, registerAllSchedulers, listSocialScheduledJob } from "./src/queue/schedulers.ts";
+import { registerAllSchedulers, listSocialScheduledJob } from "./src/queue/schedulers.ts";
 import { haversineKm, geocodeAddress, geocodeFromCep } from "./src/lib/geo.ts";
 import { lookupCep } from "./src/lib/cep.ts";
 import { EstablishmentRepository } from "./src/repositories/establishmentRepository.ts";
@@ -142,23 +142,9 @@ async function startServer() {
       // #48 — loadedAt viaja junto do snapshot (relógio do servidor, sem skew)
       const { loadedAt, ...appData } = req.body ?? {};
       AppDataRepository.saveAll(appData, Number(loadedAt));
-      // #25 — AUTO-REFRESH INTERVAL (profiles.refreshInterval em horas) alimenta
-      // o scheduler scan-interval-12h; sincroniza scan_interval_ms e re-registra.
-      try {
-        const hours = Number(req.body?.profiles?.[0]?.refreshInterval);
-        if (Number.isFinite(hours) && hours > 0) {
-          const ms = Math.round(hours * 60 * 60 * 1000);
-          const current = SettingsRepository.getNumber("scan_interval_ms");
-          if (current !== ms) {
-            SettingsRepository.set("scan_interval_ms", ms);
-            const dailyHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
-            await registerSchedulers({ scanIntervalMs: ms, dailyHour });
-            safeLog(`[scheduler] scan_interval_ms sincronizado via refreshInterval: ${hours}h (${ms}ms)`);
-          }
-        }
-      } catch (syncErr: any) {
-        safeLog("[scheduler] falha ao sincronizar scan_interval_ms: " + syncErr?.message);
-      }
+      // #60 — o sync refreshInterval → scan_interval_ms foi REMOVIDO: o
+      // agendamento agora é 1×/dia no horário único (scan_daily_time) via
+      // PUT /api/scan/settings; intervals legados não voltam mais.
       res.json({ status: "ok" });
     } catch (error) {
       safeLog("Error saving data: " + error);
@@ -1664,17 +1650,14 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  // #25 — settings do scan e-commerce (intervalo + hora diária), espelha social/local.
+  // #60 — settings do scan (horário ÚNICO diário, antes intervalo + hora cheia).
   app.get("/api/scan/settings", async (req, res) => {
     try {
-      const intervalMs = SettingsRepository.getNumber("scan_interval_ms") ?? 12 * 60 * 60 * 1000;
-      const dailyHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
-      const { listScheduledJobs } = await import("./src/queue/schedulers.ts");
+      const { getScanDailyTime, listScheduledJobs } = await import("./src/queue/schedulers.ts");
+      const dailyTime = getScanDailyTime();
       const jobs = await listScheduledJobs();
       res.json({
-        intervalMs,
-        dailyHour,
-        intervalScheduler: jobs.find((s) => s.id === "scan-interval-12h") ?? null,
+        dailyTime,
         dailyScheduler: jobs.find((s) => s.id === "scan-daily-cron") ?? null,
       });
     } catch (error: any) {
@@ -1683,43 +1666,29 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   });
 
   app.put("/api/scan/settings", async (req, res) => {
-    const { intervalMs, dailyHour } = req.body || {};
+    const { dailyTime } = req.body || {};
     try {
-      if (intervalMs !== undefined) {
-        const newInterval = Number(intervalMs);
-        if (!Number.isFinite(newInterval) || newInterval <= 0) {
-          return res.status(400).json({ error: "intervalMs deve ser um número positivo (ms)" });
-        }
-        SettingsRepository.set("scan_interval_ms", Math.round(newInterval));
+      const { isValidDailyTime } = await import("./src/queue/schedulers.ts");
+      if (typeof dailyTime !== "string" || !isValidDailyTime(dailyTime)) {
+        return res.status(400).json({ error: "dailyTime deve ser HH:MM (00:00-23:59)" });
       }
-      if (dailyHour !== undefined) {
-        const hour = Number(dailyHour);
-        if (!Number.isInteger(hour) || hour < 0 || hour > 23) {
-          return res.status(400).json({ error: "dailyHour deve ser inteiro 0-23" });
-        }
-        SettingsRepository.set("scan_daily_hour", hour);
-      }
-      const finalInterval =
-        SettingsRepository.getNumber("scan_interval_ms") ?? 12 * 60 * 60 * 1000;
-      const finalHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
-      await registerSchedulers({ scanIntervalMs: finalInterval, dailyHour: finalHour });
-      safeLog(
-        `[scan] agendador atualizado: interval=${Math.round(finalInterval / 60000)}min daily=${finalHour}h`
-      );
-      res.json({ status: "ok", intervalMs: finalInterval, dailyHour: finalHour });
+      SettingsRepository.set("scan_daily_time", dailyTime);
+      await registerAllSchedulers();
+      safeLog(`[scan] agendador diário único atualizado: ${dailyTime} (todas as frentes)`);
+      res.json({ status: "ok", dailyTime });
     } catch (error: any) {
       safeLog("[scan] erro ao atualizar agendador: " + error.message);
       res.status(500).json({ error: error.message || "Failed to update scheduler" });
     }
   });
 
-  // Configuração do agendamento social (FASE 9).
+  // Configuração do agendamento social (#60: horário único diário).
   app.get("/api/social/settings", async (req, res) => {
     try {
-      const intervalMs = SettingsRepository.getNumber("social_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
+      const { getScanDailyTime } = await import("./src/queue/schedulers.ts");
       const scheduler = (await listSocialScheduledJob()).find((s) => s.id === "social-scan-cron");
       res.json({
-        intervalMs,
+        dailyTime: getScanDailyTime(),
         enabled: SettingsRepository.getBool("social_monitoring_enabled"),
         scheduler: scheduler ?? null,
       });
@@ -1729,16 +1698,16 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
   });
 
   app.put("/api/social/settings", async (req, res) => {
-    const { intervalMs } = req.body || {};
+    const { dailyTime } = req.body || {};
     try {
-      const newInterval = Number(intervalMs);
-      if (!Number.isFinite(newInterval) || newInterval <= 0) {
-        return res.status(400).json({ error: "intervalMs deve ser um número positivo (ms)" });
+      const { isValidDailyTime } = await import("./src/queue/schedulers.ts");
+      if (typeof dailyTime !== "string" || !isValidDailyTime(dailyTime)) {
+        return res.status(400).json({ error: "dailyTime deve ser HH:MM (00:00-23:59)" });
       }
-      SettingsRepository.set("social_scan_interval_ms", Math.round(newInterval));
-      await registerSocialScheduler({ intervalMs: Math.round(newInterval) });
-      safeLog(`[social] agendador atualizado para ${Math.round(newInterval / 60000)}min`);
-      res.json({ status: "ok", intervalMs: Math.round(newInterval) });
+      SettingsRepository.set("scan_daily_time", dailyTime);
+      await registerAllSchedulers();
+      safeLog(`[social] agendador diário único atualizado: ${dailyTime}`);
+      res.json({ status: "ok", dailyTime });
     } catch (error: any) {
       safeLog("[social] erro ao atualizar agendador: " + error.message);
       res.status(500).json({ error: error.message || "Failed to update scheduler" });
@@ -1797,30 +1766,28 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   });
 
-  // FASE 12 — settings do agendador do scan de preços locais.
+  // #60 — settings do agendador do scan de preços locais (horário único diário).
   app.get("/api/local-price-scan/settings", async (req, res) => {
     try {
-      const intervalMs = SettingsRepository.getNumber("local_price_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
-      const { listScheduledJobs } = await import("./src/queue/schedulers.ts");
+      const { getScanDailyTime, listScheduledJobs } = await import("./src/queue/schedulers.ts");
       const scheduler = (await listScheduledJobs()).find((s) => s.id === "local-price-scan-cron");
-      res.json({ intervalMs, scheduler: scheduler ?? null });
+      res.json({ dailyTime: getScanDailyTime(), scheduler: scheduler ?? null });
     } catch (error: any) {
       res.status(500).json({ error: error.message });
     }
   });
 
   app.put("/api/local-price-scan/settings", async (req, res) => {
-    const { intervalMs } = req.body || {};
+    const { dailyTime } = req.body || {};
     try {
-      const newInterval = Number(intervalMs);
-      if (!Number.isFinite(newInterval) || newInterval <= 0) {
-        return res.status(400).json({ error: "intervalMs deve ser um número positivo (ms)" });
+      const { isValidDailyTime } = await import("./src/queue/schedulers.ts");
+      if (typeof dailyTime !== "string" || !isValidDailyTime(dailyTime)) {
+        return res.status(400).json({ error: "dailyTime deve ser HH:MM (00:00-23:59)" });
       }
-      SettingsRepository.set("local_price_scan_interval_ms", Math.round(newInterval));
-      const { registerLocalPriceScanScheduler } = await import("./src/queue/schedulers.ts");
-      await registerLocalPriceScanScheduler({ intervalMs: Math.round(newInterval) });
-      safeLog(`[local-price-scan] agendador atualizado para ${Math.round(newInterval / 60000)}min`);
-      res.json({ status: "ok", intervalMs: Math.round(newInterval) });
+      SettingsRepository.set("scan_daily_time", dailyTime);
+      await registerAllSchedulers();
+      safeLog(`[local-price-scan] agendador diário único atualizado: ${dailyTime}`);
+      res.json({ status: "ok", dailyTime });
     } catch (error: any) {
       safeLog("[local-price-scan] erro ao atualizar agendador: " + error.message);
       res.status(500).json({ error: error.message || "Failed to update scheduler" });
@@ -2412,8 +2379,9 @@ async function checkAndRunCatchupScan() {
     const elapsed = now - lastScan;
     const profiles = AppDataRepository.getAll().profiles;
     if (profiles.length === 0) return;
-    const refreshHours = Number(profiles[0].refreshInterval || '12');
-    const intervalMs = refreshHours * 60 * 60 * 1000;
+    // #60 — agendamento é diário (1×/dia): catchup só dispara se o último
+    // scan tem mais de 24h (PC desligado por dias); o cron diário cobre o resto.
+    const intervalMs = 24 * 60 * 60 * 1000;
     if (elapsed > intervalMs) {
       const products = AppDataRepository.getAll().products;
       if (products.length === 0) return;

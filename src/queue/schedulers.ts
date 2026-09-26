@@ -4,34 +4,50 @@ import { SettingsRepository } from "../repositories/settingsRepository";
 
 // Chave para o scheduler diário. Mantida constante para que BullMQ não duplique.
 const REPEAT_DAILY_KEY = "scan-daily-cron";
-// Nome legado ("12h") — chave fixa no Redis; o intervalo real é configurável.
+// Nome legado ("12h") — #60: scheduler de intervalo REMOVIDO (todo dia 1× só).
 const REPEAT_INTERVAL_KEY = "scan-interval-12h";
 const SOCIAL_SCAN_KEY = "social-scan-cron";
 const INSTAGRAM_SCAN_KEY = "instagram-stories-scan-cron";
 const LOCAL_PRICE_SCAN_KEY = "local-price-scan-cron";
 const TRIGGER_EVALUATE_KEY = "trigger-evaluate-cron";
 
-// #25 — registra TODOS os schedulers a partir de user_settings.
-// Idempotente (upsertJobScheduler); seguro no boot, após backup import
-// e após mudança de intervalo em runtime.
-export async function registerAllSchedulers(): Promise<void> {
-  const scanIntervalMs =
-    SettingsRepository.getNumber("scan_interval_ms") ?? 12 * 60 * 60 * 1000;
-  const dailyHour = SettingsRepository.getNumber("scan_daily_hour") ?? 15;
-  const socialIntervalMs =
-    SettingsRepository.getNumber("social_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
-  const localIntervalMs =
-    SettingsRepository.getNumber("local_price_scan_interval_ms") ?? 6 * 60 * 60 * 1000;
+// #60 — horário ÚNICO diário p/ todas as frentes (e-commerce + mercado +
+// social/instagram): usuário escolhe "HH:MM" e o sistema roda 1× por dia.
+const DAILY_TIME_KEY = "scan_daily_time";
+const DAILY_TIME_RE = /^([01]?\d|2[0-3]):([0-5]\d)$/;
 
-  await registerSchedulers({ scanIntervalMs, dailyHour });
-  await registerSocialScheduler({ intervalMs: socialIntervalMs });
-  await registerLocalPriceScanScheduler({ intervalMs: localIntervalMs });
+export function isValidDailyTime(v: string): boolean {
+  return DAILY_TIME_RE.test(v);
+}
+
+export function getScanDailyTime(): string {
+  const raw = SettingsRepository.get(DAILY_TIME_KEY);
+  if (raw && DAILY_TIME_RE.test(raw)) return raw;
+  // migração do legado scan_daily_hour (0-23 — nunca teve UI de hora cheia)
+  const legacyHour = SettingsRepository.getNumber("scan_daily_hour");
+  return `${String(legacyHour ?? 15).padStart(2, "0")}:00`;
+}
+
+/** "HH:MM" → cron `MM HH * * *`. dailyTime validada antes de chegar aqui. */
+function dailyCronPattern(dailyTime: string): string {
+  const m = dailyTime.match(DAILY_TIME_RE);
+  if (!m) throw new Error(`dailyTime inválida: ${dailyTime}`);
+  return `${m[2]} ${Number(m[1])} * * *`;
+}
+
+// #60 (#25 original) — registra TODOS os schedulers a partir de user_settings.
+// Idempotente (upsertJobScheduler); seguro no boot, após backup import
+// e após mudança do horário em runtime.
+export async function registerAllSchedulers(): Promise<void> {
+  const dailyTime = getScanDailyTime();
+  await registerSchedulers({ dailyTime });
+  await registerSocialScheduler({ dailyTime });
+  await registerLocalPriceScanScheduler({ dailyTime });
   await registerTriggerEvaluateScheduler();
 }
 
 export async function registerSchedulers(opts?: {
-  scanIntervalMs?: number;
-  dailyHour?: number;
+  dailyTime?: string;
 }): Promise<void> {
   let queue;
   try {
@@ -41,33 +57,27 @@ export async function registerSchedulers(opts?: {
     return;
   }
 
-  const intervalMs = opts?.scanIntervalMs ?? 12 * 60 * 60 * 1000; // 12h
-  const hour = opts?.dailyHour ?? 15;
+  const dailyTime = opts?.dailyTime ?? getScanDailyTime();
 
-  // 1. Daily scan — substitui o `setTimeout` recursivo antigo (server.ts:815).
+  // 1. Daily scan no horário escolhido (1× por dia).
   //    Upsert = idempotente: não duplica se já existir.
   await queue.upsertJobScheduler(
     REPEAT_DAILY_KEY,
-    { pattern: `0 ${hour} * * *` },
+    { pattern: dailyCronPattern(dailyTime) },
     {
       name: "scan-all",
       data: { type: "scan-all", triggeredBy: "cron-daily" } as ScanJobPayload,
     }
   );
 
-  // 2. Interval 12h backup — substitui o `setInterval(SCAN_INTERVAL)` antigo (server.ts:826).
-  await queue.upsertJobScheduler(
-    REPEAT_INTERVAL_KEY,
-    { every: intervalMs },
-    {
-      name: "scan-all",
-      data: { type: "scan-all", triggeredBy: "cron-interval" } as ScanJobPayload,
-    }
-  );
+  // 2. #60 — limpa o scheduler legado de intervalo (every: scan_interval_ms).
+  try {
+    await queue.removeJobScheduler(REPEAT_INTERVAL_KEY);
+  } catch {
+    // já não existia
+  }
 
-  console.log(
-    `[scheduler] schedulers registrados: daily=${hour}:00, interval=${Math.round(intervalMs / 60000)}min`
-  );
+  console.log(`[scheduler] e-commerce: diário às ${dailyTime} (intervalo removido)`);
 }
 
 export async function unregisterSchedulers(): Promise<void> {
@@ -112,7 +122,7 @@ export async function listScheduledJobs() {
 // ---------------------------------------------------------------------------
 
 export async function registerSocialScheduler(opts?: {
-  intervalMs?: number;
+  dailyTime?: string;
 }): Promise<void> {
   let queue;
   try {
@@ -121,31 +131,31 @@ export async function registerSocialScheduler(opts?: {
     console.warn("[scheduler] Redis indisponível — social scheduler ignorado");
     return;
   }
-  const intervalMs = opts?.intervalMs ?? 6 * 60 * 60 * 1000; // 6h
+  // #60 — social + instagram no MESMO horário único diário das demais frentes.
+  const dailyTime = opts?.dailyTime ?? getScanDailyTime();
+  const pattern = dailyCronPattern(dailyTime);
 
   // Social scan all
   await queue.upsertJobScheduler(
     SOCIAL_SCAN_KEY,
-    { every: intervalMs },
+    { pattern },
     {
       name: "social-scan-all",
       data: { type: "social-scan-all", triggeredBy: "cron" } as SocialMonitorJobPayload,
     }
   );
 
-  // Instagram stories scan (segue o mesmo intervalo do social scan)
+  // Instagram stories scan (mesmo horário do social scan)
   await queue.upsertJobScheduler(
     INSTAGRAM_SCAN_KEY,
-    { every: intervalMs },
+    { pattern },
     {
       name: "instagram-stories-scan",
       data: { type: "instagram-stories-scan", triggeredBy: "cron" } as SocialMonitorJobPayload,
     }
   );
 
-  console.log(
-    `[scheduler] scan social registrado: a cada ${Math.round(intervalMs / 60000)}min (social + instagram)`
-  );
+  console.log(`[scheduler] scan social: diário às ${dailyTime} (social + instagram)`);
 }
 
 export async function unregisterSocialScheduler(): Promise<void> {
@@ -212,7 +222,7 @@ export async function unregisterTriggerEvaluateScheduler(): Promise<void> {
 // ---------------------------------------------------------------------------
 
 export async function registerLocalPriceScanScheduler(opts?: {
-  intervalMs?: number;
+  dailyTime?: string;
 }): Promise<void> {
   let queue;
   try {
@@ -221,20 +231,19 @@ export async function registerLocalPriceScanScheduler(opts?: {
     console.warn("[scheduler] Redis indisponível — local-price-scan scheduler ignorado");
     return;
   }
-  const intervalMs = opts?.intervalMs ?? 6 * 60 * 60 * 1000; // 6h
+  // #60 — mercado no horário único diário (antes: a cada X horas).
+  const dailyTime = opts?.dailyTime ?? getScanDailyTime();
 
   await queue.upsertJobScheduler(
     LOCAL_PRICE_SCAN_KEY,
-    { every: intervalMs },
+    { pattern: dailyCronPattern(dailyTime) },
     {
       name: "local-price-scan",
       data: { type: "local-price-scan" } as ScanJobPayload,
     }
   );
 
-  console.log(
-    `[scheduler] scan de preços locais registrado: a cada ${Math.round(intervalMs / 60000)}min`
-  );
+  console.log(`[scheduler] scan de preços locais: diário às ${dailyTime}`);
 }
 
 export async function unregisterLocalPriceScanScheduler(): Promise<void> {

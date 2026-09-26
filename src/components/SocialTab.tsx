@@ -74,8 +74,9 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const [captureImagePreview, setCaptureImagePreview] = useState<string | null>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
-  // Configuração do agendamento (FASE 9)
-  const [intervalMs, setIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
+  // Configuração do agendamento (#60: horário único diário)
+  const [dailyTime, setDailyTime] = useState("15:00");
+  const [dailyTimeSaved, setDailyTimeSaved] = useState("15:00");
   const [nextSocialScanMinutes, setNextSocialScanMinutes] = useState<number | null>(null);
   const [savingInterval, setSavingInterval] = useState(false);
 
@@ -133,7 +134,10 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
   const loadSocialSettings = async () => {
     try {
       const data = await apiJson("/api/social/settings");
-      setIntervalMs(data.intervalMs ?? 6 * 60 * 60 * 1000);
+      if (data.dailyTime) {
+        setDailyTime(data.dailyTime);
+        setDailyTimeSaved(data.dailyTime);
+      }
     } catch {
       // settings indisponíveis — mantém default
     }
@@ -520,17 +524,24 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
     }
   };
 
-  const updateInterval = async (ms: number) => {
+  // #60 — salva o horário único da captura social (1× por dia)
+  const updateDailyTime = async (time: string) => {
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      setDailyTime(dailyTimeSaved); // revertido — valor inválido não salva
+      return;
+    }
+    if (time === dailyTimeSaved) return;
     setSavingInterval(true);
     try {
       await apiJson("/api/social/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intervalMs: ms }),
+        body: JSON.stringify({ dailyTime: time }),
       });
-      setIntervalMs(ms);
-      toast(`CAPTURA AUTOMÁTICA A CADA ${Math.round(ms / 60000)} MIN`, "success");
+      setDailyTimeSaved(time);
+      toast(`CAPTURA SOCIAL DIÁRIA ÀS ${time} — RODA 1× POR DIA`, "success");
     } catch (err: any) {
+      setDailyTime(dailyTimeSaved);
       toast("FALHA AO SALVAR AGENDAMENTO", "error", String(err?.message || err));
     } finally {
       setSavingInterval(false);
@@ -571,18 +582,18 @@ export function SocialTab({ addToast, playSound, pollJob }: SocialTabProps) {
                 <span>PRÓXIMA CAPTURA {fmtNextScan(nextSocialScanMinutes)}</span>
               </div>
             )}
-            <select
+            <span className="text-[10px] font-mono text-crimson/50" title="Captura automática social roda 1× por dia neste horário">
+              DIÁRIO ÀS
+            </span>
+            <input
+              type="time"
               className="hud-input w-auto! text-[10px] py-1 px-2"
-              value={intervalMs}
+              value={dailyTime}
               disabled={savingInterval}
-              onChange={(e) => updateInterval(Number(e.target.value))}
-              title="Frequência da captura automática"
-            >
-              <option value={60 * 60 * 1000}>CAPTURA A CADA 1H</option>
-              <option value={6 * 60 * 60 * 1000}>CAPTURA A CADA 6H</option>
-              <option value={12 * 60 * 60 * 1000}>CAPTURA A CADA 12H</option>
-              <option value={24 * 60 * 60 * 1000}>CAPTURA A CADA 24H</option>
-            </select>
+              onChange={(e) => setDailyTime(e.target.value)}
+              onBlur={() => updateDailyTime(dailyTime)}
+              title="Horário da captura automática (1× por dia)"
+            />
             <button
               onClick={() => { playSound("click"); scanAll().catch(() => {}); }}
               disabled={scanning}

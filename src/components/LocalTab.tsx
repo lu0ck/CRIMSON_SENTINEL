@@ -579,14 +579,19 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
   };
 
   const [scanningEstId, setScanningEstId] = useState<string | null>(null);
-  const [localScanIntervalMs, setLocalScanIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
+  // #60 — horário único do scan diário (HH:MM) — mesma setting de todas as frentes
+  const [dailyTime, setDailyTime] = useState("15:00");
+  const [dailyTimeSaved, setDailyTimeSaved] = useState("15:00");
   const [nextLocalPriceScanMinutes, setNextLocalPriceScanMinutes] = useState<number | null>(null);
   const [savingLocalInterval, setSavingLocalInterval] = useState(false);
 
   const loadLocalScanSettings = async () => {
     try {
       const data = await apiJson("/api/local-price-scan/settings");
-      setLocalScanIntervalMs(data.intervalMs ?? 6 * 60 * 60 * 1000);
+      if (data.dailyTime) {
+        setDailyTime(data.dailyTime);
+        setDailyTimeSaved(data.dailyTime);
+      }
     } catch {
       // settings indisponíveis — mantém default
     }
@@ -609,17 +614,24 @@ export function LocalTab({ addToast, playSound, pollJob, profileId, hasGeminiKey
     return `EM ${mins} MIN`;
   };
 
-  const updateLocalInterval = async (ms: number) => {
+  // #60 — salva o horário único do scan diário (1× por dia)
+  const updateLocalDailyTime = async (time: string) => {
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      setDailyTime(dailyTimeSaved); // revertido — valor inválido não salva
+      return;
+    }
+    if (time === dailyTimeSaved) return;
     setSavingLocalInterval(true);
     try {
       await apiJson("/api/local-price-scan/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intervalMs: ms }),
+        body: JSON.stringify({ dailyTime: time }),
       });
-      setLocalScanIntervalMs(ms);
-      toast(`SCAN LOCAL A CADA ${Math.round(ms / 60000)} MIN`, "success");
+      setDailyTimeSaved(time);
+      toast(`SCAN DIÁRIO ÀS ${time} — RODA 1× POR DIA`, "success");
     } catch (err: any) {
+      setDailyTime(dailyTimeSaved);
       toast("FALHA AO SALVAR AGENDAMENTO", "error", String(err?.message || err));
     } finally {
       setSavingLocalInterval(false);

@@ -327,6 +327,10 @@ export default function App() {
   const [apiStatus, setApiStatus] = useState<{ deepseek: boolean; gemini: boolean; serper: boolean; nvidia: boolean }>({ deepseek: false, gemini: false, serper: false, nvidia: false });
   const [nextScanMinutes, setNextScanMinutes] = useState<number>(0);
   const [autoStart, setAutoStart] = useState(false);
+  // #60 — horário ÚNICO do scan diário (HH:MM): e-commerce + mercado + social
+  const [dailyTime, setDailyTime] = useState("15:00");
+  const [dailyTimeSaved, setDailyTimeSaved] = useState("15:00");
+  const [dailyTimeSaving, setDailyTimeSaving] = useState(false);
   const [alertSent, setAlertSent] = useState(false);
   const [redisAlertSent, setRedisAlertSent] = useState(false);
   const [notificationsCount, setNotificationsCount] = useState(0);
@@ -532,6 +536,46 @@ export default function App() {
       window.electronAPI.getAutoStart().then(setAutoStart);
     }
   }, []);
+
+  // #60 — load do horário do scan diário (1× por dia em todas as frentes)
+  useEffect(() => {
+    fetch("/api/scan/settings")
+      .then((r) => r.json())
+      .then((d) => {
+        if (d?.dailyTime) {
+          setDailyTime(d.dailyTime);
+          setDailyTimeSaved(d.dailyTime);
+        }
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveDailyTime = async (time: string) => {
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      setDailyTime(dailyTimeSaved); // revertido — valor inválido não salva
+      return;
+    }
+    if (time === dailyTimeSaved) return;
+    setDailyTimeSaving(true);
+    try {
+      const res = await fetch("/api/scan/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dailyTime: time }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `HTTP ${res.status}`);
+      }
+      setDailyTimeSaved(time);
+      addToast(`SCAN DIÁRIO ÀS ${time} — RODA 1× POR DIA (E-COMMERCE + MERCADO + SOCIAL)`, "success");
+    } catch (err: any) {
+      setDailyTime(dailyTimeSaved);
+      addToast("FALHA AO SALVAR HORÁRIO DO SCAN", "error", String(err?.message || err));
+    } finally {
+      setDailyTimeSaving(false);
+    }
+  };
 
   // Check system status on load and every hour
   useEffect(() => {
@@ -2893,18 +2937,19 @@ const queued = await response.json();
               <div className="flex items-center justify-between p-4 border border-crimson/20 bg-crimson/5">
                 <div className="flex items-center gap-4">
                   <ShieldAlert className="text-crimson" size={20} />
-                  <span className="text-xs font-mono">AUTO-REFRESH INTERVAL</span>
+                  <div className="flex flex-col">
+                    <span className="text-xs font-mono">SCAN DIÁRIO</span>
+                    <span className="text-[8px] font-mono text-crimson/50">RODA 1× POR DIA — E-COMMERCE + MERCADO + SOCIAL</span>
+                  </div>
                 </div>
-                <select 
+                <input
+                  type="time"
                   className="bg-black border border-crimson/30 text-xs font-mono p-1"
-                  value={activeProfile?.refreshInterval || "12"}
-                  onChange={(e) => updateProfileSetting("refreshInterval", e.target.value)}
-                >
-                  <option value="1">1 HOUR</option>
-                  <option value="6">6 HOURS</option>
-                  <option value="12">12 HOURS</option>
-                  <option value="24">24 HOURS</option>
-                </select>
+                  value={dailyTime}
+                  disabled={dailyTimeSaving}
+                  onChange={(e) => setDailyTime(e.target.value)}
+                  onBlur={() => saveDailyTime(dailyTime)}
+                />
               </div>
             </ConfigSection>
 

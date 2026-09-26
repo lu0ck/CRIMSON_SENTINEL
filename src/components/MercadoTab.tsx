@@ -323,14 +323,19 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
   // #52 — progresso vivo do SCAN PREÇOS + último resultado persistente
   const [scanProgress, setScanProgress] = useState<any>(null);
   const [lastScan, setLastScan] = useState<{ at: string; rv: any } | null>(null);
-  const [localScanIntervalMs, setLocalScanIntervalMs] = useState<number>(6 * 60 * 60 * 1000);
+  // #60 — horário único do scan diário (HH:MM) — mesma setting de todas as frentes
+  const [dailyTime, setDailyTime] = useState("15:00");
+  const [dailyTimeSaved, setDailyTimeSaved] = useState("15:00");
   const [nextLocalPriceScanMinutes, setNextLocalPriceScanMinutes] = useState<number | null>(null);
   const [savingLocalInterval, setSavingLocalInterval] = useState(false);
 
   const loadLocalScanSettings = async () => {
     try {
       const data = await apiJson("/api/local-price-scan/settings");
-      setLocalScanIntervalMs(data.intervalMs ?? 6 * 60 * 60 * 1000);
+      if (data.dailyTime) {
+        setDailyTime(data.dailyTime);
+        setDailyTimeSaved(data.dailyTime);
+      }
     } catch {
       // settings indisponíveis — mantém default
     }
@@ -353,17 +358,24 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
     return `EM ${mins} MIN`;
   };
 
-  const updateLocalInterval = async (ms: number) => {
+  // #60 — salva o horário único do scan diário (1× por dia)
+  const updateLocalDailyTime = async (time: string) => {
+    if (!/^\d{2}:\d{2}$/.test(time)) {
+      setDailyTime(dailyTimeSaved); // revertido — valor inválido não salva
+      return;
+    }
+    if (time === dailyTimeSaved) return;
     setSavingLocalInterval(true);
     try {
       await apiJson("/api/local-price-scan/settings", {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ intervalMs: ms }),
+        body: JSON.stringify({ dailyTime: time }),
       });
-      setLocalScanIntervalMs(ms);
-      toast(`SCAN LOCAL A CADA ${Math.round(ms / 60000)} MIN`, "success");
+      setDailyTimeSaved(time);
+      toast(`SCAN DIÁRIO ÀS ${time} — RODA 1× POR DIA`, "success");
     } catch (err: any) {
+      setDailyTime(dailyTimeSaved);
       toast("FALHA AO SALVAR AGENDAMENTO", "error", String(err?.message || err));
     } finally {
       setSavingLocalInterval(false);
@@ -1114,18 +1126,18 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
                 <span>PRÓXIMO SCAN {fmtNextScan(nextLocalPriceScanMinutes)}</span>
               </div>
             )}
-            <select
+            <span className="text-[10px] font-mono text-crimson/50" title="Scan automático de preços locais roda 1× por dia neste horário">
+              DIÁRIO ÀS
+            </span>
+            <input
+              type="time"
               className="hud-input w-auto! text-[10px] py-1 px-2"
-              value={localScanIntervalMs}
+              value={dailyTime}
               disabled={savingLocalInterval}
-              onChange={(e) => updateLocalInterval(Number(e.target.value))}
-              title="Frequência do scan automático de preços locais"
-            >
-              <option value={60 * 60 * 1000}>SCAN A CADA 1H</option>
-              <option value={6 * 60 * 60 * 1000}>SCAN A CADA 6H</option>
-              <option value={12 * 60 * 60 * 1000}>SCAN A CADA 12H</option>
-              <option value={24 * 60 * 60 * 1000}>SCAN A CADA 24H</option>
-            </select>
+              onChange={(e) => setDailyTime(e.target.value)}
+              onBlur={() => updateLocalDailyTime(dailyTime)}
+              title="Horário do scan automático de preços locais (1× por dia)"
+            />
             <button
               onClick={() => { playSound("click"); setShowEstForm(!showEstForm); }}
               className="hud-button flex items-center gap-2"
