@@ -26,6 +26,7 @@ import {
 import { isFlashPrice, createFlashPromotion, itemHistoricalPrices } from "../lib/flashDetect";
 import { AI_MODELS } from "../lib/aiModels";
 import { isInstagramEnabled } from "../lib/instagramEnabled";
+import { deepseekVision, resolveDeepSeekKey } from "../lib/aiProviders";
 
 // FASE 8 — monitoramento social. Captura texto de WhatsApp (colado) ou captions
 // do Instagram (via Playwright) e transforma em promoções (source whatsapp/instagram).
@@ -43,6 +44,7 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
   const { channel, text, url, sourceId, profileId, imageBase64, imageMimeType } = job.data;
   const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
   const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
+  const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
 
   const source = sourceId ? SocialSourceRepository.getById(sourceId) : undefined;
   const hint = source?.establishmentHint;
@@ -50,35 +52,54 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
   let rawText = text?.trim() || "";
   let method = "deterministic";
 
-  // Imagem (print de encarte): extrai preços via Gemini Vision.
-  if (!rawText && imageBase64 && apiKey) {
-    try {
-      const { GoogleGenAI } = await import("@google/genai");
-      const { AI_MODELS } = await import("../lib/aiModels.ts");
-      const ai = new GoogleGenAI({ apiKey });
-      const r = await ai.models.generateContent({
-        model: AI_MODELS.VISION,
-        contents: [
-          {
-            role: "user",
-            parts: [
-              { inlineData: { data: imageBase64, mimeType: imageMimeType || "image/png" } },
-              {
-                text:
-                  "Extraia produtos e preços desta imagem de encarte/oferta/promoção de supermercado. " +
-                  'Responda como JSON array: [{"productName":"...","promoPrice":...,"regularPrice":...}],' +
-                  " se nada relevante, retorne []. Inclua apenas preços claramente visíveis.",
-              },
-            ],
-          },
-        ],
-      });
-      if (r.text) {
-        rawText = r.text;
-        method = "gemini-vision";
+  // Imagem (print de encarte): extrai preços — #54 DeepSeek Vision PRIMEIRO,
+  // Gemini Vision só como fallback (ordem da cadeia DeepSeek → Gemini → ...).
+  if (!rawText && imageBase64 && (dsKey || apiKey)) {
+    const imagePrompt =
+      "Extraia produtos e preços desta imagem de encarte/oferta/promoção de supermercado. " +
+      'Responda como JSON array: [{"productName":"...","promoPrice":...,"regularPrice":...}],' +
+      " se nada relevante, retorne []. Inclua apenas preços claramente visíveis.";
+
+    if (dsKey) {
+      try {
+        const dsResp = await deepseekVision(
+          { base64: imageBase64, mimeType: imageMimeType || "image/png" },
+          imagePrompt,
+          { apiKey: dsKey }
+        );
+        if (dsResp) {
+          rawText = dsResp;
+          method = "deepseek-vision";
+        }
+      } catch (err: any) {
+        safeLog(`[social-worker] deepseek vision falhou na imagem: ${err.message}`);
       }
-    } catch (err: any) {
-      safeLog(`[social-worker] gemini vision falhou na imagem: ${err.message}`);
+    }
+
+    if (!rawText && apiKey) {
+      try {
+        const { GoogleGenAI } = await import("@google/genai");
+        const { AI_MODELS: AIM } = await import("../lib/aiModels.ts");
+        const ai = new GoogleGenAI({ apiKey });
+        const r = await ai.models.generateContent({
+          model: AIM.VISION,
+          contents: [
+            {
+              role: "user",
+              parts: [
+                { inlineData: { data: imageBase64, mimeType: imageMimeType || "image/png" } },
+                { text: imagePrompt },
+              ],
+            },
+          ],
+        });
+        if (r.text) {
+          rawText = r.text;
+          method = "gemini-vision";
+        }
+      } catch (err: any) {
+        safeLog(`[social-worker] gemini vision falhou na imagem: ${err.message}`);
+      }
     }
   }
 
@@ -97,7 +118,7 @@ async function handleSocialCapture(job: Job<SocialMonitorJobPayload & { type: "s
     return { captured: false, reason: "sem texto nem URL válida" };
   }
 
-  const { promos } = await parsePromosFromTextWithAI(rawText, apiKey, hint);
+  const { promos } = await parsePromosFromTextWithAI(rawText, apiKey, hint, profile?.deepseekApiKey);
   const enriched = enrichParsedPromos(promos, rawText, hint);
 
   const saved: any[] = [];
@@ -331,6 +352,7 @@ async function handleInstagramStoriesScan(
   const bridged = emptyBridgeCounters();
   const profile = ProfileRepository.getAll()[0];
   const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
+  const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
 
   for (const est of withHandle) {
     const last = lastCheckedByName.get(est.name.toLowerCase());
@@ -352,44 +374,67 @@ async function handleInstagramStoriesScan(
 
     try {
       // download=true para podermos passar imagem/vídeo ao Gemini vision
-      const stories = await fetchStories(handle, { download: !!apiKey, timeoutMs: 20_000 });
+      const stories = await fetchStories(handle, { download: !!(apiKey || dsKey), timeoutMs: 20_000 });
       for (const st of stories) {
         captured++;
         // 1. Tenta extrair preços do caption (texto)
         let text = st.caption_text || "";
         let method = "caption";
 
-        // 2. Se houver mídia e Gemini key, passa a imagem para extrair preços
-        if (apiKey && st.media_url) {
+        // 2. Se houver mídia — #54 DeepSeek Vision PRIMEIRO, Gemini Vision fallback
+        if ((dsKey || apiKey) && st.media_url) {
           try {
             const media = await readStoryMedia(st.media_url);
             if (media) {
               const base64 = media.buffer.toString("base64");
-              const { GoogleGenAI } = await import("@google/genai");
-              const ai = new GoogleGenAI({ apiKey });
-              const inlineData = {
-                inlineData: { data: base64, mimeType: media.mimeType },
-              };
-              const r = await ai.models.generateContent({
-                model: AI_MODELS.VISION,
-                contents: [
-                  {
-                    role: "user",
-                    parts: [
-                      inlineData,
+              const storyPrompt =
+                "Extraia produtos e preços desta imagem de story do Instagram. " +
+                'Responda como JSON array: [{"productName":"...","promoPrice":...,"regularPrice":...}],' +
+                " se nada relevante, retorne []. Inclua apenas preços claramente visíveis.";
+
+              let visionText = "";
+              let visionProvider = "";
+              if (dsKey) {
+                try {
+                  const dsResp = await deepseekVision({ base64, mimeType: media.mimeType }, storyPrompt, { apiKey: dsKey });
+                  if (dsResp) {
+                    visionText = dsResp;
+                    visionProvider = "deepseek";
+                  }
+                } catch (err: any) {
+                  safeLog(`[social-worker] instagram deepseek vision falhou para ${est.name}: ${err.message}`);
+                }
+              }
+              if (!visionText && apiKey) {
+                try {
+                  const { GoogleGenAI } = await import("@google/genai");
+                  const ai = new GoogleGenAI({ apiKey });
+                  const r = await ai.models.generateContent({
+                    model: AI_MODELS.VISION,
+                    contents: [
                       {
-                        text:
-                          "Extraia produtos e preços desta imagem de story do Instagram. " +
-                          'Responda como JSON array: [{"productName":"...","promoPrice":...,"regularPrice":...}],' +
-                          " se nada relevante, retorne []. Inclua apenas preços claramente visíveis.",
+                        role: "user",
+                        parts: [
+                          { inlineData: { data: base64, mimeType: media.mimeType } },
+                          { text: storyPrompt },
+                        ],
                       },
                     ],
-                  },
-                ],
-              });
-              if (r.text) {
-                text += "\n[GEMINI VISION] " + r.text;
-                method = "gemini-vision";
+                  });
+                  if (r.text) {
+                    visionText = r.text;
+                    visionProvider = "gemini";
+                  }
+                } catch (err: any) {
+                  safeLog(`[social-worker] instagram vision falhou para ${est.name}: ${err.message}`);
+                }
+              }
+
+              if (visionText) {
+                text += visionProvider === "deepseek"
+                  ? "\n[DEEPSEEK VISION] " + visionText
+                  : "\n[GEMINI VISION] " + visionText;
+                method = visionProvider === "deepseek" ? "deepseek-vision" : "gemini-vision";
               }
             }
           } catch (err: any) {
@@ -398,7 +443,7 @@ async function handleInstagramStoriesScan(
         }
 
         if (!text.trim()) continue;
-        const { promos } = await parsePromosFromTextWithAI(text, apiKey, est.name);
+        const { promos } = await parsePromosFromTextWithAI(text, apiKey, est.name, profile?.deepseekApiKey);
         const enriched = enrichParsedPromos(promos, text, est.name);
         for (const p of enriched) {
           if (!p.establishmentId) p.establishmentId = est.id;
@@ -469,7 +514,7 @@ async function handleGroupMessageProcess(
   const profile = profileId ? ProfileRepository.getById(profileId) : ProfileRepository.getAll()[0];
   const apiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
-  const { promos } = await parsePromosFromTextWithAI(text, apiKey, groupName);
+  const { promos } = await parsePromosFromTextWithAI(text, apiKey, groupName, profile?.deepseekApiKey);
   const enriched = enrichParsedPromos(promos, text, groupName);
 
   const saved: any[] = [];

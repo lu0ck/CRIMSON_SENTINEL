@@ -3,6 +3,7 @@ import { PromotionRepository } from "../repositories/promotionRepository";
 import { EstablishmentRepository } from "../repositories/establishmentRepository";
 import { AI_MODELS } from "./aiModels";
 import { normalizeText } from "./text";
+import { deepseekText, resolveDeepSeekKey } from "./aiProviders";
 
 // ---------------------------------------------------------------------------
 // FASE 8 — parsing de texto social (WhatsApp/Instagram) em promoções.
@@ -187,11 +188,41 @@ TEXTO:
 export async function parsePromosFromTextWithAI(
   text: string,
   apiKey?: string,
-  hint?: string
-): Promise<{ promos: ParsedPromo[]; method: "gemini" | "deterministic" }> {
+  hint?: string,
+  deepseekApiKey?: string
+): Promise<{ promos: ParsedPromo[]; method: "deepseek" | "gemini" | "deterministic" }> {
   let promos = parsePromosFromText(text);
+  let method: "deepseek" | "gemini" | "deterministic" = apiKey ? "gemini" : "deterministic";
 
-  if (apiKey) {
+  const mapParsed = (parsed: any[]): ParsedPromo[] =>
+    parsed
+      .map((p: any) => ({
+        productName: String(p.productName || "").trim(),
+        promoPrice: Number(p.promoPrice),
+        regularPrice: p.regularPrice ? Number(p.regularPrice) : undefined,
+        establishmentName: p.establishmentName ? String(p.establishmentName).trim() : undefined,
+      }))
+      .filter((p: any) => p.productName && p.promoPrice > 0);
+
+  // #54 — DeepSeek PRIMEIRO (DeepSeek → Gemini → determinístico)
+  const dsKey = resolveDeepSeekKey(deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+  if (dsKey) {
+    try {
+      const dsText = await deepseekText(buildSocialParsePrompt(text), { apiKey: dsKey });
+      const parsed = JSON.parse(dsText || "[]");
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        const mapped = mapParsed(parsed);
+        if (mapped.length > 0) {
+          promos = mapped;
+          method = "deepseek";
+        }
+      }
+    } catch (err: any) {
+      // segue a cadeia (Gemini)
+    }
+  }
+
+  if (method !== "deepseek" && apiKey) {
     try {
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey });
@@ -202,21 +233,18 @@ export async function parsePromosFromTextWithAI(
       });
       const parsed = JSON.parse(response.text || "[]");
       if (Array.isArray(parsed) && parsed.length > 0) {
-        promos = parsed
-          .map((p: any) => ({
-            productName: String(p.productName || "").trim(),
-            promoPrice: Number(p.promoPrice),
-            regularPrice: p.regularPrice ? Number(p.regularPrice) : undefined,
-            establishmentName: p.establishmentName ? String(p.establishmentName).trim() : undefined,
-          }))
-          .filter((p: any) => p.productName && p.promoPrice > 0);
+        const mapped = mapParsed(parsed);
+        if (mapped.length > 0) {
+          promos = mapped;
+          method = "gemini";
+        }
       }
     } catch (err: any) {
       // fallback silencioso para o determinístico
     }
   }
 
-  return { promos: enrichParsedPromos(promos, text, hint), method: apiKey ? "gemini" : "deterministic" };
+  return { promos: enrichParsedPromos(promos, text, hint), method };
 }
 
 // Dedup: não recadastra promoção ativa do mesmo produto no mesmo estabelecimento.

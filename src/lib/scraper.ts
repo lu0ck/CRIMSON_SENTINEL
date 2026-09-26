@@ -15,6 +15,7 @@ import {
   parseBrazilianPrice,
 } from "./price";
 import { ensureHttps } from "./url";
+import { deepseekText, deepseekVision, extractJsonObject, resolveDeepSeekKey } from "./aiProviders";
 
 // #27 — helpers de preço re-exportados p/ consumidores legados (localPriceScrape, etc.)
 export { isValidPrice, sanitizePrice, isScientificNotation } from "./price";
@@ -496,6 +497,8 @@ export interface ScrapeOptions {
   lmStudioUrl?: string;
   nvidiaApiKey?: string;
   geminiApiKey?: string;
+  /** #54 — PRINCIPAL da cadeia (DeepSeek → Gemini → NVIDIA → LM) */
+  deepseekApiKey?: string;
   serperApiKey?: string;
   tavilyApiKey?: string;
   /** #41 — progresso real por estratégia (worker → job.updateProgress → UI) */
@@ -649,11 +652,16 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
     console.log(`[Scraper] ⏸ Circuit OPEN for ${domain} — pulando estratégias Playwright`);
   }
 
+  // #54 — LM Studio é o ÚLTIMO da cadeia (DeepSeek → Gemini → NVIDIA → LM):
+  // coletado aqui e empurrado no fim, depois de FETCH/GEMINI_FALLBACK
+  const lmStrategies: ScrapeStrategy[] = [];
+
   if (!circuitOpen) {
     // 1. Playwright stealth (handler + genérico)
     strategies.push({ name: "PLAYWRIGHT_STEALTH", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightStealth(url, options, signal) });
 
-    // 2. LM Studio (se configurado) - Vision e Text (LOCAL = RÁPIDO)
+    // 2. LM Studio (se configurado) - Vision e Text (LOCAL = barato, mas é o
+    // último da cadeia — só roda se DeepSeek/Gemini/NVIDIA falharem)
     if (options.lmStudioUrl) {
       let lmStudioAvailable = false;
       try {
@@ -663,7 +671,7 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
         });
         if (lmStudioCheck.ok) {
           lmStudioAvailable = true;
-          console.log("[Scraper] LM Studio is available, adding strategies");
+          console.log("[Scraper] LM Studio is available, adding strategies (end of chain)");
         } else {
           console.log("[Scraper] LM Studio responded but not OK, skipping");
         }
@@ -672,7 +680,7 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
       }
 
       if (lmStudioAvailable) {
-        strategies.push(
+        lmStrategies.push(
           { name: "PLAYWRIGHT_LM_STUDIO_VISION", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightLLMLocal(url, options, true, signal) },
           { name: "PLAYWRIGHT_LM_STUDIO_TEXT", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithPlaywrightLLMLocal(url, options, false, signal) }
         );
@@ -703,7 +711,7 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
 
     // 3b. #43 — SEARCH_VERIFY ANTES de NVIDIA/Vision: barato, resolve bot-wall
     // via Serper/Tavily + hint do slug da URL (sem depender do DOM).
-    if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey)) {
+    if ((options.serperApiKey || options.tavilyApiKey) && (options.geminiApiKey || options.nvidiaApiKey || resolveDeepSeekKey(options.deepseekApiKey, process.env.DEEPSEEK_API_KEY))) {
       strategies.push({
         name: "SEARCH_VERIFY",
         fn: ({ signal }: { signal?: AbortSignal }) => {
@@ -715,14 +723,21 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
       });
     }
 
-    // 3c. NVIDIA NIM (só se não estiver em bot-wall / quota Gemini não interfere)
-    if (options.nvidiaApiKey) {
-      strategies.push({ name: "NVIDIA_NIM", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithNvidiaNim(url, options.nvidiaApiKey!, signal) });
+    // 3c. #54 — DeepSeek PRIMEIRO entre as estratégias de IA da cadeia
+    // (visão no screenshot + texto da página, mesma janela de browser)
+    const deepseekKey = resolveDeepSeekKey(options.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+    if (deepseekKey) {
+      strategies.push({ name: "DEEPSEEK_VISION", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithDeepseek(url, deepseekKey, signal) });
     }
 
-    // 3d. GEMINI_VISION — pulado se quota 429 recente
+    // 3d. GEMINI_VISION — ordem da cadeia: antes da NVIDIA; pulado se quota 429 recente
     if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
       strategies.push({ name: "GEMINI_VISION", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithGeminiVision(url, options.geminiApiKey!, signal) });
+    }
+
+    // 3e. NVIDIA NIM — depois do Gemini (ordem da cadeia #54)
+    if (options.nvidiaApiKey) {
+      strategies.push({ name: "NVIDIA_NIM", fn: ({ signal }: { signal?: AbortSignal }) => scrapeWithNvidiaNim(url, options.nvidiaApiKey!, signal) });
     }
   }
 
@@ -733,6 +748,9 @@ export async function advancedScrape(rawUrl: string, options: ScrapeOptions): Pr
   if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
     strategies.push({ name: "GEMINI_FALLBACK", fn: () => scrapeWithGemini(url, "", options.geminiApiKey!) });
   }
+
+  // #54 — LM Studio fecha a cadeia: só roda se DeepSeek → Gemini → NVIDIA falharem
+  strategies.push(...lmStrategies);
 
   console.log(`[Scraper] Total strategies: ${strategies.length}`);
   console.log(`[Scraper] Strategy order: ${strategies.map(s => s.name).join(" -> ")}`);
@@ -1885,6 +1903,92 @@ Return ONLY valid JSON, no explanation.`
   return null;
 }
 
+// #54 — DEEPSEEK: PRIMEIRO da cadeia de interpretação (DeepSeek → Gemini →
+// NVIDIA → LM). Pega screenshot (visão) e texto da página na mesma janela e
+// tenta os dois modelos; null se falhar → próxima estratégia da cascata.
+const DEEPSEEK_VISION_PROMPT =
+  "Esta é uma captura de tela de uma página de produto. Extraia: 1) o NOME COMPLETO do produto (sem nome do site); 2) o MENOR preço à vista em reais (ignore parcelas/'de R$', juros e custos de frete); 3) a URL da imagem principal do produto se estiver visível. Responda APENAS JSON válido: {name: string, price: number, imageUrl: string}.";
+
+async function scrapeWithDeepseek(url: string, apiKey: string, signal?: AbortSignal): Promise<ScrapeResult | null> {
+  if (!apiKey) return null;
+  console.log("[DEEPSEEK] Starting vision+text extraction...");
+
+  let browser: any = null;
+  try {
+    if (signal?.aborted) return null;
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--no-sandbox", "--disable-setuid-sandbox", "--disable-gpu"],
+    });
+    const context = await browser.newContext({
+      userAgent: getRandomUserAgent(),
+      viewport: { width: 1280, height: 960 },
+      locale: "pt-BR",
+    });
+    const page = await context.newPage();
+    await page.goto(url, { waitUntil: "domcontentloaded", timeout: 45000 });
+    await page.waitForTimeout(3000);
+    await page.evaluate(`window.scrollTo(0, 300)`);
+    await page.waitForTimeout(1500);
+    await page.evaluate(`window.scrollTo(0, 0)`);
+    await page.waitForTimeout(800);
+
+    const shot: any = await page.screenshot({ type: "png" });
+    const data = Buffer.isBuffer(shot) ? shot.toString("base64") : shot.data;
+    const bodyText: string = ((await page.evaluate(`document.body.innerText.slice(0, 4000)`).catch(() => "")) as string) || "";
+
+    await browser.close();
+    browser = null;
+
+    const parse = (text: string | null): ScrapeResult | null => {
+      const out = extractJsonObject(text);
+      if (!out) return null;
+      const price = sanitizePrice(Number(out.price));
+      if (!isValidPrice(price) || !out.name || String(out.name).length < 3) {
+        console.log("[DEEPSEEK] Resposta sem dados válidos:", out.name || "sem nome");
+        return null;
+      }
+      return {
+        name: cleanProductName(String(out.name)),
+        price,
+        currency: "BRL",
+        available: true,
+        imageUrl: out.imageUrl || undefined,
+      } as ScrapeResult;
+    };
+
+    if (data) {
+      const viaVision = parse(await deepseekVision({ base64: data, mimeType: "image/png" }, DEEPSEEK_VISION_PROMPT, { apiKey }));
+      if (viaVision) {
+        console.log(`[DEEPSEEK] ✓ vision name="${(viaVision.name || "").substring(0, 50)}", price=${viaVision.price}`);
+        return viaVision;
+      }
+    }
+
+    if (bodyText && bodyText.length >= 200) {
+      const viaText = parse(
+        await deepseekText(`Extraia nome e menor preço (Pix/Boleto/à vista) deste texto:\n\n${bodyText}\n\nJSON:`, {
+          apiKey,
+          system: "Extraia dados do produto. Retorne APENAS JSON válido. Sem markdown. Formato: {\"name\":\"Produto\",\"price\":1234.56}",
+        })
+      );
+      if (viaText) {
+        console.log(`[DEEPSEEK] ✓ text name="${(viaText.name || "").substring(0, 50)}", price=${viaText.price}`);
+        return viaText;
+      }
+    }
+
+    return null;
+  } catch (error: any) {
+    console.error("[DEEPSEEK] Error:", error?.message || error);
+    return null;
+  } finally {
+    if (browser) {
+      try { await browser.close(); } catch (e) {}
+    }
+  }
+}
+
 // FASE 14 — GEMINI_VISION: screenshot via Playwright + modelo de visão,
 // usado quando o HTML é ilegível (paywall/JS pesado/bot).
 async function scrapeWithGeminiVision(url: string, apiKey: string, signal?: AbortSignal): Promise<ScrapeResult | null> {
@@ -2084,7 +2188,76 @@ async function scrapeWithSearchVerify(
     return nameHint || name;
   };
 
-  // 1) NVIDIA (grátis) — LLM escolhe preço/nome com mais contexto
+  // 1) #54 — DeepSeek PRIMEIRO (ordem da cadeia: DeepSeek → Gemini → NVIDIA → LM)
+  const deepseekKey = resolveDeepSeekKey(options.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+  if (deepseekKey && hasBRL(snippet)) {
+    const dsText = await deepseekText(
+      `Produto alvo: ${nameHint}\n\nTexto: ${snippet.slice(0, 3000)}\n\nJSON:`,
+      {
+        apiKey: deepseekKey,
+        system: "Extraia o nome do produto e o preço à vista do produto em reais (BRL). Ignore frete, parcelas, preço por unidade/grama e cupons. Retorne APENAS JSON válido: {\"name\":\"\", \"price\":123.45}",
+        maxTokens: 700,
+      }
+    );
+    const dsOut = extractJsonObject(dsText);
+    if (dsOut) {
+      const dsPrice = sanitizePrice(Number(dsOut.price));
+      const hintIsUsable = !!nameHint && nameHint.length >= 5 && !/^\d+$/.test(nameHint);
+      if (isValidPrice(dsPrice) && isPriceRealistic(dsPrice, nameHint || String(dsOut.name)) && dsOut.name && String(dsOut.name).length > 5 &&
+          (!hintIsUsable || titleMatchesHint(String(dsOut.name), nameHint))) {
+        console.log(`[SEARCH_VERIFY] ✓ DeepSeek: "${String(dsOut.name).substring(0, 40)}" R$ ${dsPrice}`);
+        return {
+          name: cleanProductName(String(dsOut.name)),
+          price: dsPrice,
+          currency: "BRL",
+          available: true,
+          priceConfirmed: false,
+          nameSource: "SEARCH",
+        } as ScrapeResult;
+      }
+    }
+  }
+
+  // 2) Regex — fallback grátis quando LLM falhou/indisponível
+  const extractViaRegex = (): ScrapeResult | null => {
+    const priceRe = /R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g;
+    const collect = (text: string) => {
+      const all = [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
+      if (all.length === 0) return [];
+      // remove parcelas/ruído: preço < 30% do máximo do mesmo trecho
+      const max = Math.max(...all);
+      const filtered = all.filter((p) => p >= max * 0.3);
+      return filtered.length > 0 ? filtered : all;
+    };
+    let priceMatches = collect(firstResultText);
+    if (priceMatches.length === 0) priceMatches = collect(snippet);
+    if (priceMatches.length === 0) return null;
+    const minPrice = Math.min(...priceMatches);
+    const name = pickName();
+    if (!name || name.length < 5) return null;
+    console.log(`[SEARCH_VERIFY] ✓ regex: "${name.substring(0, 40)}" R$ ${minPrice}`);
+    return {
+      name: cleanProductName(name),
+      price: minPrice,
+      currency: "BRL",
+      available: true,
+      priceConfirmed: false,
+      nameSource: "SEARCH",
+    } as ScrapeResult;
+  };
+  const viaRegex = extractViaRegex();
+  if (viaRegex) return viaRegex;
+
+  // 3) Gemini grounding na página original como validação
+  if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
+    const viaGemini = await scrapeWithGemini(url, "", options.geminiApiKey);
+    if (viaGemini && isValidPrice(viaGemini.price) && (viaGemini.name || "").length > 5) {
+      console.log(`[SEARCH_VERIFY] ✓ Gemini grounding: "${viaGemini.name.substring(0, 40)}" R$ ${viaGemini.price}`);
+      return viaGemini;
+    }
+  }
+
+  // 4) NVIDIA (grátis) — último LLM da cadeia, escolhe preço/nome com mais contexto
   if (options.nvidiaApiKey && hasBRL(snippet)) {
     const client = new OpenAI({
       baseURL: "https://integrate.api.nvidia.com/v1",
@@ -2143,45 +2316,6 @@ async function scrapeWithSearchVerify(
         }
       }
       if (modelDead) continue;
-    }
-  }
-
-  // 2) Regex — fallback grátis quando LLM falhou/indisponível
-  const extractViaRegex = (): ScrapeResult | null => {
-    const priceRe = /R\$\s*([\d.]+,\d{2}|\d+(?:\.\d{3})*|\d+(?:\.\d{2})?)/g;
-    const collect = (text: string) => {
-      const all = [...text.matchAll(priceRe)].map((m) => parseBrazilianPrice(m[1])).filter((p) => isValidPrice(p) && p >= 20);
-      if (all.length === 0) return [];
-      // remove parcelas/ruído: preço < 30% do máximo do mesmo trecho
-      const max = Math.max(...all);
-      const filtered = all.filter((p) => p >= max * 0.3);
-      return filtered.length > 0 ? filtered : all;
-    };
-    let priceMatches = collect(firstResultText);
-    if (priceMatches.length === 0) priceMatches = collect(snippet);
-    if (priceMatches.length === 0) return null;
-    const minPrice = Math.min(...priceMatches);
-    const name = pickName();
-    if (!name || name.length < 5) return null;
-    console.log(`[SEARCH_VERIFY] ✓ regex: "${name.substring(0, 40)}" R$ ${minPrice}`);
-    return {
-      name: cleanProductName(name),
-      price: minPrice,
-      currency: "BRL",
-      available: true,
-      priceConfirmed: false,
-      nameSource: "SEARCH",
-    } as ScrapeResult;
-  };
-  const viaRegex = extractViaRegex();
-  if (viaRegex) return viaRegex;
-
-  // 3) Gemini grounding na página original como validação
-  if (options.geminiApiKey && !isGeminiQuotaBlocked()) {
-    const viaGemini = await scrapeWithGemini(url, "", options.geminiApiKey);
-    if (viaGemini && isValidPrice(viaGemini.price) && (viaGemini.name || "").length > 5) {
-      console.log(`[SEARCH_VERIFY] ✓ Gemini grounding: "${viaGemini.name.substring(0, 40)}" R$ ${viaGemini.price}`);
-      return viaGemini;
     }
   }
 

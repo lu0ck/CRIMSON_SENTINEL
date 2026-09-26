@@ -29,13 +29,14 @@ export const ProfileRepository = {
       }
       for (const p of items) {
         db.prepare(
-          `INSERT INTO profiles (id, name, avatar, email, discord_webhook, telegram_token, telegram_chat_id, gmail_user, gmail_pass, gemini_api_key, lm_studio_url, nvidia_api_key, serper_api_key, tavily_api_key, use_advanced_scraping, refresh_interval)
-           VALUES (@id, @name, @avatar, @email, @discord_webhook, @telegram_token, @telegram_chat_id, @gmail_user, @gmail_pass, @gemini_api_key, @lm_studio_url, @nvidia_api_key, @serper_api_key, @tavily_api_key, @use_advanced_scraping, @refresh_interval)
+          `INSERT INTO profiles (id, name, avatar, email, discord_webhook, telegram_token, telegram_chat_id, gmail_user, gmail_pass, deepseek_api_key, gemini_api_key, lm_studio_url, nvidia_api_key, serper_api_key, tavily_api_key, use_advanced_scraping, refresh_interval)
+           VALUES (@id, @name, @avatar, @email, @discord_webhook, @telegram_token, @telegram_chat_id, @gmail_user, @gmail_pass, @deepseek_api_key, @gemini_api_key, @lm_studio_url, @nvidia_api_key, @serper_api_key, @tavily_api_key, @use_advanced_scraping, @refresh_interval)
            ON CONFLICT(id) DO UPDATE SET
              name=excluded.name, avatar=excluded.avatar, email=excluded.email,
              discord_webhook=excluded.discord_webhook, telegram_token=excluded.telegram_token,
              telegram_chat_id=excluded.telegram_chat_id, gmail_user=excluded.gmail_user,
-             gmail_pass=excluded.gmail_pass, gemini_api_key=excluded.gemini_api_key,
+             gmail_pass=excluded.gmail_pass, deepseek_api_key=excluded.deepseek_api_key,
+             gemini_api_key=excluded.gemini_api_key,
              lm_studio_url=excluded.lm_studio_url, nvidia_api_key=excluded.nvidia_api_key,
              serper_api_key=excluded.serper_api_key, tavily_api_key=excluded.tavily_api_key,
              use_advanced_scraping=excluded.use_advanced_scraping,
@@ -50,6 +51,7 @@ export const ProfileRepository = {
           telegram_chat_id: p.telegramChatId ?? null,
           gmail_user: p.gmailUser ?? null,
           gmail_pass: p.gmailPass ?? null,
+          deepseek_api_key: p.deepseekApiKey ?? null,
           gemini_api_key: p.geminiApiKey ?? null,
           lm_studio_url: p.lmStudioUrl ?? null,
           nvidia_api_key: p.nvidiaApiKey ?? null,

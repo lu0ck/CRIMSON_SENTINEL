@@ -21,6 +21,7 @@ export interface ProfileRow {
   telegram_chat_id: string | null;
   gmail_user: string | null;
   gmail_pass: string | null;
+  deepseek_api_key: string | null;
   gemini_api_key: string | null;
   lm_studio_url: string | null;
   nvidia_api_key: string | null;
@@ -79,6 +80,7 @@ export function profileRowToProfile(row: ProfileRow): Profile {
     telegramChatId: row.telegram_chat_id ?? undefined,
     gmailUser: row.gmail_user ?? undefined,
     gmailPass: row.gmail_pass ?? undefined,
+    deepseekApiKey: row.deepseek_api_key ?? undefined,
     geminiApiKey: row.gemini_api_key ?? undefined,
     lmStudioUrl: row.lm_studio_url ?? undefined,
     nvidiaApiKey: row.nvidia_api_key ?? undefined,

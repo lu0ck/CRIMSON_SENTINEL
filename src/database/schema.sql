@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS profiles (
   telegram_chat_id TEXT,
   gmail_user TEXT,
   gmail_pass TEXT,
+  deepseek_api_key TEXT,
   gemini_api_key TEXT,
   lm_studio_url TEXT,
   nvidia_api_key TEXT,

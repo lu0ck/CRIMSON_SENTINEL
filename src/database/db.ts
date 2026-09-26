@@ -78,6 +78,9 @@ export function getDb(): Database.Database {
   // price_observations: valid_until heurístico (FASE 5)
   ensureColumn("price_observations", "valid_until", "valid_until TEXT");
 
+  // #54 — chave DeepSeek (provedor principal de interpretação)
+  ensureColumn("profiles", "deepseek_api_key", "deepseek_api_key TEXT");
+
   // #45 — posição manual do produto na lista da aba LIST ("ordem de compra")
   ensureColumn("products", "sort_order", "sort_order INTEGER");
 

@@ -323,7 +323,7 @@ export default function App() {
 
   // System Status States
   const [lmStudioStatus, setLmStudioStatus] = useState<{ connected: boolean; model: string | null }>({ connected: false, model: null });
-  const [apiStatus, setApiStatus] = useState<{ gemini: boolean; serper: boolean; nvidia: boolean }>({ gemini: false, serper: false, nvidia: false });
+  const [apiStatus, setApiStatus] = useState<{ deepseek: boolean; gemini: boolean; serper: boolean; nvidia: boolean }>({ deepseek: false, gemini: false, serper: false, nvidia: false });
   const [nextScanMinutes, setNextScanMinutes] = useState<number>(0);
   const [autoStart, setAutoStart] = useState(false);
   const [alertSent, setAlertSent] = useState(false);
@@ -350,7 +350,7 @@ export default function App() {
       if (response.ok) {
         const status = await response.json();
         setLmStudioStatus({ connected: status.lmStudio.connected, model: status.lmStudio.model });
-        setApiStatus({ gemini: status.gemini.available, serper: status.serper.available, nvidia: status.nvidia.available });
+        setApiStatus({ deepseek: status.deepseek?.available || false, gemini: status.gemini.available, serper: status.serper.available, nvidia: status.nvidia.available });
         setNextScanMinutes(status.nextScanMinutes);
 
         // Alert 10 minutes before daily scan if LM Studio is offline
@@ -2174,6 +2174,8 @@ const queued = await response.json();
           <div className="flex flex-col items-end">
             <span className="text-crimson/50">APIS</span>
             <div className="flex items-center gap-2 text-[10px]">
+              <span className={cn(apiStatus.deepseek ? "text-green-500" : "text-crimson/30")}>DEEPSEEK</span>
+              <span className="text-crimson/30">|</span>
               <span className={cn(apiStatus.gemini ? "text-green-500" : "text-crimson/30")}>GEMINI</span>
               <span className="text-crimson/30">|</span>
               <span className={cn(apiStatus.serper ? "text-green-500" : "text-crimson/30")}>SERPER</span>
@@ -2717,6 +2719,16 @@ const queued = await response.json();
                 <div className="hud-border bg-black/40 p-8 flex flex-col gap-8">
                   <ConfigSection title="AI CORE PARAMETERS">
                     <div className="grid grid-cols-1 gap-4">
+<InputGroup
+                  label="DEEPSEEK API KEY (PRINCIPAL)"
+                  placeholder="sk-..."
+                  type="password"
+                  value={activeProfile?.deepseekApiKey || ""}
+                  onChange={(val) => updateProfileSetting("deepseekApiKey", val)}
+                />
+                      <p className="text-[10px] font-mono text-crimson/50 px-4">
+                        * PRINCIPAL NA ORDEM DE INTERPRETAÇÃO: DEEPSEEK → GEMINI → NVIDIA → LM STUDIO (TEXTO E IMAGEM). PLATAFORMA.DEEPSEEK.COM
+                      </p>
 <InputGroup
                   label="GEMINI API KEY"
                   placeholder="AIzaSy..."

@@ -26,6 +26,7 @@ import { alertFlashPromotion, recordInAppAlert } from "../lib/notify";
 import { filterAndDedupe, isProductUrl, buildSearchQuery, sameProduct } from "../lib/compare";
 import { normalizeProductUrl } from "../lib/url";
 import { AI_MODELS } from "../lib/aiModels";
+import { deepseekText, resolveDeepSeekKey } from "../lib/aiProviders";
 
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
 const COMPARE_CONFIRM_TIMEOUT_MS = 90_000; // #51 — 30s matava antes de renderizar
@@ -64,6 +65,7 @@ async function handleScrape(job: Job<ScanJobPayload & { type: "scrape" }>) {
     lmStudioUrl: profile?.lmStudioUrl,
     nvidiaApiKey: profile?.nvidiaApiKey,
     geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+    deepseekApiKey: profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
     serperApiKey: profile?.serperApiKey,
     tavilyApiKey: profile?.tavilyApiKey,
     // #48 — ADD manual: ignora cache de 30min
@@ -171,6 +173,7 @@ async function handleScanAll() {
         lmStudioUrl: profile?.lmStudioUrl,
         nvidiaApiKey: profile?.nvidiaApiKey,
         geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+        deepseekApiKey: profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
         serperApiKey: profile?.serperApiKey,
         tavilyApiKey: profile?.tavilyApiKey,
       });
@@ -231,7 +234,7 @@ type CompareResult = { site: string; price: number; url: string };
 
 async function runComparison(
   productName: string,
-  profile: { geminiApiKey?: string; tavilyApiKey?: string; serperApiKey?: string; nvidiaApiKey?: string; lmStudioUrl?: string } | undefined
+  profile: { geminiApiKey?: string; deepseekApiKey?: string; tavilyApiKey?: string; serperApiKey?: string; nvidiaApiKey?: string; lmStudioUrl?: string } | undefined
 ): Promise<CompareResult[]> {
   const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
 
@@ -297,6 +300,7 @@ async function runComparison(
                   lmStudioUrl: profile?.lmStudioUrl,
                   nvidiaApiKey: profile?.nvidiaApiKey,
                   geminiApiKey: finalApiKey,
+                  deepseekApiKey: profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
                   serperApiKey: profile?.serperApiKey,
                   tavilyApiKey: profile?.tavilyApiKey,
                 }),
@@ -444,6 +448,7 @@ async function runComparison(
             lmStudioUrl: profile?.lmStudioUrl,
             nvidiaApiKey: profile?.nvidiaApiKey,
             geminiApiKey: finalApiKey,
+            deepseekApiKey: profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
             serperApiKey: profile?.serperApiKey,
             tavilyApiKey: profile?.tavilyApiKey,
           }),
@@ -464,6 +469,50 @@ async function runComparison(
     safeLog(`[compare] scrape: ${confirmed.length}/${urls.length} ok (${rejectedSameProduct} outro produto, ${rejectedNoData} sem dados, ${rejectedLowPrice} preço baixo, ${rejectedUnavailable} esgotado, ${rejectedSilent} timeout/erro)`);
     return confirmed;
   };
+
+  // 2.5) #54 — DeepSeek PRIMEIRO entre os LLMs (DeepSeek → Gemini → NVIDIA → LM):
+  // lê os mesmos snippets e devolve URLs diretas; confirmação por página em seguida.
+  const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+  if (dsKey && items.length > 0) {
+    const snippet = items.slice(0, 5).map((i) => `${i.url}\n${i.snippet}`).join("\n---\n").slice(0, 1500);
+    const dsText = await deepseekText(
+      `Produto: "${productName}"\n\nBuscas:\n${snippet}\n\nJSON:`,
+      {
+        apiKey: dsKey,
+        system: 'Retorne APENAS JSON: [{"site":"string","price":123.45,"url":"string","title":"string"}]. Só o mesmo modelo/SKU. Preço à vista BRL. A url deve ser a PÁGINA DIRETA do produto (AliExpress: precisa conter /item/; Amazon: precisa conter /dp/ ou /gp/product/; Shopee: precisa conter -i.<seller>.<item> ou /product/; Mercado Livre: precisa conter MLB-<número>) — NUNCA URL de catálogo, busca ou loja.',
+        maxTokens: 1000,
+      }
+    );
+    const dsArray = (dsText || "").match(/\[[\s\S]*\]/);
+    if (dsArray) {
+      try {
+        const parsed = JSON.parse(dsArray[0]);
+        const arr = Array.isArray(parsed) ? parsed : [];
+        const snippetMap = new Map(items.map((i) => [i.url, i.snippet]));
+        const rawResults = arr.map((r: any) => ({
+          ...r, title: r.title || r.site || snippetMap.get(r.url) || productName,
+        })).filter((r: any) => r && r.url && r.price >= 30 && r.price <= 5000000 && isProductUrl(r.url)); // #46
+        const results = await filterAndDedupe(rawResults, productName);
+        safeLog(`[compare] DeepSeek: parsed=${arr.length} url+preço+domínio=${rawResults.length} após dedupe=${results.length}`);
+        if (results.length > 0) {
+          const dsResults: CompareResult[] = results.map((r) => ({ site: new URL(r.url).hostname, price: r.price, url: r.url }));
+          const confirmed = await confirmByScrape(dsResults);
+          if (confirmed.length > 0) {
+            safeLog(`[compare] DeepSeek+scrape: ${confirmed.length}/${dsResults.length} confirmados para "${productName}"`);
+            return confirmed;
+          }
+          safeLog(`[compare] DeepSeek: ${dsResults.length} resultados sem confirmação da página — aceitando filtrados`);
+          return dsResults;
+        }
+      } catch (err: any) {
+        safeLog(`[compare] DeepSeek: JSON inválido — ${err?.message || err}`);
+      }
+    } else if (dsText) {
+      safeLog(`[compare] DeepSeek: sem array JSON — "${dsText.slice(0, 160)}"`);
+    }
+  } else {
+    safeLog(`[compare] DeepSeek pulado (chave=${dsKey ? "sim" : "não"}, itens=${items.length})`);
+  }
 
   // 3) NVIDIA (barato, ~10s) — extrai preços dos snippets ANTES do scrape (#51):
   // com Gemini em 429, NVIDIA virou o motor principal (lê snippets sem browser)
@@ -689,7 +738,21 @@ async function handleLocalInsight(job: Job<ScanJobPayload & { type: "local-insig
   let text = summarizeInsights(insights);
   let method = "deterministic";
 
-  if (finalApiKey) {
+  // #54 — DeepSeek primeiro (cadeia: DeepSeek → Gemini → determinístico)
+  const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+  if (dsKey) {
+    try {
+      const dsResp = await deepseekText(buildInsightPrompt(insights), { apiKey: dsKey });
+      if (dsResp) {
+        text = dsResp;
+        method = "deepseek";
+      }
+    } catch (err: any) {
+      safeLog(`[scan-worker] DeepSeek local-insight falhou: ${err.message}`);
+    }
+  }
+
+  if (method === "deterministic" && finalApiKey) {
     try {
       const { GoogleGenAI } = await import("@google/genai");
       const ai = new GoogleGenAI({ apiKey: finalApiKey });
@@ -716,6 +779,7 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     lmStudioUrl: profile?.lmStudioUrl,
     nvidiaApiKey: profile?.nvidiaApiKey,
     geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+    deepseekApiKey: profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
     // #32 — keys de busca para market-handlers (padrão process.env igual /api/status)
     serperApiKey: profile?.serperApiKey || process.env.SERPER_API_KEY,
     tavilyApiKey: profile?.tavilyApiKey || process.env.TAVILY_API_KEY,
@@ -742,7 +806,7 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     const MARKET_SEARCH_BULK_MAX = 8;
     const canMarketSearch =
       !!(apiKeys.serperApiKey || apiKeys.tavilyApiKey) &&
-      !!(apiKeys.nvidiaApiKey || apiKeys.geminiApiKey);
+      !!(apiKeys.deepseekApiKey || apiKeys.geminiApiKey || apiKeys.nvidiaApiKey);
     const all = EstablishmentRepository.getAll();
     const withUrl = all.filter((e) => e.priceUrl);
     let chainOnly: import("../types").Establishment[] = [];
@@ -957,23 +1021,31 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
 
   let analysis = "";
 
-  // 1. Local LLM (LM Studio)
-  if (profile?.lmStudioUrl) {
+  // 1. #54 — DeepSeek PRIMEIRO (ordem: DeepSeek → Gemini → NVIDIA → LM Studio)
+  const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+  if (!analysis && dsKey) {
+    safeLog("[scan-worker] analyze: DeepSeek");
+    analysis = (await deepseekText(prompt, { apiKey: dsKey })) || "";
+    if (!analysis) safeLog("[scan-worker] analyze DeepSeek falhou");
+  }
+
+  // 2. Gemini
+  if (!analysis && finalApiKey) {
     try {
-      safeLog("[scan-worker] analyze: LM Studio");
-      const OpenAI = (await import("openai")).default;
-      const client = new OpenAI({ baseURL: profile.lmStudioUrl, apiKey: "lm-studio" });
-      const response = await client.chat.completions.create({
-        model: AI_MODELS.LOCAL_LLM,
-        messages: [{ role: "user", content: prompt }],
+      safeLog("[scan-worker] analyze: Gemini");
+      const { GoogleGenAI } = await import("@google/genai");
+      const ai = new GoogleGenAI({ apiKey: finalApiKey });
+      const response = await ai.models.generateContent({
+        model: AI_MODELS.TEXT,
+        contents: prompt,
       });
-      analysis = response.choices[0]?.message?.content || "";
+      analysis = response.text || "";
     } catch (e: any) {
-      safeLog(`[scan-worker] analyze LM Studio falhou: ${e.message}`);
+      safeLog(`[scan-worker] analyze Gemini falhou: ${e.message}`);
     }
   }
 
-  // 2. NVIDIA API
+  // 3. NVIDIA API
   if (!analysis && profile?.nvidiaApiKey) {
     try {
       safeLog("[scan-worker] analyze: NVIDIA");
@@ -992,24 +1064,24 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
     }
   }
 
-  // 3. Gemini
-  if (!analysis && finalApiKey) {
+  // 4. Local LLM (LM Studio) — fecha a cadeia
+  if (!analysis && profile?.lmStudioUrl) {
     try {
-      safeLog("[scan-worker] analyze: Gemini");
-      const { GoogleGenAI } = await import("@google/genai");
-      const ai = new GoogleGenAI({ apiKey: finalApiKey });
-      const response = await ai.models.generateContent({
-        model: AI_MODELS.TEXT,
-        contents: prompt,
+      safeLog("[scan-worker] analyze: LM Studio");
+      const OpenAI = (await import("openai")).default;
+      const client = new OpenAI({ baseURL: profile.lmStudioUrl, apiKey: "lm-studio" });
+      const response = await client.chat.completions.create({
+        model: AI_MODELS.LOCAL_LLM,
+        messages: [{ role: "user", content: prompt }],
       });
-      analysis = response.text || "";
+      analysis = response.choices[0]?.message?.content || "";
     } catch (e: any) {
-      safeLog(`[scan-worker] analyze Gemini falhou: ${e.message}`);
+      safeLog(`[scan-worker] analyze LM Studio falhou: ${e.message}`);
     }
   }
 
   if (!analysis) {
-    throw new Error("Todos os provedores de análise falharam (LM Studio, NVIDIA, Gemini).");
+    throw new Error("Todos os provedores de análise falharam (DeepSeek, Gemini, NVIDIA, LM Studio).");
   }
   return { text: analysis };
 }

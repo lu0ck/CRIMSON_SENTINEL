@@ -10,6 +10,7 @@ import { normalizeText } from "./text";
 import { isValidPrice, sanitizePrice } from "./price";
 import { safeLog } from "./safeLog";
 import { AI_MODELS } from "./aiModels";
+import { deepseekText, extractJsonObject, resolveDeepSeekKey } from "./aiProviders";
 
 export interface MarketHandler {
   chainKey: string;
@@ -204,6 +205,8 @@ export interface MarketSearchKeys {
   tavilyApiKey?: string;
   nvidiaApiKey?: string;
   geminiApiKey?: string;
+  /** #54 — PRINCIPAL da cadeia de interpretação */
+  deepseekApiKey?: string;
 }
 
 export interface MarketSearchHit {
@@ -331,6 +334,29 @@ async function extractPriceWithNvidia(snippet: string, keys: MarketSearchKeys): 
   return null;
 }
 
+// #54 — DeepSeek PRIMEIRO na cadeia (DeepSeek → Gemini → NVIDIA)
+async function extractPriceWithDeepseek(snippet: string, keys: MarketSearchKeys): Promise<MarketSearchHit | null> {
+  const apiKey = resolveDeepSeekKey(keys.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+  if (!apiKey || snippet.length < 40) return null;
+  try {
+    const text = await deepseekText(`Texto: ${snippet.slice(0, 3000)}\n\nJSON:`, {
+      apiKey,
+      system: 'Extraia o nome do produto e o MENOR preço em reais (BRL). Retorne APENAS JSON válido: {"name":"","price":123.45}',
+      maxTokens: 300,
+    });
+    const out = extractJsonObject(text);
+    if (out) {
+      const price = sanitizePrice(Number(out.price));
+      if (isValidPrice(price)) {
+        return { price, name: out.name ? String(out.name) : undefined, method: "search-deepseek" };
+      }
+    }
+  } catch (e: any) {
+    safeLog(`[market-search] DeepSeek falhou: ${e.message || e}`);
+  }
+  return null;
+}
+
 async function extractPriceWithGemini(snippet: string, keys: MarketSearchKeys): Promise<MarketSearchHit | null> {
   if (!keys.geminiApiKey || snippet.length < 40) return null;
   try {
@@ -363,7 +389,8 @@ async function extractPriceWithGemini(snippet: string, keys: MarketSearchKeys): 
 }
 
 /**
- * Busca "«item» «rede» preço" (Tavily → Serper) e extrai preço (NVIDIA → Gemini).
+ * Busca "«item» «rede» preço" (Tavily → Serper) e extrai preço
+ * (DeepSeek → Gemini → NVIDIA — ordem da cadeia #54).
  * Retorna null quando não há keys de busca/LLM ou nenhum preço válido.
  */
 export async function searchMarketPrice(
@@ -372,7 +399,7 @@ export async function searchMarketPrice(
   keys: MarketSearchKeys
 ): Promise<MarketSearchHit | null> {
   const canSearch = !!(keys.serperApiKey || keys.tavilyApiKey);
-  const canExtract = !!(keys.nvidiaApiKey || keys.geminiApiKey);
+  const canExtract = !!(keys.deepseekApiKey || keys.geminiApiKey || keys.nvidiaApiKey);
   if (!canSearch || !canExtract) return null;
 
   const query = buildMarketSearchQuery(itemName, handler);
@@ -380,7 +407,9 @@ export async function searchMarketPrice(
   const snippet = await fetchSnippet(query, keys);
   if (!snippet || snippet.length < 40) return null;
 
-  const viaNvidia = await extractPriceWithNvidia(snippet, keys);
-  if (viaNvidia) return viaNvidia;
-  return extractPriceWithGemini(snippet, keys);
+  const viaDeepseek = await extractPriceWithDeepseek(snippet, keys);
+  if (viaDeepseek) return viaDeepseek;
+  const viaGemini = await extractPriceWithGemini(snippet, keys);
+  if (viaGemini) return viaGemini;
+  return extractPriceWithNvidia(snippet, keys);
 }

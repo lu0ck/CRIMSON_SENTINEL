@@ -66,6 +66,8 @@ export type LocalScrapeApiKeys = {
   lmStudioUrl?: string;
   nvidiaApiKey?: string;
   geminiApiKey?: string;
+  /** #54 — PRINCIPAL da cadeia de interpretação */
+  deepseekApiKey?: string;
 } & MarketSearchKeys;
 
 export function buildSearchUrl(priceUrl: string, term: string): string {
@@ -291,7 +293,7 @@ export async function scrapeItemPrice(
   }
   const canSearch =
     !!(apiKeys.serperApiKey || apiKeys.tavilyApiKey) &&
-    !!(apiKeys.nvidiaApiKey || apiKeys.geminiApiKey);
+    !!(apiKeys.deepseekApiKey || apiKeys.geminiApiKey || apiKeys.nvidiaApiKey);
   if (!canSearch) {
     return socialDependentResult(
       establishment,
@@ -318,11 +320,11 @@ export async function scanEstablishmentPrices(
     const handler = resolveMarketHandler(establishment.chain || establishment.name);
     const canSearch =
       !!(apiKeys.serperApiKey || apiKeys.tavilyApiKey) &&
-      !!(apiKeys.nvidiaApiKey || apiKeys.geminiApiKey);
+      !!(apiKeys.deepseekApiKey || apiKeys.geminiApiKey || apiKeys.nvidiaApiKey);
     if (!handler || !canSearch) {
       const reason = !handler
         ? "sem price_url e sem market-handler"
-        : "sem Serper/Tavily ou NVIDIA/Gemini — depende de social";
+        : "sem Serper/Tavily ou DeepSeek/Gemini/NVIDIA — depende de social";
       safeLog(`[local-scrape] ${establishment.name}: social-dependent (${reason})`);
       return {
         ...base,

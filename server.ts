@@ -35,6 +35,7 @@ import {
 import { buildLocalInsights, summarizeInsights } from "./src/lib/localInsights.ts";
 import { filterAndDedupe, isProductUrl } from "./src/lib/compare.ts";
 import { AI_MODELS } from "./src/lib/aiModels.ts";
+import { deepseekText, resolveDeepSeekKey } from "./src/lib/aiProviders.ts";
 import { isInstagramEnabled } from "./src/lib/instagramEnabled.ts";
 import { normalizeUnit } from "./src/lib/units.ts";
 import {
@@ -324,6 +325,7 @@ app.post("/api/scrape", async (req, res) => {
       lmStudioUrl: profile?.lmStudioUrl,
       nvidiaApiKey: profile?.nvidiaApiKey,
       geminiApiKey: profile?.geminiApiKey || process.env.GEMINI_API_KEY,
+      deepseekApiKey: profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY,
       serperApiKey: profile?.serperApiKey,
       tavilyApiKey: profile?.tavilyApiKey,
       // #48
@@ -431,6 +433,41 @@ app.post("/api/compare", async (req, res) => {
       }
     }
 
+    // 1.5) #54 — DeepSeek antes da NVIDIA (ordem da cadeia DeepSeek → Gemini →
+    // NVIDIA → LM). Só roda se a busca Gemini não devolveu nada (DS não busca,
+    // interpreta o conhecimento/URLs — filtrado por isProductUrl + dedupe).
+    if (results.length === 0) {
+      const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+      if (dsKey) {
+        try {
+          safeLog("[compare] Trying DeepSeek...");
+          const dsText = await deepseekText(
+            `Encontre o preço atual de "${productName}" em BRL em lojas brasileiras. JSON:`,
+            {
+              apiKey: dsKey,
+              system: "Você é o SENTINELA, um agente de inteligência de mercado. FONTES: Mercado Livre, Amazon.com.br, Magalu, Terabyteshop, Pichau, Kabum, AliExpress e Shopee (BRL). Inclua SÓ a página exata do produto pesquisado (mesmo modelo/SKU) — nunca um modelo parecido da mesma marca. URL DIRETA: AliExpress precisa conter /item/ (ou /i/); Amazon precisa conter /dp/ ou /gp/product/; Shopee precisa conter -i.<seller>.<item> ou /product/; Mercado Livre precisa conter MLB-<número> — NUNCA URL de catálogo, busca ou loja. PREÇO À VISTA (Pix/Boleto). Retorne APENAS JSON válido, sem markdown. Array de objetos: [{\"site\":\"string\",\"price\":0,\"url\":\"string\"}]",
+              maxTokens: 800,
+            }
+          );
+          const dsMatch = (dsText || "").match(/\[[\s\S]*\]/);
+          if (dsMatch) {
+            const parsed = JSON.parse(dsMatch[0]);
+            const rawResults = (Array.isArray(parsed) ? parsed : []).map((r: any) => ({
+              ...r,
+              title: r.title || r.site || "",
+            })).filter((r: any) => {
+              if (!r || !r.url || !r.price || r.price <= 0 || r.price > 5000000) return false;
+              return isProductUrl(r.url); // #46 — só páginas diretas de produto
+            });
+            results = await filterAndDedupe(rawResults, productName);
+            safeLog(`[compare] DeepSeek: ${rawResults.length} domínios confiáveis, ${results.length} páginas do MESMO produto`);
+          }
+        } catch (dsErr: any) {
+          safeLog(`[compare] DeepSeek falhou: ${dsErr.message}`);
+        }
+      }
+    }
+
     // 2. NVIDIA fallback when Gemini unavailable or 429
     if (geminiFailed && nvidiaApiKey && results.length === 0) {
       try {
@@ -520,6 +557,7 @@ app.get("/api/status", async (req, res) => {
   const status = {
     redis: { connected: false },
     lmStudio: { connected: false, model: null as string | null },
+    deepseek: { available: false },
     gemini: { available: false },
     serper: { available: false },
     nvidia: { available: false },
@@ -553,6 +591,7 @@ app.get("/api/status", async (req, res) => {
   }
 
   // Check API keys
+  status.deepseek.available = !!(profile?.deepseekApiKey || process.env.DEEPSEEK_API_KEY);
   status.gemini.available = !!(profile?.geminiApiKey || process.env.GEMINI_API_KEY);
   status.serper.available = !!(profile?.serperApiKey || process.env.SERPER_API_KEY);
   status.nvidia.available = !!profile?.nvidiaApiKey;
@@ -624,8 +663,9 @@ app.get("/api/status", async (req, res) => {
       const profile = profileId ? ProfileRepository.getById(profileId) : undefined;
       const finalApiKey = profile?.geminiApiKey || process.env.GEMINI_API_KEY;
       const nvidiaApiKey = profile?.nvidiaApiKey;
-      if (!finalApiKey && !nvidiaApiKey) {
-        return res.status(400).json({ error: "Configure a API key do Gemini ou NVIDIA nas configurações do perfil." });
+      const dsKey = resolveDeepSeekKey(profile?.deepseekApiKey, process.env.DEEPSEEK_API_KEY);
+      if (!finalApiKey && !nvidiaApiKey && !dsKey) {
+        return res.status(400).json({ error: "Configure a API key do DeepSeek, Gemini ou NVIDIA nas configurações do perfil." });
       }
 
       const cur = currency || "BRL";
@@ -657,8 +697,16 @@ Fale de forma natural, sem saudações como "Olá" ou "Amigo".`;
       let analysis = "";
       let geminiFailed = false;
 
+      // 0. #54 — DeepSeek PRIMEIRO (ordem: DeepSeek → Gemini → NVIDIA → local)
+      if (dsKey) {
+        safeLog("[analyze] Trying DeepSeek...");
+        analysis = (await deepseekText(prompt, { apiKey: dsKey })) || "";
+        if (analysis) safeLog("[analyze] DeepSeek OK");
+        else safeLog("[analyze] DeepSeek sem resposta — seguindo cadeia");
+      }
+
       // 1. Try Gemini
-      if (ai) {
+      if (!analysis && ai) {
         for (let attempt = 1; attempt <= 2; attempt++) {
           try {
             const response = await ai.models.generateContent({

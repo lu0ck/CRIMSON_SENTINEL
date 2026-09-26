@@ -39,6 +39,8 @@ export interface Profile {
   telegramChatId?: string;
   gmailUser?: string;
   gmailPass?: string;
+  // #54 — DeepSeek é o PRINCIPAL provedor de interpretação (texto e imagem)
+  deepseekApiKey?: string;
   geminiApiKey?: string;
   lmStudioUrl?: string;
   nvidiaApiKey?: string;
