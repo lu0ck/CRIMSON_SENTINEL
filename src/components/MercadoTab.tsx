@@ -590,7 +590,7 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         setScanProgress(p)
       );
       const rv = result || {};
-      const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}${rv.socialDependent ? ` • SOCIAL ${rv.socialDependent}` : ""}`;
+      const summary = `REGISTRADAS ${rv.recorded ?? 0} • DUP ${rv.duplicates ?? 0} • ERROS ${rv.errors ?? 0}${rv.socialDependent ? ` • SOCIAL ${rv.socialDependent}` : ""}${rv.swept ? ` • PROMOÇÕES ${rv.swept}` : ""}${rv.promoHits ? ` • PROMO-CACHE ${rv.promoHits}` : ""}`;
       playSound(rv.errors > 0 ? "error" : "scan");
       toast(
         `SCAN DE PREÇOS CONCLUÍDO (${rv.establishments ?? 0} EST.)`,
@@ -1302,6 +1302,8 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
               <span className="font-mono text-[10px] text-crimson/50">
                 ✅ {lastScan.rv?.recorded ?? 0} • DUP {lastScan.rv?.duplicates ?? 0} • ⚠ {lastScan.rv?.errors ?? 0}
                 {(lastScan.rv?.socialDependent ?? 0) > 0 ? ` • SOCIAL ${lastScan.rv.socialDependent}` : ""}
+                {(lastScan.rv?.swept ?? 0) > 0 ? ` • PROMOÇÕES ${lastScan.rv.swept}` : ""}
+                {(lastScan.rv?.promoHits ?? 0) > 0 ? ` • PROMO-CACHE ${lastScan.rv.promoHits}` : ""}
               </span>
             </div>
             <div className="flex flex-col gap-1">

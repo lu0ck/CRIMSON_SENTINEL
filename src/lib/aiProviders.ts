@@ -130,3 +130,16 @@ export function extractJsonObject(text: string | null | undefined): any | null {
     return null;
   }
 }
+
+/** #55 — Extrai o primeiro ARRAY JSON válido (varredura de promoções). */
+export function extractJsonArray(text: string | null | undefined): any[] | null {
+  if (!text) return null;
+  const m = text.match(/\[[\s\S]*\]/);
+  if (!m) return null;
+  try {
+    const parsed = JSON.parse(m[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
+    return Array.isArray(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}

@@ -27,6 +27,7 @@ import { filterAndDedupe, isProductUrl, buildSearchQuery, sameProduct } from "..
 import { normalizeProductUrl } from "../lib/url";
 import { AI_MODELS } from "../lib/aiModels";
 import { deepseekText, resolveDeepSeekKey } from "../lib/aiProviders";
+import { sweepEstablishmentOffers, saveSweptOffers, isOffersPageUrl } from "../lib/offerSweep";
 
 const COMPARE_SEARCH_TIMEOUT_MS = 20_000;
 const COMPARE_CONFIRM_TIMEOUT_MS = 90_000; // #51 — 30s matava antes de renderizar
@@ -835,8 +836,9 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
   const outcomes: LocalPriceScanOutcome[] = [];
   // #52 — progresso global: est. com priceUrl = 1 passo por item; sem priceUrl
   // (tier social) = 1 passo. Emite por item/estratégia p/ a UI da aba MERCADO.
+  // #55 — página de ofertas (priceUrl sem {term}) ganha +1 passo: a varredura.
   const stepsOf = (e: import("../types").Establishment) =>
-    e.priceUrl ? Math.max(1, items.length) : 1;
+    e.priceUrl ? Math.max(1, items.length) + (isOffersPageUrl(e.priceUrl) ? 1 : 0) : 1;
   const totalSteps = targets.reduce((a, e) => a + stepsOf(e), 0) || 1;
   let doneSteps = 0;
   let gRec = 0, gDup = 0, gErr = 0, gSocial = 0;
@@ -853,6 +855,44 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     .catch(() => {});
 
   for (const est of targets) {
+    // #55 — varredura da página de ofertas: 1 render → array de promoções
+    // salvo com validade (promo-cache alimenta o loop de itens em seguida).
+    let swept = 0;
+    if (isOffersPageUrl(est.priceUrl)) {
+      void job
+        .updateProgress({
+          current: doneSteps,
+          total: totalSteps,
+          establishmentName: est.name,
+          label: `varrendo ofertas: ${est.name}`,
+        })
+        .catch(() => {});
+      try {
+        const offers = await sweepEstablishmentOffers(est, {
+          deepseekApiKey: apiKeys.deepseekApiKey,
+          geminiApiKey: apiKeys.geminiApiKey,
+        });
+        if (offers && offers.length > 0) {
+          swept = saveSweptOffers(est, offers).saved;
+          safeLog(`[local-price-scan] varredura ${est.name}: ${swept} promoções salvas (promo-cache ativo)`);
+        } else {
+          safeLog(`[local-price-scan] varredura ${est.name}: nenhuma promoção extraída`);
+        }
+      } catch (err: any) {
+        safeLog(`[local-price-scan] varredura falhou em ${est.name}: ${err?.message || err}`);
+      }
+      doneSteps += 1;
+      void job
+        .updateProgress({
+          current: doneSteps,
+          total: totalSteps,
+          establishmentName: est.name,
+          label: `ofertas varridas: ${est.name}`,
+          swept,
+        })
+        .catch(() => {});
+    }
+
     // #32 — sem price_url: cascade market-handler / social-dependent dentro de scanEstablishmentPrices
     safeLog(`[scan-worker] local-price-scan ${est.name} (${items.length} itens)`);
     const estBase = doneSteps;
@@ -875,6 +915,9 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
         })
         .catch(() => {});
     });
+    // #55 — varredura + itens atendidos pelo promo-cache (método promo-vigente)
+    outcome.swept = swept;
+    outcome.promoHits = outcome.results.filter((r) => r.method?.startsWith("promo-vigente")).length;
     outcomes.push(outcome);
     doneSteps += stepsOf(est);
     gRec += outcome.recorded;
@@ -929,6 +972,9 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
   const duplicates = outcomes.reduce((a, o) => a + o.duplicates, 0);
   const errors = outcomes.reduce((a, o) => a + o.errors, 0);
   const socialDependent = outcomes.reduce((a, o) => a + (o.socialDependent || 0), 0);
+  // #55 — totais da varredura/promo-cache
+  const swept = outcomes.reduce((a, o) => a + (o.swept || 0), 0);
+  const promoHits = outcomes.reduce((a, o) => a + (o.promoHits || 0), 0);
 
   // #52 — resumo em ALERTAS: scan manual SEMPRE registra (cooldown 0); cron/bulk
   // só quando houve erro (cooldown 1h evita spam do agendador).
@@ -968,6 +1014,8 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     const message =
       `Registrados: ${recorded} • Duplicados: ${duplicates} • Erros: ${errors}` +
       `${socialDependent ? ` • Social: ${socialDependent}` : ""}` +
+      `${swept ? ` • Varredura: ${swept} promoções` : ""}` +
+      `${promoHits ? ` • Promo-cache: ${promoHits} itens` : ""}` +
       (lines.length ? `\n${lines.join("\n")}` : "");
     recordInAppAlert("local-scan", establishmentId || "cron", title, message, establishmentId ? 0 : 1);
   }
@@ -979,6 +1027,8 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     duplicates,
     errors,
     socialDependent,
+    swept,
+    promoHits,
     outcomes,
   };
 }

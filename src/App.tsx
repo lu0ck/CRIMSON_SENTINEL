@@ -53,6 +53,7 @@ import {
 import { Product, ProductList, Profile, AppData } from "./types";
 import { generateProductId, isSearchUrl } from "./lib/url";
 import { dayKey, dayLabel } from "./lib/priceHistory";
+import { promoMatchesItem } from "./lib/promoMatch";
 import { LocalTab } from "./components/LocalTab";
 import { MercadoTab } from "./components/MercadoTab";
 import { BackupPanel } from "./components/BackupPanel";
@@ -1479,6 +1480,36 @@ const queued = await response.json();
       setLastAddSummary({ ok: successCount, failed: failed.length });
 
       if (!cancelled) {
+        // #55 — promoção vigente: se um produto recém-adicionado está em promoção
+        // (cache com validade), avisa onde está mais barato AGORA, sem nova busca.
+        if (successCount > 0) {
+          try {
+            const [promos, ests] = await Promise.all([
+              fetch("/api/promotions?onlyActiveOrFlash=true").then((r) => r.json()),
+              fetch("/api/establishments").then((r) => r.json()),
+            ]);
+            const estNames = new Map<string, string>(
+              (Array.isArray(ests) ? ests : []).map((e: any) => [e.id, e.name])
+            );
+            const hits: string[] = [];
+            for (const r of batchResults) {
+              if (hits.length >= 3) break;
+              if (!r.success || !r.name) continue;
+              const hit = (Array.isArray(promos) ? promos : []).find((p: any) =>
+                promoMatchesItem(p.productName, r.name!)
+              );
+              if (hit) {
+                hits.push(
+                  `${hit.productName} — ${estNames.get(hit.establishmentId) || "loja"} R$ ${hit.promoPrice}` +
+                    `${hit.expiresAt ? ` (até ${String(hit.expiresAt).slice(0, 10)})` : ""}`
+                );
+              }
+            }
+            if (hits.length > 0) addToast("EM PROMOÇÃO — mais barato agora", "info", hits.join("\n"));
+          } catch {
+            /* silencioso — promoção é best-effort */
+          }
+        }
         setNewUrls([""]);
         setSystemMessage(`SEQUENCE COMPLETE: ${successCount} ACQUIRED, ${failed.length} FAILED`);
         if (successCount > 0) addToast(`${successCount} TARGETS LOGGED TO ARCHIVE`, "success");

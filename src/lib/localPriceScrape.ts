@@ -18,6 +18,7 @@ import {
   searchMarketPrice,
   type MarketSearchKeys,
 } from "./market-handlers";
+import { findActivePromo } from "./offerSweep";
 
 export interface LocalScrapeResult {
   itemId: string;
@@ -60,6 +61,10 @@ export interface LocalPriceScanOutcome {
   socialDependent?: number;
   /** Motivo legível do socialDependent (tier 2/3). */
   socialReason?: string;
+  /** #55 — promoções extraídas da página de ofertas neste scan (varredura). */
+  swept?: number;
+  /** #55 — itens atendidos pelo promo-cache (promoção vigente, sem re-busca). */
+  promoHits?: number;
 }
 
 export type LocalScrapeApiKeys = {
@@ -282,6 +287,32 @@ export async function scrapeItemPrice(
   apiKeys: LocalScrapeApiKeys,
   opts?: { maxPriceTolerance?: number; onStrategyProgress?: (p: ScrapeProgressInfo) => void }
 ): Promise<LocalScrapeResult> {
+  // #55 — promo-cache: promoção vigente desta loja que cobre o item → usa o
+  // preço da promo SEM re-buscar (validade em promotions.expires_at; preenche
+  // o histórico p/ "onde está mais barato" na hora).
+  const promo = findActivePromo(establishment.id, item.name);
+  if (promo) {
+    const st = recordObservation(
+      establishment,
+      item,
+      promo.promoPrice,
+      `promo-cache:${promo.source || "sweep"}`,
+      "promocao-vigente"
+    );
+    safeLog(
+      `[local-scrape] PROMO-CACHE ${item.name} @ ${establishment.name}: R$ ${promo.promoPrice} (promo ${promo.id}, até ${(promo.expiresAt || "").slice(0, 10)})`
+    );
+    return {
+      itemId: item.id,
+      itemName: item.name,
+      establishmentId: establishment.id,
+      status: st,
+      price: promo.promoPrice,
+      method: `promo-vigente(${(promo.expiresAt || promo.endDate || "").slice(0, 10)})`,
+      url: promo.sourceUrl || establishment.priceUrl || "",
+    };
+  }
+
   if (establishment.priceUrl) {
     return scrapeViaPriceUrl(establishment, item, apiKeys, opts);
   }
