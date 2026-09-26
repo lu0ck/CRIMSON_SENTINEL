@@ -1384,3 +1384,25 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Efeito no fluxo:** SCAN PREÇOS no Tático = 1 render da página de ofertas → promoções salvas com validade → itens da lista batem com a promo (sem re-busca) e registram histórico `promocao-vigente`; ADD de produto em promoção mostra na hora a loja mais barata. Com Gemini 429 e DeepSeek sem chave a varredura degrada para `null` sem quebrar o scan (itens seguem pelo caminho normal).
 
 **Arquivos:** `src/lib/promoMatch.ts` (novo), `src/lib/offerSweep.ts` (novo), `src/lib/aiProviders.ts`, `src/lib/localPriceScrape.ts`, `src/workers/scanWorker.ts`, `src/components/MercadoTab.tsx`, `src/App.tsx`, `.env.example`.
+
+## 6.41 fix: scan do Tático → "ERROS 2" (varredura vazia + cascata `?q=` inútil) (#56)
+
+**Contexto:** scan manual do Tático (2 itens) falhou com `ERROS 2 • Registrados 0` — tudo cascata `?q=<item>` queimando 7 strategies (~90s/item). Log do worker mostrou a varredura #55 rodando mas extraindo **0 promoções**: DeepSeek sem chave (skip), Gemini vision **503** e Gemini **429** (bloqueado 1h).
+
+**Causas encadeadas:**
+1. **Varredura dependia de 1 screenshot + IA disponível** — sem chave/IA, promo-cache ficava vazio.
+2. **Sem promo, `scrapeViaPriceUrl` montava `.../ofertas/?q=<item>` — e a página IGNORA o parâmetro** (sempre mostra o encarte inteiro). Inspeção do DOM: **o encarte do Tático é 100% IMAGEM** (cartazes "Cuidar Bem" válidos 17–30/09/2026; `document.body.innerText` = só menu/footer; **zero** `R$` no HTML de 68KB). Item ausente do encarte + IA fora = falha total com erro genérico.
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Render multi-captura | `offerSweep.ts renderOffersPage` | N capturas de viewport (até **6**, 900px por passo, durante o scroll de lazy-load) — cobre encartes longos; retorna `{captures[], text}` |
+| B | Cadeia IA → det | `offerSweep.ts` | **DeepSeek vision (todas capturas, merge) → Gemini vision → DeepSeek text → Gemini text → `extractDetOffers`** (decisão do operador). Provider que quebra numa captura → passa pro próximo provedor; merge/dedupe via `sanitizeOffers`; prompt de "captura de encarte (ofertas podem estar em imagens de cartaz)" |
+| C | Parser determinístico | `extractDetOffers` (export) | linha `R$ X,XX` → nome = até 2 linhas alfabéticas acima → `sanitizeOffers`. **Não serve p/ o Tático** (sem texto) — é o último recurso de páginas textuais |
+| D | Branch offers-page | `localPriceScrape.ts scrapeItemPrice` | opt `offersPage {swept}`: promo-cache primeiro; senão `swept>0` → status **`notFound`** "fora das ofertas de hoje" (não conta erro, **0 strategies**); `swept=0` → **error curto** "varredura não extraiu promoções — sem chave de IA ou IA indisponível" (conta erro → alerta honesto). **Nunca monta `?q=` em ofertas-page** |
+| E | Encadeamento + UI | `scanWorker.ts`, `MercadoTab.tsx` | `handleLocalPriceScan` repassa `{swept}` só p/ est de ofertas; `statusLabel` do alerta `🚫 fora das ofertas de hoje`; `localStatusMeta` → `FORA DAS OFERTAS` (zinc, não-erro → alerta vira `CONCLUÍDO` quando só há notFound) |
+
+**Validação #56:** `npm run lint` → 0. Teste offline (`/tmp/opencode/test56.mjs`): **8/8** — det (nome acima, pt-BR, descarta inválido/sem nome, 2 linhas na ordem), branch `notFound`/`varredura-vazia` (sem `?q=`), promo-cache vence o branch, cascata normal preservada sem a flag, `scanEstablishmentPrices` repassa + notFound não conta erro; regressão do #55 **8/8**. Smoke (`/tmp/opencode/smoke56.mjs`): **4/4** — Tático real: **6 capturas em 10.5s** → `null` graceful sem chave; caminho degradado do item **0.0s** sem strategies; det=0 no innerText do Tático. PM2 restart.
+
+**Limitação:** com Gemini 503/429 e DeepSeek sem chave, a varredura do Tático continua salvando **0** (o encarte é imagem — exige visão); o scan agora **não gera mais cascata inútil**, mas extrai promoções de fato só com alguma chave de visão ativa (DeepSeek em AI CORE PARAMETERS quando disponível). O parser det cobre páginas com texto de preço.
+
+**Arquivos:** `src/lib/offerSweep.ts`, `src/lib/localPriceScrape.ts`, `src/workers/scanWorker.ts`, `src/components/MercadoTab.tsx`.
