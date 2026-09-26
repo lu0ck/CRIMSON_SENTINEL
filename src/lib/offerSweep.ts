@@ -45,11 +45,18 @@ export interface SweepKeys {
 const SWEEP_TTL_HOURS = Number(process.env.SWEEP_TTL_HOURS || 24);
 const SWEEP_MAX_OFFERS = 200;
 
+// #58 — transcrição LITERAL: o llama-11b "leu" "Condicionador TRESemmé" como
+// "Condominio Tresseme" (aproximou o nome em vez de transcrever) e errava
+// dígitos de preço. Regra nova: descartar > inventar; conferir cada dígito.
 const SWEEP_PROMPT =
   "Esta é uma captura de parte de um encarte/página de ofertas de supermercado " +
   "(as ofertas podem estar impressas em imagens de cartaz). Extraia TODAS as promoções visíveis NESTA captura. " +
+  "REGRA DE OURO: transcreva o texto de cada produto EXATAMENTE como está impresso no cartaz " +
+  "(marca, variedade, sabor, tamanho) — sem corrigir, sem aproximar, sem inventar ou adivinhar palavras. " +
+  "Se não conseguir ler o nome OU o preço com clareza, NÃO inclua o item (melhor menos itens que itens errados). " +
+  "Confira cada dígito do preço contra a imagem; preço promocional sempre com 2 casas decimais. " +
   "Responda APENAS com JSON array válido, sem markdown: " +
-  '[{"name":"NOME DO PRODUTO","price":12.34,"regularPrice":45.6}] ' +
+  '[{"name":"NOME DO PRODUTO EXATAMENTE COMO IMPRESSO","price":12.34,"regularPrice":45.6}] ' +
   "- price = preço promocional em BRL (obrigatório); regularPrice = preço normal (opcional, só se visível). " +
   "Inclua apenas produtos com preço claramente visível; máximo 40 itens.";
 
@@ -106,6 +113,9 @@ async function renderOffersPage(url: string): Promise<OfferRender | null> {
     const context = await browser.newContext({
       userAgent: UA,
       viewport: { width: 1280, height: 960 },
+      // #58 — texto de cartaz em 1x saía borrado p/ VLM (dígitos errando);
+      // 2x → PNG 2560x1920, transcrição muito mais confiável.
+      deviceScaleFactor: 2,
       locale: "pt-BR",
     });
     const page = await context.newPage();
