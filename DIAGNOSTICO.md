@@ -1360,7 +1360,7 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 **Validação #54:** `npm run lint` → 0. Teste offline da cadeia (`/tmp/opencode/test54.mjs`, mock HTTP OpenAI-compatible): **18/18** — modelos corretos (`deepseek-v4-flash` / `deepseek-v4-flash-vision-exp`), `temperature: 0`, system+user, data-URL da imagem, 500 → `null` (fallback), sem chave → `null`, helpers (`resolveDeepSeekKey`, `extractJsonObject` com fence/ao redor). Smoke Playwright: **8/8** — header `DEEPSEEK`, campo nas settings, roundtrip salvar → reload → `available: true` → limpar → `false`, estado do DB restaurado (`NULL`). Restart PM2 (7 processos online), coluna `deepseek_api_key` criada, `/api/status` devolve `deepseek.available`.
 
-**Para ativar:** SETTINGS → `DEEPSEEK API KEY (PRINCIPAL)` (platform.deepseek.com) ou `DEEPSEEK_API_KEY` no `.env`. LM Studio segue offline — para o último elo (imagem local) carregar `qwen2.5-vl-7b-instruct`.
+**Para ativar:** SETTINGS → `DEEPSEEK API KEY (PRINCIPAL)` (platform.deepseek.com) ou `DEEPSEEK_API_KEY` no `.env`. LM Studio segue offline — para o último elo (imagem local) carregar `Qwen2.5-VL-3B-Instruct` (GGUF Q4_K_M + mmproj; **3B, não 7B** — a máquina tem GTX 960 de 2GB VRAM, §6.42).
 
 **Arquivos:** `src/lib/aiProviders.ts` (novo), `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, `src/workers/socialWorker.ts`, `src/lib/market-handlers.ts`, `src/lib/localPriceScrape.ts`, `src/lib/socialParse.ts`, `server.ts`, `src/App.tsx`, `src/types.ts`, `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/types.ts`, `src/repositories/profileRepository.ts`, `.env.example`.
 
@@ -1406,3 +1406,29 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Limitação:** com Gemini 503/429 e DeepSeek sem chave, a varredura do Tático continua salvando **0** (o encarte é imagem — exige visão); o scan agora **não gera mais cascata inútil**, mas extrai promoções de fato só com alguma chave de visão ativa (DeepSeek em AI CORE PARAMETERS quando disponível). O parser det cobre páginas com texto de preço.
 
 **Arquivos:** `src/lib/offerSweep.ts`, `src/lib/localPriceScrape.ts`, `src/workers/scanWorker.ts`, `src/components/MercadoTab.tsx`.
+
+## 6.42 feature: NVIDIA vision + LM Studio na varredura de ofertas (#57)
+
+**Contexto:** com #56 a varredura rodava mas, sem DeepSeek e com Gemini na cota de **20 req/dia** (free tier `gemini-3.6-flash`), só restava fallback frágil; NVIDIA e LM Studio — presentes na cadeia global (#54) — **não eram consultados** pelo `sweepEstablishmentOffers`. Smoke com NVIDIA colado (chave ativa) devolveu **0 promoções em 507s** sem nenhum erro visível.
+
+**Diagnóstico:**
+1. **Truncagem silenciosa** — `finish_reason=length` em 2000 tokens: o JSON do encarte inteiro não fechava → `extractJsonArray` → `null` → provider era pulado como "sem resposta". Corrigido com `max_tokens: 3000` + **repair de truncagem**.
+2. **Preço com vírgula** — `llama-3.2-11b-vision` gera `"price": 22,78` (decimal **sem aspas** → JSON inválido em TODOS os itens). Medido via curl: 92s/chamada, resposta real com `22,78`/`0,99`.
+3. **Gemini sem timeout** — SDK `@google/genai` pendurou **6min sem log** (o 429 mascarava antes; com quota liberada a chamada travou). Adicionado `AbortSignal.timeout(45s)`.
+4. **Catálogo NVIDIA** (82 modelos sondados com a chave do operador): `meta/llama-3.2-11b-vision-instruct` ✓ (extraiu preços reais do encarte), `microsoft/phi-3-vision-128k-instruct` → 404 "Not found for account", `meta/llama-3.2-90b-vision-instruct` → timeout 180s. Lista final = env `NVIDIA_VISION_MODEL` + 11b.
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Cadeia da varredura | `offerSweep.ts` | ordem final: **1 DeepSeek vision → 2 Gemini vision → 3 NVIDIA vision → 4 DeepSeek text → 5 Gemini text → 6 LM Studio vision → 7 det**; prompt "máximo 40 itens" |
+| B | `nvidiaVision` | `offerSweep.ts` | OpenAI-compat `https://integrate.api.nvidia.com/v1`, `max_tokens 3000`, `temperature 0`, timeout **300s** (`NVIDIA_SWEEP_TIMEOUT_MS`; medido ~92s, pico estourou 150s no smoke) — timeout **aborta o provider** (senão 6×300s = 30min de pior caso) |
+| C | `lmStudioVision` | `offerSweep.ts` | **último da varredura** (decisão do operador): gate `${lmUrl}/models` 2.5s, modelo = `data[0].id`, **protegido**: 2 capturas, `max_tokens 1500`, timeout 90s |
+| D | Robustez do parse | `aiProviders.ts extractJsonArray` | **repair de truncagem** (slice `[`→último `}` + `]`) e **normalização de preço com vírgula** `("price"\s*:\s*)(\d+),(\d+)` → `"22.78"` (sanitizeOffers tolera string) — nos dois parse |
+| E | Gates + wire-up | `offerSweep.ts`, `scanWorker.ts` | Gemini `abortSignal: AbortSignal.timeout(45s)` (`GEMINI_SWEEP_TIMEOUT_MS`); `SweepKeys` + `nvidiaApiKey`/`lmStudioUrl`; `handleLocalPriceScan` repassa ambas |
+
+**Validação #57:** `npm run lint` → 0. Teste offline (`/tmp/opencode/test57.mjs`): **7/7** — sem chave → det, porta morta do LM não trava, repair de truncagem (2 itens fechados), preço com vírgula (parse + sanitize); regressões **#55 8/8** e **#56 8/8**. Smoke REAL (`/tmp/opencode/smoke57.mjs`, Tático): **3/3** — **80 promoções** extraídas pela NVIDIA vision em **6 capturas/587.7s**, 80 salvas com `expires_at` +24h (`source=sweep`), `findActivePromo` achou probe. Curl isolado: 92s/chamada, `finish_reason=length` + `22,78` (motivo das correções D). PM2 restart (7 online).
+
+**Limitações:** Gemini free tier = **20 req/dia** (hoje estourado → Gemini cai fora naturalmente); NVIDIA free tier leva ~10min para as 6 capturas; sem nenhuma chave de visão a varredura do Tático continua 0 (encarte 100% imagem) com a mensagem honesta do #56.
+
+**Para ativar:** NVIDIA/Gemini já nas chaves do perfil. **LM Studio** (último da varredura): baixar **`Qwen2.5-VL-3B-Instruct`** GGUF **Q4_K_M** + `mmproj` (~2GB — a máquina tem GTX 960 **2GB VRAM**; o 7B não cabe; correção da sugestão antiga `qwen2.5-vl-7b-instruct`), carregar no LM Studio e salvar a URL em `LM STUDIO URL` em AI CORE PARAMETERS (coluna `lm_studio_url` hoje `NULL`). Env opcional: `NVIDIA_VISION_MODEL`, `NVIDIA_SWEEP_TIMEOUT_MS`, `GEMINI_SWEEP_TIMEOUT_MS`.
+
+**Arquivos:** `src/lib/offerSweep.ts`, `src/lib/aiProviders.ts`, `src/workers/scanWorker.ts`.
