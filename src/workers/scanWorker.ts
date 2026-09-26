@@ -896,7 +896,11 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
     // #32 — sem price_url: cascade market-handler / social-dependent dentro de scanEstablishmentPrices
     safeLog(`[scan-worker] local-price-scan ${est.name} (${items.length} itens)`);
     const estBase = doneSteps;
-    const outcome = await scanEstablishmentPrices(est, items, apiKeys, (p) => {
+    const outcome = await scanEstablishmentPrices(
+      est,
+      items,
+      apiKeys,
+      (p) => {
       void job
         .updateProgress({
           current: estBase + p.index,
@@ -914,7 +918,10 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
           socialDependent: gSocial,
         })
         .catch(() => {});
-    });
+      },
+      // #56 — página de ofertas: itens sem promo viram notFound/erro curto (sem `?q=`)
+      isOffersPageUrl(est.priceUrl) ? { offersPage: { swept } } : undefined
+    );
     // #55 — varredura + itens atendidos pelo promo-cache (método promo-vigente)
     outcome.swept = swept;
     outcome.promoHits = outcome.results.filter((r) => r.method?.startsWith("promo-vigente")).length;
@@ -990,6 +997,8 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
           return `⏭️ duplicado (R$ ${r.price ?? "?"})`;
         case "no-price":
           return "➖ sem preço";
+        case "notFound":
+          return `🚫 ${r.error || "fora das ofertas de hoje"}`;
         case "error":
           return `❌ ${r.error || "erro no scrape"}`;
         default:

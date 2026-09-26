@@ -24,7 +24,11 @@ export interface LocalScrapeResult {
   itemId: string;
   itemName: string;
   establishmentId: string;
-  status: "recorded" | "duplicate" | "no-price" | "error" | "social-dependent";
+  /**
+   * #56 — "notFound": página de ofertas varrida com sucesso mas o item não
+   * está entre as promoções atuais (não conta como erro, não queima strategies).
+   */
+  status: "recorded" | "duplicate" | "no-price" | "error" | "social-dependent" | "notFound";
   price?: number;
   method?: string;
   error?: string;
@@ -285,7 +289,12 @@ export async function scrapeItemPrice(
   establishment: Establishment,
   item: ShoppingListItem,
   apiKeys: LocalScrapeApiKeys,
-  opts?: { maxPriceTolerance?: number; onStrategyProgress?: (p: ScrapeProgressInfo) => void }
+  opts?: {
+    maxPriceTolerance?: number;
+    onStrategyProgress?: (p: ScrapeProgressInfo) => void;
+    /** #56 — est. de página de ofertas varrida neste job ({swept: 0} = varredura vazia). */
+    offersPage?: { swept: number };
+  }
 ): Promise<LocalScrapeResult> {
   // #55 — promo-cache: promoção vigente desta loja que cobre o item → usa o
   // preço da promo SEM re-buscar (validade em promotions.expires_at; preenche
@@ -310,6 +319,30 @@ export async function scrapeItemPrice(
       price: promo.promoPrice,
       method: `promo-vigente(${(promo.expiresAt || promo.endDate || "").slice(0, 10)})`,
       url: promo.sourceUrl || establishment.priceUrl || "",
+    };
+  }
+
+  // #56 — página de ofertas (priceUrl sem {term}): `?q=<item>` é ignorado pelo
+  // site (sempre mostra o encarte inteiro) → NUNCA entra na cascata de scrape.
+  // Varredura OK + sem promo p/ o item = fora do encarte de hoje; varredura
+  // vazia = erro curto (IA indisponível em vez de 7 strategies queimadas).
+  if (opts?.offersPage) {
+    const base = { itemId: item.id, itemName: item.name, establishmentId: establishment.id, url: establishment.priceUrl || "" };
+    if (opts.offersPage.swept > 0) {
+      safeLog(`[local-scrape] FORA DAS OFERTAS ${item.name} @ ${establishment.name} (varredura: ${opts.offersPage.swept} promoções)`);
+      return {
+        ...base,
+        status: "notFound",
+        method: "fora-das-ofertas",
+        error: "fora das ofertas de hoje",
+      };
+    }
+    safeLog(`[local-scrape] varredura vazia em ${establishment.name} → ${item.name} sem cascata ?q=`);
+    return {
+      ...base,
+      status: "error",
+      method: "varredura-vazia",
+      error: "varredura não extraiu promoções — sem chave de IA ou IA indisponível (ver DeepSeek/Gemini)",
     };
   }
 
@@ -339,7 +372,8 @@ export async function scanEstablishmentPrices(
   establishment: Establishment,
   items: ShoppingListItem[],
   apiKeys: LocalScrapeApiKeys,
-  onItemProgress?: LocalScrapeProgressCallback
+  onItemProgress?: LocalScrapeProgressCallback,
+  opts?: { offersPage?: { swept: number } }
 ): Promise<LocalPriceScanOutcome> {
   const base = {
     establishmentId: establishment.id,
@@ -391,6 +425,7 @@ export async function scanEstablishmentPrices(
     results.push(
       await scrapeItemPrice(establishment, item, apiKeys, {
         onStrategyProgress: (p) => emit(p.strategy, p.triedCount, p.totalStrategies),
+        offersPage: opts?.offersPage,
       })
     );
     emit(); // item concluído (contagens atualizadas)

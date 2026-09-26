@@ -625,6 +625,8 @@ export function MercadoTab({ addToast, playSound, pollJob, profileId }: MercadoT
         return { cls: "text-crimson/40", label: "DUPLICADO" };
       case "no-price":
         return { cls: "text-amber-500/70", label: "SEM PREÇO" };
+      case "notFound":
+        return { cls: "text-zinc-400", label: "FORA DAS OFERTAS" };
       case "error":
         return { cls: "text-red-500", label: "ERRO" };
       default:
