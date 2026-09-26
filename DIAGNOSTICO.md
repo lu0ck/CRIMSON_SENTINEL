@@ -1363,3 +1363,24 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Para ativar:** SETTINGS → `DEEPSEEK API KEY (PRINCIPAL)` (platform.deepseek.com) ou `DEEPSEEK_API_KEY` no `.env`. LM Studio segue offline — para o último elo (imagem local) carregar `qwen2.5-vl-7b-instruct`.
 
 **Arquivos:** `src/lib/aiProviders.ts` (novo), `src/lib/scraper.ts`, `src/workers/scanWorker.ts`, `src/workers/socialWorker.ts`, `src/lib/market-handlers.ts`, `src/lib/localPriceScrape.ts`, `src/lib/socialParse.ts`, `server.ts`, `src/App.tsx`, `src/types.ts`, `src/database/schema.sql`, `src/database/db.ts`, `src/repositories/types.ts`, `src/repositories/profileRepository.ts`, `.env.example`.
+
+## 6.40 feature: varredura da página de ofertas + promo-cache na lista (#55)
+
+**Contexto:** só 1 estabelecimento tem `price_url` (Tático → `.../gyn/ofertas/`, página de ofertas SEM `{term}`) — `buildSearchUrl` appendava `?q=<item>` e a IA devolvia preço errado (ex.: R$750). Operador pediu: **varrer a página de ofertas** (salvando promoções com **prazo de validade** — reuso sem re-busca durante a vigência) + **busca item-a-item de TODOS**, e ao **adicionar um produto na lista** o sistema **diz onde está mais barato na hora** (histórico com validade evita busca repetida).
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Matcher promoção↔item | `src/lib/promoMatch.ts` (novo, puro) | `promoTokens` (normalizeText + stopwords + len>2) e `promoMatchesItem`: todos os tokens do item ⊆ tokens da promo **ou** vice-versa |
+| B | Varredura de ofertas | `src/lib/offerSweep.ts` (novo) | `isOffersPageUrl` (priceUrl sem `{term}`), `renderOffersPage` (Playwright 1×, scroll p/ lazy-load, screenshot + `innerText` 12k), cadeia **DeepSeek vision → DeepSeek text → Gemini vision → Gemini text** (`AI_MODELS`, JSON array máx. 150), `sanitizeOffers` (nome≥4, preço válido tolerando `"12,90"`/`"R$ …"`, dedupe por normalização menor preço, cap 200) |
+| C | Promoção com validade | `saveSweptOffers` | id determinístico `sweep-{est}\|hash(nome)` upsert em `promotions` (`source="sweep"`, `expiresAt` = now+`SWEEP_TTL_HOURS`, padrão 24h env); página é fonte da verdade → sweep anterior que sumiu da página fica **inativo** |
+| D | Promo-cache no scan | `localPriceScrape.ts` `scrapeItemPrice` | topo: `findActivePromo` (vigente + `promoMatchesItem`; **nome exato vence variante**, menor preço) → `recordObservation(..., "promocao-vigente")` e retorna method `promo-vigente(aaaa-mm-dd)` **sem re-buscar**; outcome ganha `swept`/`promoHits` |
+| E | Passo de varredura | `scanWorker.handleLocalPriceScan` | por est alvo com ofertas-page: step extra "varrendo ofertas" antes do loop (+1 em `stepsOf`), total agregado no alerta (`• Varredura: n promoções • Promo-cache: n itens`) e no `return` do job |
+| F | UI MERCADO | `MercadoTab.tsx` | resumo + card ÚLTIMO SCAN com `PROMOÇÕES n` / `PROMO-CACHE n` |
+| G | Pull na hora do ADD | `App.tsx addProduct` | após lote com sucesso: `GET /api/promotions?onlyActiveOrFlash=true` + `/api/establishments`, casamento via `promoMatchesItem` nos nomes adquiridos → toast `EM PROMOÇÃO — mais barato agora` (loja, preço, validade; máx 3), **sem nova busca** |
+| H | — | `aiProviders.ts`, `.env.example` | `extractJsonArray` (fence-tolerant, arrays); `SWEEP_TTL_HOURS=24` |
+
+**Validação #55:** `npm run lint` → 0. Teste offline (`/tmp/opencode/test55.mjs`, DB temporário): **8/8** — matcher (subset/bidirecional/stopwords), `extractJsonArray`, `sanitizeOffers` (dedupe/filtro/pt-BR), `isOffersPageUrl`, `saveSweptOffers` (upsert determinístico + inativação), `findActivePromo` (expirada/inativa/sem validade fora; exato > variante; sem falso positivo). Smoke (`/tmp/opencode/smoke55.mjs`): **4/4** — API de pé, **render real da página do Tático (10s, graceful `null` sem chave)**, save → cache → revarredura inativa → limpeza, endpoints do add-time hook. PM2 restart (scanWorker novo).
+
+**Efeito no fluxo:** SCAN PREÇOS no Tático = 1 render da página de ofertas → promoções salvas com validade → itens da lista batem com a promo (sem re-busca) e registram histórico `promocao-vigente`; ADD de produto em promoção mostra na hora a loja mais barata. Com Gemini 429 e DeepSeek sem chave a varredura degrada para `null` sem quebrar o scan (itens seguem pelo caminho normal).
+
+**Arquivos:** `src/lib/promoMatch.ts` (novo), `src/lib/offerSweep.ts` (novo), `src/lib/aiProviders.ts`, `src/lib/localPriceScrape.ts`, `src/workers/scanWorker.ts`, `src/components/MercadoTab.tsx`, `src/App.tsx`, `.env.example`.
