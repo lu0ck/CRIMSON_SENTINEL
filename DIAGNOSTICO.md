@@ -1432,3 +1432,16 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Para ativar:** NVIDIA/Gemini já nas chaves do perfil. **LM Studio** (último da varredura): baixar **`Qwen2.5-VL-3B-Instruct`** GGUF **Q4_K_M** + `mmproj` (~2GB — a máquina tem GTX 960 **2GB VRAM**; o 7B não cabe; correção da sugestão antiga `qwen2.5-vl-7b-instruct`), carregar no LM Studio e salvar a URL em `LM STUDIO URL` em AI CORE PARAMETERS (coluna `lm_studio_url` hoje `NULL`). Env opcional: `NVIDIA_VISION_MODEL`, `NVIDIA_SWEEP_TIMEOUT_MS`, `GEMINI_SWEEP_TIMEOUT_MS`.
 
 **Arquivos:** `src/lib/offerSweep.ts`, `src/lib/aiProviders.ts`, `src/workers/scanWorker.ts`.
+
+## 6.44 feature: botão ADD LISTA nos cards de promoção (#59)
+
+**Contexto:** a seção PROMOÇÕES do MercadoTab mostrava preço/validade e só tinha lixeira — para levar um item em promoção à lista de compras era preciso abrir o formulário do item e redigitar nome e preço à mão.
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Botão por card | `MercadoTab.tsx` (card de promoção) | ícone `ShoppingCart` ao lado da lixeira, `title="ADICIONAR ESTE ITEM À LISTA DE COMPRAS"` |
+| B | Add em 1 clique | `addPromotionToList` | `POST /api/shopping-list-items` com `listId` = **lista ativa** (`activeListId`), `quantity 1`, `unit UN`, `targetPrice` = preço promocional; **duplicado** (mesmo nome normalizado via `normalizeText` de `lib/text.ts`) → só toast `JÁ ESTÁ NA LISTA` sem POST; sucesso → `playSound` + toast `ADICIONADO À LISTA <nome-da-lista>` + `loadAll()` |
+
+**Validação #59:** `npm run lint` → 0 (front puro — sem backend novo, usa a rota existente de `shopping-list-items`).
+
+**Arquivos:** `src/components/MercadoTab.tsx`.
