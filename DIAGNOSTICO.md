@@ -1433,6 +1433,20 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 
 **Arquivos:** `src/lib/offerSweep.ts`, `src/lib/aiProviders.ts`, `src/workers/scanWorker.ts`.
 
+## 6.43 fix: varredura com nomes/preços errados ("Condominio Tresseme") (#58)
+
+**Contexto:** os 80 nomes extraídos pela NVIDIA (`llama-3.2-11b-vision`) estavam com erros grosseiros — "Condominio Tresseme" (o cartaz dizia **Condicionador TRESemmé**), "BARRA OREO ADO CROQUES" — e os preços erravam dígitos. O modelo **aproximava/inventava** o texto ilegível em vez de transcrever, e as capturas em escala 1x deixavam o texto de cartaz pequeno.
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Prompt de transcrição LITERAL | `offerSweep.ts SWEEP_PROMPT` | "REGRA DE OURO: transcreva EXATAMENTE como impresso (sem corrigir/aproximar/inventar)"; **descartar item ilegível** ("melhor menos itens que itens errados"); conferir cada dígito, preço sempre com 2 casas decimais |
+| B | Capturas nítidas | `renderOffersPage` | `deviceScaleFactor: 2` → PNG 2560x1920 (era 1280x960 com texto borrado p/ VLM) |
+| C | Ordem mantida | — | LM Studio continua **último** na cadeia (decisão do operador p/ testar o modelo local depois); cadeia não mudou |
+
+**Validação #58:** `npm run lint` → 0; regressão **#55 8/8 + #56 8/8 + #57 7/7**. Smoke real (`/tmp/opencode/smoke58.mjs`): limpou as 80 promoções sweep antigas do Tático (recriado como `est-1790461017866-vxqca4`) → re-varredura com prompt novo: **3/3**, **60 promoções** em 367s (Gemini 503 → NVIDIA), nomes sem nenhuma palavra inventada — exemplos reais: `Biscoito Club Social (450g)`, `Chocolate Hershey's (340g)`, `Queijo minas tradicional (500g)`, `Frango a passarinho sada com salada com legumes (250g)`; filtro anti-`condominio|tresseme` zerado. Ainda há transcrição parcial de cartaz sujo/ilegível (ex.: "SABRA" por "Sabra") — inerente ao VLM, mas sem mais "palavras que não existem". PM2 restart.
+
+**Arquivos:** `src/lib/offerSweep.ts`.
+
 ## 6.44 feature: botão ADD LISTA nos cards de promoção (#59)
 
 **Contexto:** a seção PROMOÇÕES do MercadoTab mostrava preço/validade e só tinha lixeira — para levar um item em promoção à lista de compras era preciso abrir o formulário do item e redigitar nome e preço à mão.
@@ -1445,3 +1459,18 @@ Consolidação de regras de normalização que estavam **duplicadas** em 2+ luga
 **Validação #59:** `npm run lint` → 0 (front puro — sem backend novo, usa a rota existente de `shopping-list-items`).
 
 **Arquivos:** `src/components/MercadoTab.tsx`.
+
+## 6.45 feature: scan diário com horário único "HH:MM" (remove intervalos) (#60)
+
+**Contexto:** decisão do operador — "inves de ser scan a cada x horas, o usuario escolhera o horario e todo dia uma vez por dia o sistema vai fazer scan automatico". Havia 3 frentes com intervalo próprio (e-commerce 1/6/12/24h via AUTO-REFRESH, mercado 1/6/12/24h, social 1/6/12/24h) + um cron diário sem UI.
+
+| # | Mudança | Onde | Detalhe |
+|---|---|---|---|
+| A | Setting única | `schedulers.ts` | chave `scan_daily_time` (`"HH:MM"`, default `15:00`, migra do legado `scan_daily_hour`); helpers `isValidDailyTime`/`getScanDailyTime`; pattern cron `MM HH * * *` |
+| B | Schedulers diários | `registerAllSchedulers` | e-commerce (`scan-daily-cron`), mercado (`local-price-scan-cron`), social + instagram — **todos no MESMO horário**; `scan-interval-12h` legado **removido** do Redis no boot; `trigger-evaluate` 1h mantido (interno, não é scan) |
+| C | Rotas | `server.ts` | `GET/PUT /api/scan/settings`, `/api/local-price-scan/settings`, `/api/social/settings` → campo `dailyTime` (valida `HH:MM`, 400 fora da faixa) e re-registram tudo; **removido** o sync `refreshInterval → scan_interval_ms` do `POST /api/data`; catchup de boot agora janela de **24h** (era `refreshInterval`); `next*Minutes` do `/api/status` inalterados (derivam do `scheduler.next`) |
+| D | UI | `App.tsx`, `MercadoTab.tsx`, `LocalTab.tsx`, `SocialTab.tsx` | selects "A CADA X H"/AUTO-REFRESH viram `<input type="time">` com label **DIÁRIO ÀS** / **SCAN DIÁRIO** (salva no blur, reverta valor inválido, toast `RODA 1× POR DIA`); "PRÓXIMO SCAN EM …" continua |
+
+**Validação #60:** `npm run lint` → 0. Teste offline (`/tmp/opencode/test60.mjs`): **6/6** — validação `00:00-23:59` (rejeita `24:00`/`7:5`/`15:00:00`), setting salva vence, migração `scan_daily_hour → HH:00`, default `15:00`, setting inválida cai no default, `registerAllSchedulers` sem Redis não lança. Smoke de API p/ restart: `GET` devolve `15:00` + pattern `00 15 * * *` → `PUT {"dailyTime":"07:15"}` → todos os 3 schedulers viram `15 7 * * *` com `every: null`, `next* = 703min`, intervalo legado fora da resposta, `PUT 25:99` → 400; horário restaurado p/ `15:00`. PM2 restart.
+
+**Arquivos:** `src/queue/schedulers.ts`, `server.ts`, `src/App.tsx`, `src/components/MercadoTab.tsx`, `src/components/LocalTab.tsx`, `src/components/SocialTab.tsx`.
