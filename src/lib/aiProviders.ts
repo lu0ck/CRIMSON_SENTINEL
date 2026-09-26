@@ -131,14 +131,32 @@ export function extractJsonObject(text: string | null | undefined): any | null {
   }
 }
 
-/** #55 — Extrai o primeiro ARRAY JSON válido (varredura de promoções). */
+/** #55/#57 — Extrai o primeiro ARRAY JSON válido (varredura de promoções). */
 export function extractJsonArray(text: string | null | undefined): any[] | null {
   if (!text) return null;
+  // #57 — llama-3.2-11b vision gera `"price": 22,78` (vírgula decimal SEM
+  // aspas → JSON inválido). Normaliza para string "22.78" (sanitizeOffers
+  // tolera preço string). Afeta price/regularPrice de objetos de oferta.
+  const fixPrices = (s: string) =>
+    s.replace(/("(?:regular)?[Pp]rice"\s*:\s*)(\d+),(\d+)/g, '$1"$2.$3"');
   const m = text.match(/\[[\s\S]*\]/);
-  if (!m) return null;
+  if (m) {
+    try {
+      const parsed = JSON.parse(fixPrices(m[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, "")));
+      if (Array.isArray(parsed)) return parsed;
+    } catch {
+      /* cai no repair abaixo */
+    }
+  }
+  // #57 — resposta TRUNCADA (finish_reason=length) é a regra no free tier:
+  // aproveita os objetos fechados e fecha o array.
+  const start = text.indexOf("[");
+  if (start < 0) return null;
+  const lastBrace = text.lastIndexOf("}");
+  if (lastBrace <= start) return null;
   try {
-    const parsed = JSON.parse(m[0].replace(/```json?\s*/gi, "").replace(/```\s*/g, ""));
-    return Array.isArray(parsed) ? parsed : null;
+    const repaired = JSON.parse(`${fixPrices(text.slice(start, lastBrace + 1))}]`);
+    return Array.isArray(repaired) ? repaired : null;
   } catch {
     return null;
   }

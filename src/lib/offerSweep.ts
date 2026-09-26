@@ -11,6 +11,7 @@
 // ============================================================
 
 import { chromium } from "playwright-extra";
+import OpenAI from "openai";
 import type { Establishment, Promotion } from "../types";
 import { PromotionRepository } from "../repositories/promotionRepository";
 import { isValidPrice, sanitizePrice } from "./price";
@@ -34,6 +35,10 @@ export interface SweptOffer {
 export interface SweepKeys {
   deepseekApiKey?: string;
   geminiApiKey?: string;
+  /** #57 — NVIDIA vision (sondado no catálogo: 11b/phi-3-vision) */
+  nvidiaApiKey?: string;
+  /** #57 — LM Studio local, último recurso (só se o servidor estiver no ar) */
+  lmStudioUrl?: string;
 }
 
 /** Validade padrão das promoções varridas (Tático renova ofertas diárias). */
@@ -46,11 +51,32 @@ const SWEEP_PROMPT =
   "Responda APENAS com JSON array válido, sem markdown: " +
   '[{"name":"NOME DO PRODUTO","price":12.34,"regularPrice":45.6}] ' +
   "- price = preço promocional em BRL (obrigatório); regularPrice = preço normal (opcional, só se visível). " +
-  "Inclua apenas produtos com preço claramente visível; máximo 80 itens.";
+  "Inclua apenas produtos com preço claramente visível; máximo 40 itens.";
 
 /** Máximo de capturas de viewport por varredura (encartes longos). */
 const MAX_CAPTURES = 6;
 const VIEWPORT_STEP = 900;
+
+// #57 — VLM de geração da chave do operador (sondado 2026-09-26):
+// - meta/llama-3.2-11b-vision-instruct → EXTRAÍ o encarte de verdade (ok);
+// - microsoft/phi-3-vision → 404 "Not found for account" (não provisionado);
+// - meta/llama-3.2-90b-vision → timeout 180s no free tier (lento demais).
+// Lista mantida só p/ override via env NVIDIA_VISION_MODEL.
+const NVIDIA_VISION_MODELS = [
+  process.env.NVIDIA_VISION_MODEL,
+  "meta/llama-3.2-11b-vision-instruct",
+].filter(Boolean) as string[];
+
+// #57 — proteções do LM local (GTX 960 2GB / 16 threads — varredura nunca pode
+// virar scan de 40min): só as 2 primeiras capturas, saída curta, timeout 90s.
+const LM_SWEEP_MAX_CAPTURES = 2;
+const LM_SWEEP_MAX_TOKENS = 1500;
+const LM_SWEEP_TIMEOUT_MS = 90_000;
+
+// #57 — SDK GoogleGenAI sem timeout travou o smoke 6min em silêncio (429
+// mascarava antes; com quota liberada a chamada pendurou). AbortSignal é
+// client-only — cancela a espera sem cobrança do lado do servidor.
+const GEMINI_SWEEP_TIMEOUT_MS = Number(process.env.GEMINI_SWEEP_TIMEOUT_MS || 45_000);
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36";
@@ -201,7 +227,7 @@ async function visionGemini(captures: string[], apiKey: string): Promise<SweptOf
           contents: [
             { role: "user", parts: [{ inlineData: { mimeType: "image/png", data: png } }, { text: SWEEP_PROMPT }] },
           ],
-          config: { responseMimeType: "application/json" },
+          config: { responseMimeType: "application/json", abortSignal: AbortSignal.timeout(GEMINI_SWEEP_TIMEOUT_MS) },
         });
         const arr = extractJsonArray(r.text || "");
         if (arr) all.push(...arr);
@@ -213,6 +239,110 @@ async function visionGemini(captures: string[], apiKey: string): Promise<SweptOf
     return sanitizeOffers(all);
   } catch (e: any) {
     safeLog(`[sweep] Gemini indisponível: ${e?.message || e}`);
+    return [];
+  }
+}
+
+// #57 — NVIDIA vision (OpenAI-compat integrate.api.nvidia.com, `image_url`
+// data-URL): free tier medido ~92s/chamada (pico estourou 150s no smoke) →
+// timeout 300s; TIMEOUT aborta o provider (senão 6 capturas × 300s = 30min).
+const NVIDIA_SWEEP_TIMEOUT_MS = Number(process.env.NVIDIA_SWEEP_TIMEOUT_MS || 300_000);
+async function nvidiaVision(captures: string[], apiKey: string): Promise<SweptOffer[]> {
+  try {
+    const client = new OpenAI({
+      baseURL: "https://integrate.api.nvidia.com/v1",
+      apiKey,
+      timeout: NVIDIA_SWEEP_TIMEOUT_MS,
+      maxRetries: 0,
+    });
+    const all: any[] = [];
+    let abort = false;
+    for (const png of captures) {
+      if (abort) break;
+      for (const model of NVIDIA_VISION_MODELS) {
+        try {
+          const r = await client.chat.completions.create({
+            model,
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "image_url", image_url: { url: `data:image/png;base64,${png}` } },
+                  { type: "text", text: SWEEP_PROMPT },
+                ],
+              },
+            ],
+            // #57 — 3000 p/ ~40 itens; truncagem ainda é salva pelo repair
+            // do extractJsonArray (finish_reason=length é a regra no free tier)
+            max_tokens: 3000,
+            temperature: 0,
+          });
+          const arr = extractJsonArray(r.choices?.[0]?.message?.content || "");
+          if (arr && arr.length > 0) {
+            all.push(...arr);
+            break; // modelo funcionou nesta captura
+          }
+        } catch (e: any) {
+          const msg = String(e?.message || e);
+          safeLog(`[sweep] NVIDIA vision ${model} falhou: ${msg.slice(0, 140)}`);
+          if (/timed out|timeout|abort/i.test(msg)) {
+            abort = true; // endpoint lento → não acumular timeouts
+            break;
+          }
+        }
+      }
+    }
+    return sanitizeOffers(all);
+  } catch (e: any) {
+    safeLog(`[sweep] NVIDIA vision indisponível: ${e?.message || e}`);
+    return [];
+  }
+}
+
+// #57 — LM Studio local, ÚLTIMO da cadeia (só se o servidor responder) —
+// protegido p/ a máquina não estourar: 2 capturas, 1500 tokens, 90s/chamada.
+async function lmStudioVision(captures: string[], lmUrl: string): Promise<SweptOffer[]> {
+  try {
+    const chk = await fetch(`${lmUrl}/models`, { signal: AbortSignal.timeout(2500) });
+    if (!chk.ok) {
+      safeLog(`[sweep] LM Studio respondeu ${chk.status} — pulando`);
+      return [];
+    }
+    const md: any = await chk.json();
+    const model = md?.data?.[0]?.id;
+    if (!model) {
+      safeLog(`[sweep] LM Studio sem modelo carregado — pulando`);
+      return [];
+    }
+    safeLog(`[sweep] LM Studio vision (local): modelo ${model}, ${Math.min(captures.length, LM_SWEEP_MAX_CAPTURES)} captura(s)`);
+    const client = new OpenAI({ baseURL: lmUrl, apiKey: "lm-studio", timeout: LM_SWEEP_TIMEOUT_MS, maxRetries: 0 });
+    const all: any[] = [];
+    for (const png of captures.slice(0, LM_SWEEP_MAX_CAPTURES)) {
+      try {
+        const r = await client.chat.completions.create({
+          model,
+          messages: [
+            {
+              role: "user",
+              content: [
+                { type: "image_url", image_url: { url: `data:image/png;base64,${png}` } },
+                { type: "text", text: SWEEP_PROMPT },
+              ],
+            },
+          ],
+          max_tokens: LM_SWEEP_MAX_TOKENS,
+          temperature: 0,
+        });
+        const arr = extractJsonArray(r.choices?.[0]?.message?.content || "");
+        if (arr) all.push(...arr);
+      } catch (e: any) {
+        safeLog(`[sweep] LM Studio vision falhou: ${String(e?.message || e).slice(0, 140)}`);
+        break;
+      }
+    }
+    return sanitizeOffers(all);
+  } catch (e: any) {
+    safeLog(`[sweep] LM Studio offline/indisponível: ${String(e?.message || e).slice(0, 120)}`);
     return [];
   }
 }
@@ -237,7 +367,7 @@ async function textViaGemini(text: string, apiKey: string): Promise<SweptOffer[]
     const r = await ai.models.generateContent({
       model: AI_MODELS.TEXT,
       contents: `${SWEEP_PROMPT}\n\nTEXTO DA PÁGINA:\n"""${text}"""`,
-      config: { responseMimeType: "application/json" },
+      config: { responseMimeType: "application/json", abortSignal: AbortSignal.timeout(GEMINI_SWEEP_TIMEOUT_MS) },
     });
     return sanitizeOffers(extractJsonArray(r.text || ""));
   } catch (e: any) {
@@ -276,7 +406,16 @@ export async function sweepEstablishmentOffers(
     }
   }
 
-  // 3) DeepSeek text (páginas com texto real)
+  // 3) #57 — NVIDIA vision (ordem da cadeia #54: depois do Gemini)
+  if (keys.nvidiaApiKey && rendered.captures.length > 0) {
+    const viaVision = await nvidiaVision(rendered.captures, keys.nvidiaApiKey);
+    if (viaVision.length > 0) {
+      safeLog(`[sweep] NVIDIA vision: ${viaVision.length} promoções (${rendered.captures.length} capturas) em ${establishment.name}`);
+      return viaVision;
+    }
+  }
+
+  // 4) DeepSeek text (páginas com texto real)
   if (dsKey && rendered.text) {
     const viaText = await textViaDeepSeek(rendered.text, dsKey);
     if (viaText.length > 0) {
@@ -285,7 +424,7 @@ export async function sweepEstablishmentOffers(
     }
   }
 
-  // 4) Gemini text
+  // 5) Gemini text
   if (keys.geminiApiKey && rendered.text) {
     const viaText = await textViaGemini(rendered.text, keys.geminiApiKey);
     if (viaText.length > 0) {
@@ -294,7 +433,16 @@ export async function sweepEstablishmentOffers(
     }
   }
 
-  // 5) Determinístico (só páginas com "R$ X,XX" no texto — encarte-imagem não tem)
+  // 6) #57 — LM Studio vision (local, último recurso antes do det; protegido)
+  if (keys.lmStudioUrl && rendered.captures.length > 0) {
+    const viaLocal = await lmStudioVision(rendered.captures, keys.lmStudioUrl);
+    if (viaLocal.length > 0) {
+      safeLog(`[sweep] LM Studio vision: ${viaLocal.length} promoções (local) em ${establishment.name}`);
+      return viaLocal;
+    }
+  }
+
+  // 7) Determinístico (só páginas com "R$ X,XX" no texto — encarte-imagem não tem)
   const det = extractDetOffers(rendered.text);
   if (det.length > 0) {
     safeLog(`[sweep] det text: ${det.length} promoções em ${establishment.name}`);

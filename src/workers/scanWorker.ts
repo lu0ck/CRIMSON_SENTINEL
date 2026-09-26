@@ -871,6 +871,8 @@ async function handleLocalPriceScan(job: Job<ScanJobPayload & { type: "local-pri
         const offers = await sweepEstablishmentOffers(est, {
           deepseekApiKey: apiKeys.deepseekApiKey,
           geminiApiKey: apiKeys.geminiApiKey,
+          nvidiaApiKey: apiKeys.nvidiaApiKey,
+          lmStudioUrl: apiKeys.lmStudioUrl,
         });
         if (offers && offers.length > 0) {
           swept = saveSweptOffers(est, offers).saved;
